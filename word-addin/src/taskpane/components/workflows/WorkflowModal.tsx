@@ -4,6 +4,7 @@ import { listWorkflows } from "../../api/mikeApi";
 import { Modal } from "../primitives/Modal";
 import { WorkflowList } from "./WorkflowList";
 import { reportFault } from "../../lib/notify";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
 
 interface WorkflowModalProps {
   open: boolean;
@@ -18,6 +19,7 @@ export function WorkflowModal({
   onSelect,
   initialWorkflowId,
 }: WorkflowModalProps): React.ReactElement | null {
+  const { workspaceId } = useAddinWorkspace();
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [selectedId, setSelectedId] = useState(initialWorkflowId ?? "");
   const [search, setSearch] = useState("");
@@ -31,7 +33,7 @@ export function WorkflowModal({
     setError(null);
     setSearch("");
     setSelectedId(initialWorkflowId ?? "");
-    listWorkflows("assistant")
+    listWorkflows("assistant", workspaceId)
       .then((items) => {
         if (cancelled) return;
         setWorkflows(
@@ -54,7 +56,7 @@ export function WorkflowModal({
     return () => {
       cancelled = true;
     };
-  }, [initialWorkflowId, open]);
+  }, [initialWorkflowId, open, workspaceId]);
 
   const selected = workflows.find((workflow) => workflow.id === selectedId);
 

@@ -18,6 +18,8 @@ import {
   WORKFLOW_PRACTICE_OPTIONS,
 } from "../../lib/workflowMetadata";
 import { reportFault } from "../../lib/notify";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
+import { workspaceOrgId } from "@mike/client";
 
 const US_STATE_OPTIONS = [
   "Alabama",
@@ -100,6 +102,7 @@ export function NewWorkflowModal({
   onClose,
   onCreated,
 }: NewWorkflowModalProps): React.ReactElement | null {
+  const { workspaceId } = useAddinWorkspace();
   const [title, setTitle] = useState("");
   const [language, setLanguage] = useState(DEFAULT_WORKFLOW_LANGUAGE);
   const [customLanguage, setCustomLanguage] = useState("");
@@ -156,7 +159,9 @@ export function NewWorkflowModal({
         jurisdiction === "Other"
           ? customJurisdiction.trim()
           : jurisdictionRegion || jurisdiction;
+      const orgId = workspaceOrgId(workspaceId);
       const workflow = await createWorkflow({
+        ...(orgId ? { org_id: orgId } : {}),
         metadata: {
           title: title.trim(),
           type: "assistant",

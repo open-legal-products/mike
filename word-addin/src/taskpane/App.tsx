@@ -26,6 +26,16 @@ import type {
   WordChatOpenHandler,
 } from "./lib/wordChatTypes";
 import { setReportingUser } from "./lib/errorReporting";
+import {
+  AddinWorkspaceProvider,
+  useAddinWorkspace,
+} from "./lib/addinWorkspace";
+import type {
+  WordChatStorageMode,
+  WordEditApplyMode,
+} from "./lib/wordChatSettings";
+
+const OPENING_LABEL = "Opening document chats…";
 
 export default function App(): React.ReactElement {
   const { user, loading, error, logout } = useAuth();
@@ -38,6 +48,97 @@ export default function App(): React.ReactElement {
   const editApply = useWordEditApplyMode();
   const wordDocument = useWordDocumentIdentity();
   const [selectedSection, setSelectedSection] = useState<AddinSection>("chat");
+
+  // Show a minimal spinner while the token is being read from storage
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Spinner label="Loading…" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage />;
+  }
+
+  if (wordChatStorage.loading || wordDocument.loading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Spinner label={OPENING_LABEL} />
+      </div>
+    );
+  }
+
+  if (!wordDocument.documentId) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-red-600">
+        {wordDocument.error ?? "Could not identify this Word document."}
+      </div>
+    );
+  }
+
+  return (
+    <AddinWorkspaceProvider userId={user.id}>
+      <WorkspaceGate
+        section={selectedSection}
+        onSectionChange={setSelectedSection}
+        authError={error}
+        onSignOut={() => void logout()}
+        wordDocumentId={wordDocument.documentId}
+        wordChatOwnerId={user.id}
+        wordChatStorage={wordChatStorage.mode}
+        onStorageModeChange={wordChatStorage.setMode}
+        editApplyMode={editApply.mode}
+        onEditApplyModeChange={editApply.setMode}
+      />
+    </AddinWorkspaceProvider>
+  );
+}
+
+interface TaskPaneProps {
+  section: AddinSection;
+  onSectionChange: (section: AddinSection) => void;
+  authError: string | null;
+  onSignOut: () => void;
+  wordDocumentId: string;
+  wordChatOwnerId: string;
+  wordChatStorage: WordChatStorageMode;
+  onStorageModeChange: (mode: WordChatStorageMode) => Promise<void>;
+  editApplyMode: WordEditApplyMode;
+  onEditApplyModeChange: (mode: WordEditApplyMode) => void;
+}
+
+/**
+ * Waits for the remembered workspace, then shows the pane for it. The pane
+ * is keyed by the workspace: what it holds (the open chat, a chosen
+ * workflow, the lists it loaded) belongs to one workspace and is dropped,
+ * never carried across, when the person switches.
+ */
+function WorkspaceGate(props: TaskPaneProps): React.ReactElement {
+  const { workspaceId, ready } = useAddinWorkspace();
+  if (!ready) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Spinner label={OPENING_LABEL} />
+      </div>
+    );
+  }
+  return <TaskPane key={workspaceId} {...props} />;
+}
+
+function TaskPane({
+  section: selectedSection,
+  onSectionChange: setSelectedSection,
+  authError: error,
+  onSignOut,
+  wordDocumentId,
+  wordChatOwnerId,
+  wordChatStorage,
+  onStorageModeChange,
+  editApplyMode,
+  onEditApplyModeChange,
+}: TaskPaneProps): React.ReactElement {
   const [chatSessionKey, setChatSessionKey] = useState(0);
   const [chatId, setChatId] = useState<string | null>(null);
   const [chatModel, setChatModel] = useState<string | null>(null);
@@ -72,38 +173,6 @@ export default function App(): React.ReactElement {
   }, []);
   const markChatStarted = useCallback(() => setChatInSession(true), []);
 
-  // Show a minimal spinner while the token is being read from storage
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Spinner label="Loading…" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <LoginPage />;
-  }
-
-  if (wordChatStorage.loading || wordDocument.loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Spinner label="Opening document chats…" />
-      </div>
-    );
-  }
-
-  if (!wordDocument.documentId) {
-    return (
-      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-red-600">
-        {wordDocument.error ?? "Could not identify this Word document."}
-      </div>
-    );
-  }
-
-  const wordDocumentId = wordDocument.documentId;
-  const wordChatOwnerId = pendingOwnerId as string;
-
   const renderSection = (): React.ReactElement => {
     switch (selectedSection) {
       case "chat":
@@ -128,16 +197,16 @@ export default function App(): React.ReactElement {
           <ChatHistoryPage
             onSelect={openSelectedChat}
             documentId={wordDocumentId}
-            storageMode={wordChatStorage.mode}
+            storageMode={wordChatStorage}
             ownerId={wordChatOwnerId}
           />
         );
       case "settings":
         return (
           <SettingsPage
-            storageMode={wordChatStorage.mode}
+            storageMode={wordChatStorage}
             onStorageModeChange={async (mode) => {
-              await wordChatStorage.setMode(mode);
+              await onStorageModeChange(mode);
               setChatId(null);
               setChatModel(null);
               setChatReasoningLevel(null);
@@ -237,9 +306,9 @@ export default function App(): React.ReactElement {
         onUseWorkflow={useSelectedWorkflow}
         onNewWorkflow={() => setNewWorkflowOpen(true)}
         onNewQuickAction={() => setNewQuickActionOpen(true)}
-        onSignOut={() => void logout()}
+        onSignOut={onSignOut}
         wordDocumentId={wordDocumentId}
-        wordChatStorage={wordChatStorage.mode}
+        wordChatStorage={wordChatStorage}
         wordChatOwnerId={wordChatOwnerId}
       />
 
@@ -286,9 +355,9 @@ export default function App(): React.ReactElement {
               setLastSelectedReasoningLevel(level);
             }}
             wordDocumentId={wordDocumentId}
-            editApplyMode={editApply.mode}
-            onEditApplyModeChange={editApply.setMode}
-            wordChatStorage={wordChatStorage.mode}
+            editApplyMode={editApplyMode}
+            onEditApplyModeChange={onEditApplyModeChange}
+            wordChatStorage={wordChatStorage}
             wordChatOwnerId={wordChatOwnerId}
           />
         </div>

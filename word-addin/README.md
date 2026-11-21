@@ -5,12 +5,19 @@ tracked-edit review into a Word task pane.
 
 It uses the same backend-managed HttpOnly cookie session, Mike API, model
 providers, and workflow library as the web app. Word conversations are stored
-separately from the web assistant's chat history. Word currently uses the
-Personal workspace for models, memory, workflows, quick actions and document
-pickers. Organization documents and workflow assets cannot be attached to Word
-chats. Older chats with organization attachments must be replaced with a new
-Personal chat before continuing; they are also excluded from new Personal
-memory learning. This does not purge previously stored chats or memory.
+separately from the web assistant's chat history.
+
+The pane works in one workspace at a time, chosen under **Workspace** in its
+menu, the same Personal-or-organization choice as the web app's sidebar (the
+section appears once the user belongs to a team organization, and the choice
+is remembered per account). A chat belongs to the workspace it was started in:
+an organization's chat runs on that organization's keys and models, draws on
+its documents, workflows, quick actions and playbooks, uses the user's
+connections for it, and learns into the user's memory for it. History lists
+the active workspace's chats only. Organization chats are saved to the account:
+with **Save chats in the cloud** off, an organization shows why it has no chats
+instead of listing device-only (Personal) ones. A user removed from an
+organization is moved back to Personal the next time a list is refused.
 
 ## Prerequisites
 

@@ -23,6 +23,7 @@ import {
   DropdownItem,
   DropdownSeparator,
   DropdownTrigger,
+  WorkspaceMenuUI,
 } from "@mike/ui";
 import chatIcon from "@icons/features/chat.svg";
 import quickActionsIcon from "@icons/features/quick-actions.svg";
@@ -32,6 +33,7 @@ import settingsIcon from "@icons/settings.svg";
 import signOutIcon from "@icons/sign-out.svg";
 import { ChatHistoryDropdown } from "../history/ChatHistoryDropdown";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
 
 export type AddinSection =
   | "chat"
@@ -100,6 +102,7 @@ export function FloatingHeader({
 }: FloatingHeaderProps): React.ReactElement {
   const [menuOpen, setMenuOpen] = useState(false);
   const [workflowActionsOpen, setWorkflowActionsOpen] = useState(false);
+  const { workspaceId, organizations, setWorkspace } = useAddinWorkspace();
 
   return (
     <header
@@ -143,6 +146,14 @@ export function FloatingHeader({
             </DropdownTrigger>
           </LiquidActionRow>
           <DropdownContent align="start" sideOffset={8} className="min-w-44">
+            {/* The web sidebar's Workspace section: Personal and each team
+                organization. Nothing renders for somebody without one. */}
+            <WorkspaceMenuUI
+              workspaceId={workspaceId}
+              organizations={organizations}
+              onSelect={setWorkspace}
+              trailingSeparator
+            />
             {SECTIONS.map((item) => {
               return (
                 <DropdownItem

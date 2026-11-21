@@ -403,6 +403,18 @@ export const test = base.extend<{ addin: Addin }>({
       return route.fallback();
     });
 
+    // The workspace menu reads the caller's organizations on every
+    // authenticated mount. None by default, so the pane is Personal and the
+    // menu shows no Workspace section; workspace specs register their own.
+    await page.route("**/orgs", (route, request) => {
+      if (request.method() !== "GET") return route.fallback();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "[]",
+      });
+    });
+
     // Chat history preloads on every authenticated Assistant mount. Keep that
     // eager GET hermetic so unrelated specs never leak to a developer's live
     // backend (where a 401 can clear the seeded test session). History specs

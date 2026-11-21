@@ -4,6 +4,7 @@ import { listPlaybooks } from "../../api/mikeApi";
 import { Modal } from "../primitives/Modal";
 import { PickerList } from "../primitives/PickerList";
 import { reportFault } from "../../lib/notify";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
 
 /** What a playbook is called in the picker and on its pill. */
 export function playbookTitle(playbook: Pick<Playbook, "name">): string {
@@ -28,6 +29,7 @@ export function PlaybookModal({
   onSelect,
   initialPlaybookId,
 }: PlaybookModalProps): React.ReactElement | null {
+  const { workspaceId } = useAddinWorkspace();
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [selectedId, setSelectedId] = useState(initialPlaybookId ?? "");
   const [search, setSearch] = useState("");
@@ -41,7 +43,7 @@ export function PlaybookModal({
     setError(null);
     setSearch("");
     setSelectedId(initialPlaybookId ?? "");
-    listPlaybooks()
+    listPlaybooks(workspaceId)
       .then((items) => {
         if (!cancelled) setPlaybooks(items ?? []);
       })
@@ -61,7 +63,7 @@ export function PlaybookModal({
     return () => {
       cancelled = true;
     };
-  }, [initialPlaybookId, open]);
+  }, [initialPlaybookId, open, workspaceId]);
 
   const items = useMemo(
     () =>
