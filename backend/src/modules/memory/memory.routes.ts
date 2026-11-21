@@ -12,6 +12,7 @@ import {
 } from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { sendInternalError } from "../../lib/httpError";
+import { setOperation } from "../../lib/observability/sentry";
 import type { Capability } from "../../lib/permissions";
 import { createServerSupabase } from "../../lib/supabase";
 import {
@@ -139,6 +140,7 @@ function installMemoryRoutes(
   wipeContext?: ContextResolver,
 ) {
   router.get("/", asyncRoute(async (req, res) => {
+    setOperation("memory.read");
     try {
       const ctx = await readContext(req, res);
       if (!ctx) return;

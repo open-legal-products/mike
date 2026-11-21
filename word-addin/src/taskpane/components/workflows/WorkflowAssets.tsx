@@ -7,7 +7,7 @@ import {
   uploadWorkflowAssets,
   uploadWorkflowAssetVersion,
 } from "../../api/mikeApi";
-import { userMessage } from "../../lib/notify";
+import { reportFault } from "../../lib/notify";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 
 export function WorkflowAssets({
@@ -43,9 +43,10 @@ export function WorkflowAssets({
         if (!cancelled) {
           setFiles([]);
           setError(
-            userMessage(reason, {
+            reportFault(reason, {
               fallback: "Mike couldn't load this workflow's files. Try again.",
-            }),
+              operation: "workflows.run",
+            }).message,
           );
         }
       });
@@ -66,9 +67,10 @@ export function WorkflowAssets({
       );
     } catch (reason) {
       setError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Mike couldn't upload that file. Try again.",
-        }),
+          operation: "workflows.run",
+        }).message,
       );
     } finally {
       setBusy(false);
@@ -84,9 +86,10 @@ export function WorkflowAssets({
       setError(null);
     } catch (reason) {
       setError(
-        userMessage(reason, {
+        reportFault(reason, {
           fallback: "Mike couldn't upload the new version. Try again.",
-        }),
+          operation: "workflows.run",
+        }).message,
       );
     } finally {
       versionUploadTarget.current = null;
@@ -154,9 +157,10 @@ export function WorkflowAssets({
                     .then(({ url }) => openExternalUrl(url))
                     .catch((reason: unknown) =>
                       setError(
-                        userMessage(reason, {
+                        reportFault(reason, {
                           fallback: "Mike couldn't open that file. Try again.",
-                        }),
+                          operation: "workflows.run",
+                        }).message,
                       ),
                     )
                 }
@@ -183,10 +187,11 @@ export function WorkflowAssets({
                         .then(reload)
                         .catch((reason: unknown) =>
                           setError(
-                            userMessage(reason, {
+                            reportFault(reason, {
                               fallback:
                                 "Mike couldn't delete that file. Try again.",
-                            }),
+                              operation: "workflows.run",
+                            }).message,
                           ),
                         )
                     }

@@ -20,12 +20,10 @@ import {
     DropdownContent,
     DropdownItem,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import {
     LIQUID_GLASS_FLOAT_CLASS,
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_MODAL_ROW_HOVER_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";
 
 export type AccessScope = "direct" | "project";
 
@@ -44,7 +42,7 @@ export type OrganizationAccessAssignment = AccessRow;
 const INPUT_GROUP_ROLE_TRIGGER_CLASS =
     "flex h-10 shrink-0 items-center gap-1.5 px-3 text-xs shadow-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 data-[state=open]:opacity-80 [&[data-state=open]>svg]:rotate-180 disabled:cursor-not-allowed disabled:opacity-50";
 
-export function accessRoleLabel(role: AccessAssignmentRole): string {
+function accessRoleLabel(role: AccessAssignmentRole): string {
     return role === "deny" ? "Deny" : PROJECT_ROLE_LABELS[role];
 }
 

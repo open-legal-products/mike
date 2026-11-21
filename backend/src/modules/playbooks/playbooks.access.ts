@@ -9,6 +9,7 @@
 // This file must not import playbooks.operations.ts, which imports it.
 
 import type { Db } from "../../lib/supabase";
+import { selectInBatches } from "../../lib/batchedQuery";
 import { isOrgOwner, normalizeEmail, type OrgRole } from "../../lib/access";
 import {
   isOrgAccessOverrideRole,
@@ -87,30 +88,31 @@ export async function resolvePlaybookRoles(
     rows.flatMap((row) => (row.org_id ? [row.id] : [])),
   );
   const personalIds = ids.filter((id) => !orgPlaybookIds.has(id));
+  type GrantRow = { playbook_id: string; role: unknown };
   const [overrides, shares] = await Promise.all([
-    orgPlaybookIds.size
-      ? db
-          .from("playbook_org_access_overrides")
-          .select("playbook_id, role")
-          .eq("user_id", userId)
-          .in("playbook_id", [...orgPlaybookIds])
-      : { data: [], error: null },
-    normalized && personalIds.length
-      ? db
-          .from("playbook_shares")
-          .select("playbook_id, role")
-          .eq("shared_with_email", normalized)
-          .in("playbook_id", personalIds)
-      : { data: [], error: null },
+    selectInBatches<GrantRow>("playbook overrides", orgPlaybookIds, (batch) =>
+      db
+        .from("playbook_org_access_overrides")
+        .select("playbook_id, role")
+        .eq("user_id", userId)
+        .in("playbook_id", batch),
+    ),
+    normalized
+      ? selectInBatches<GrantRow>("playbook shares", personalIds, (batch) =>
+          db
+            .from("playbook_shares")
+            .select("playbook_id, role")
+            .eq("shared_with_email", normalized)
+            .in("playbook_id", batch),
+        )
+      : [],
   ]);
-  if (overrides.error) throw overrides.error;
-  if (shares.error) throw shares.error;
   const overrideById = new Map<string, OrgAccessOverrideRole>();
-  for (const row of (overrides.data ?? []) as { playbook_id: string; role: unknown }[])
+  for (const row of overrides)
     if (isOrgAccessOverrideRole(row.role))
       overrideById.set(String(row.playbook_id), row.role);
   const shareById = new Map<string, PlaybookRole>();
-  for (const row of (shares.data ?? []) as { playbook_id: string; role: unknown }[])
+  for (const row of shares)
     if (isPlaybookRole(row.role)) shareById.set(String(row.playbook_id), row.role);
 
   const roles = new Map<string, PlaybookRole>();
@@ -178,41 +180,43 @@ export async function playbookRecipientEmails(
   const orgPlaybookIds = rows.filter((row) => row.org_id).map((row) => row.id);
   const personalIds = rows.filter((row) => !row.org_id).map((row) => row.id);
   const [shares, overrides] = await Promise.all([
-    personalIds.length
-      ? db
+    selectInBatches<{ playbook_id: string; shared_with_email: string }>(
+      "playbook recipients",
+      personalIds,
+      (batch) =>
+        db
           .from("playbook_shares")
           .select("playbook_id, shared_with_email")
-          .in("playbook_id", personalIds)
-      : { data: [], error: null },
-    orgPlaybookIds.length
-      ? db
+          .in("playbook_id", batch),
+    ),
+    selectInBatches<{ playbook_id: string; user_id: string; role: string }>(
+      "playbook member overrides",
+      orgPlaybookIds,
+      (batch) =>
+        db
           .from("playbook_org_access_overrides")
           .select("playbook_id, user_id, role")
-          .in("playbook_id", orgPlaybookIds)
-      : { data: [], error: null },
+          .in("playbook_id", batch),
+    ),
   ]);
-  if (shares.error) throw shares.error;
-  if (overrides.error) throw overrides.error;
-  const add = (id: string, email: string) =>
-    result.set(id, [...(result.get(id) ?? []), email]);
-  for (const row of (shares.data ?? []) as {
-    playbook_id: string;
-    shared_with_email: string;
-  }[])
+  // Append in place: rebuilding the array per email was quadratic in a
+  // playbook's recipient count.
+  const add = (id: string, email: string) => {
+    const emails = result.get(id);
+    if (emails) emails.push(email);
+    else result.set(id, [email]);
+  };
+  for (const row of shares)
     add(String(row.playbook_id), String(row.shared_with_email));
-  const granted = ((overrides.data ?? []) as {
-    playbook_id: string;
-    user_id: string;
-    role: string;
-  }[]).filter((row) => row.role !== "deny");
+  const granted = overrides.filter((row) => row.role !== "deny");
   if (granted.length) {
-    const { data: profiles, error } = await db
-      .from("user_profiles")
-      .select("user_id, email")
-      .in("user_id", [...new Set(granted.map((row) => row.user_id))]);
-    if (error) throw error;
+    const profiles = await selectInBatches<{ user_id: string; email: string | null }>(
+      "playbook recipient profiles",
+      granted.map((row) => row.user_id),
+      (batch) => db.from("user_profiles").select("user_id, email").in("user_id", batch),
+    );
     const emailById = new Map(
-      ((profiles ?? []) as { user_id: string; email: string | null }[]).map(
+      profiles.map(
         (profile) => [profile.user_id, profile.email],
       ),
     );

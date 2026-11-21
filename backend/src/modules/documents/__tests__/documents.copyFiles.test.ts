@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const storage = vi.hoisted(() => ({
   copyFile: vi.fn(),
   downloadFile: vi.fn(),
+  downloadFileIfAvailable: vi.fn(),
   uploadFile: vi.fn(),
 }));
 vi.mock("../../../lib/storage", () => storage);
@@ -10,6 +11,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   storage.copyFile.mockResolvedValue(undefined);
   storage.downloadFile.mockResolvedValue(null);
+  storage.downloadFileIfAvailable.mockResolvedValue(null);
 });
 const base = {
   source: {
@@ -71,5 +73,24 @@ describe("copying version objects", () => {
         source: { ...base.source, pdf_storage_path: "missing" },
       }),
     ).rejects.toThrow("PDF unavailable");
+  });
+
+  // The rendition is read through the helper that answers null for a failed
+  // read as well as a missing object (reporting it once), so a storage fault
+  // on the optional PDF never aborts a copy whose source is already written.
+  it("reads the optional rendition through the failure-absorbing helper", async () => {
+    const bytes = new Uint8Array([1, 2]).buffer;
+    storage.downloadFileIfAvailable.mockResolvedValue(null);
+    const result = await copyDocumentVersionFiles({
+      ...base,
+      source: { ...base.source, pdf_storage_path: "src/rendition.pdf" },
+      transport: "download",
+      rendition: "optional",
+      sourceBytes: bytes,
+    });
+    expect(result).toEqual({ pdfStoragePath: null });
+    expect(storage.downloadFileIfAvailable).toHaveBeenCalledWith("src/rendition.pdf");
+    expect(storage.downloadFile).not.toHaveBeenCalled();
+    expect(storage.uploadFile).toHaveBeenCalledTimes(1);
   });
 });

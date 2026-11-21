@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
+import { isReported } from "../../lib/observability/sentry";
 
 type QueryError = { message: string } | null;
 type QueryResult = { data: unknown; error: QueryError };
@@ -8,7 +9,7 @@ type RecordedQuery = {
   filters: { column: string; value: unknown }[];
   /** Which write produced `payload`; a user insert and an assistant update
    *  both carry a `content`, so the two have to be told apart. */
-  op?: "insert" | "update";
+  op?: "insert" | "update" | "upsert";
   payload?: unknown;
 };
 
@@ -23,6 +24,7 @@ const { dbState, recordedQueries } = vi.hoisted(() => ({
     editDetail: { data: null, error: null },
     orgMember: { data: null, error: null },
     organization: { data: null, error: null },
+    assistantUpdateGate: null,
   } as {
     document: QueryResult;
     chatList: QueryResult;
@@ -35,6 +37,8 @@ const { dbState, recordedQueries } = vi.hoisted(() => ({
     orgMember: QueryResult;
     /** The organization's kind (isPersonalOrg); null reads as a team. */
     organization: QueryResult;
+    /** Holds updates of word_chat_messages open until a test releases it. */
+    assistantUpdateGate: Promise<void> | null;
   },
   recordedQueries: [] as RecordedQuery[],
 }));
@@ -81,7 +85,6 @@ function makeQuery(table: string) {
   const chain = [
     "select",
     "delete",
-    "upsert",
     "neq",
     "in",
     "or",
@@ -99,6 +102,11 @@ function makeQuery(table: string) {
   for (const method of chain) query[method] = vi.fn(() => query);
   query.insert = vi.fn((payload: unknown) => {
     recorded.op = "insert";
+    recorded.payload = payload;
+    return query;
+  });
+  query.upsert = vi.fn((payload: unknown) => {
+    recorded.op = "upsert";
     recorded.payload = payload;
     return query;
   });
@@ -122,7 +130,15 @@ function makeQuery(table: string) {
   query.then = (
     resolve: (value: unknown) => unknown,
     reject?: (reason: unknown) => unknown,
-  ) => Promise.resolve(resultForAwaitedQuery(table)).then(resolve, reject);
+  ) => {
+    const gate =
+      table === "word_chat_messages" && recorded.op === "update"
+        ? dbState.assistantUpdateGate
+        : null;
+    return (gate ?? Promise.resolve())
+      .then(() => resultForAwaitedQuery(table))
+      .then(resolve, reject);
+  };
   return query;
 }
 
@@ -634,7 +650,8 @@ describe("POST /word-chat — local storage", () => {
       data: { id: CHAT_ID, title: null, user_id: "u1" },
       error: null,
     };
-    runLLMStream.mockRejectedValueOnce(new Error("provider failed"));
+    const original = new Error("provider failed");
+    runLLMStream.mockRejectedValueOnce(original);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await request(app)
@@ -649,6 +666,8 @@ describe("POST /word-chat — local storage", () => {
       });
 
     expect(res.status).toBe(200);
+    expect(isReported(original)).toBe(true);
+    expect(res.text).toContain('"reporting_owner":"backend"');
     expect(releaseMemoryConversationTurn).toHaveBeenCalledWith({
       db: expect.anything(),
       surface: "word",
@@ -656,6 +675,16 @@ describe("POST /word-chat — local storage", () => {
       turn: { activityId: "activity-1" },
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    // The terminal error frame names the request so the pane can show an id
+    // a user can quote; it is the X-Request-ID header of this response.
+    const errorFrame = JSON.parse(
+      res.text
+        .split("\n")
+        .filter((line) => line.includes('"type":"error"'))
+        .at(-1)!
+        .replace(/^data:\s*/, ""),
+    ) as { request_id?: string };
+    expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
     errorSpy.mockRestore();
   });
 });
@@ -954,6 +983,121 @@ describe("server-owned Word turns", () => {
         )
         .set(...AUTH);
       expect(again.body).toEqual({ stopped: false, finished: true });
+    },
+  );
+
+  it("stores a stream that returns after Stop as stopped, not as a completed answer", async () => {
+    const started = new Promise<StreamParams>((resolve) => {
+      runLLMStream.mockImplementation(async (raw: unknown) => {
+        const params = raw as StreamParams;
+        resolve(params);
+        await new Promise<void>((done) =>
+          params.signal?.addEventListener("abort", () => done(), {
+            once: true,
+          }),
+        );
+        // Ignores the abort and returns the whole answer anyway.
+        return {
+          fullText: "Late answer",
+          events: [{ type: "content", text: "Late answer" }],
+          citations: [],
+        };
+      });
+    });
+    const firstDone = send().then((res) => res);
+    await started;
+    const turnId = (await detail()).body.active_turn.id as string;
+    const { getAssistantTurnRun } =
+      await import("../../lib/assistantTurnRuns.js");
+    getAssistantTurnRun(turnId, "word")!.stop();
+
+    const text = (await firstDone).text;
+    expect(text).toContain('"type":"cancelled"');
+    expect(assistantUpdate()).toMatchObject({
+      content: [
+        { type: "content", text: "Late answer" },
+        { type: "content", text: "Cancelled by user." },
+      ],
+    });
+    expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+  });
+
+  it.each(["user", "idle", "max_lifetime"] as const)(
+    "preserves persisted Word edits without writing them again when %s stops the answer's save",
+    async (reason) => {
+      let releaseSave!: () => void;
+      dbState.assistantUpdateGate = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      const edit = {
+        type: "word_edit_block",
+        block_index: 0,
+        original_text: "Schedule 1",
+        replacement_text: "Schedule 2",
+        reason: "Correct the schedule reference",
+      };
+      dbState.edits = {
+        data: [{ id: "edit-1", block_index: 0 }],
+        error: null,
+      };
+      runLLMStream.mockResolvedValue({
+        fullText: "Done",
+        events: [edit, { type: "content", text: "Done" }],
+        citations: [],
+      });
+      const updates = () =>
+        recordedQueries
+          .filter(({ table, op }) => table === "word_chat_messages" && op === "update")
+          .map(({ payload }) => (payload as { content?: unknown }).content);
+      try {
+        const firstDone = send().then((res) => res);
+        await vi.waitFor(() => {
+          expect(updates()).toHaveLength(1);
+        });
+        const turnId = (await detail()).body.active_turn.id as string;
+        const { getAssistantTurnRun } =
+          await import("../../lib/assistantTurnRuns.js");
+        getAssistantTurnRun(turnId, "word")!.stop(reason);
+        releaseSave();
+
+        const text = (await firstDone).text;
+        expect(text).toContain(
+          reason === "user" ? '"type":"cancelled"' : '"type":"error"',
+        );
+        const { deadlineMessage } = await import("../../lib/streamRuns.js");
+        const stopEvent = reason === "user"
+          ? { type: "content", text: "Cancelled by user." }
+          : {
+              type: "error",
+              message: deadlineMessage(reason),
+              safe_to_display: true,
+            };
+        const savedEvents = [
+          { type: "word_edit_ref", edit_id: "edit-1" },
+          { type: "content", text: "Done" },
+        ];
+        // Saved once as the answer, then rewritten with the stop label.
+        expect(updates()).toEqual([
+          savedEvents,
+          [...savedEvents, stopEvent],
+        ]);
+        expect(
+          recordedQueries
+            .filter(({ table, op }) => table === "word_document_edits" && op === "upsert")
+            .map(({ payload }) => payload),
+        ).toEqual([
+          [expect.objectContaining({
+            word_chat_message_id: turnId,
+            block_index: 0,
+            original_text: "Schedule 1",
+            replacement_text: "Schedule 2",
+          })],
+        ]);
+        expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+      } finally {
+        releaseSave();
+        dbState.assistantUpdateGate = null;
+      }
     },
   );
 

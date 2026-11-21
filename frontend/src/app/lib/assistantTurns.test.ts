@@ -197,6 +197,22 @@ describe("withLiveTurn", () => {
   const turnOn = (messages: { userMessage: Message | null; assistant: Message }) =>
     beginAssistantTurn(undefined, { ...messages, cancel: vi.fn() }).turn;
 
+  it("finds a live row at the end of a long transcript without walking it", () => {
+    // withLiveTurn runs once per streamed token.
+    let reads = 0;
+    const counted = (message: Message): Message =>
+      Object.defineProperty({ ...message }, "role", {
+        get: () => { reads++; return message.role; },
+        enumerable: true,
+      });
+    const live = turnOn({ userMessage: user(), assistant: assistant("Streaming", "answer-1") });
+    const transcript = [
+      ...Array.from({ length: 500 }, (_, i) => counted(user(`q${i}`, `u${i}`))),
+      counted(assistant("", "answer-1")),
+    ];
+    expect(withLiveTurn(transcript, live).at(-1)).toBe(live.assistant);
+    expect(reads).toBeLessThanOrEqual(2);
+  });
   it("leaves the transcript alone without a turn", () => {
     const transcript = [user("hi", "u1")];
     expect(withLiveTurn(transcript, null)).toBe(transcript);

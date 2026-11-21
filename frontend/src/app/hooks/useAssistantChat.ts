@@ -1,4 +1,5 @@
 "use client";
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 
 import {
   useCallback,
@@ -15,7 +16,6 @@ import { stopChatTurn, streamChat, streamProjectChat } from "@/app/lib/mikeApi";
 import {
   createTurnCursor,
   createTurnEventSink,
-  isAbortError,
   readAssistantTurn,
 } from "@/app/lib/assistantTurnStream";
 import {
@@ -30,7 +30,7 @@ import {
   type LiveAssistantTurn,
 } from "@/app/lib/assistantTurns";
 import { assistantHistoryContent } from "@/app/lib/assistantHistoryContent";
-import { reportError } from "@/app/lib/errorReporting";
+import { isReported, markErrorHandled, reportError } from "@/app/lib/errorReporting";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useWorkspaceOrgId } from "@/app/contexts/WorkspaceContext";
@@ -38,6 +38,7 @@ import {
   UserVisibleError,
   describeError,
   notifyError,
+  type Operation,
   notifyInfo,
 } from "@/app/lib/userFacingError";
 import {
@@ -198,6 +199,9 @@ export function useAssistantChat({
   // no error. A layout effect still runs inside the switching commit, so no
   // async continuation from the old request can land in the new thread first.
   const threadKey = `${workspaceIdentity}:${projectId ?? ""}:${initialChatId ?? ""}`;
+  // The flow every report from this hook belongs to: the same failure in a
+  // project chat and in the general assistant is two issues, not one.
+  const turnOperation: Operation = projectId ? "project_chat.turn" : "chat.turn";
   const threadKeyRef = useRef(threadKey);
   const adoptedThreadKeyRef = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -623,20 +627,22 @@ export function useAssistantChat({
           onRejectedApiKey: () => {
             if (isCurrentRequest()) setRejectedApiKey({ model: model ?? null });
           },
-          onErrorFrame: ({ message: frameMessage, safeToDisplay }) => {
+          onErrorFrame: ({ message: frameMessage, safeToDisplay, code, requestId, reportingOwner }) => {
             // The bubble records that this turn failed; the toast is where
             // the user gets a way back. A server-side failure is one the
             // user cannot fix, so Contact support rides along with Retry.
             //
             // A `safe_to_display` frame is a configuration refusal (no API
             // key, a model this deployment disallows): re-sending it would
-            // fail identically, so it gets support without a Retry.
+            // fail identically, so it gets support without a Retry, unless
+            // its code says the account is the user's or their
+            // organization's to fix.
             notifyError(
-              errorFrameFailure(frameMessage, safeToDisplay),
+              errorFrameFailure(frameMessage, safeToDisplay, { code, requestId, reportingOwner }),
               {
                 action: "get a response",
+                operation: turnOperation,
                 dedupeKey: "assistant-chat",
-          support: true,
                 onRetry: async () => {
                   await retryTurn(retrySnapshot);
                 },
@@ -678,28 +684,43 @@ export function useAssistantChat({
       // renders the thread: a reader attached to the turn must see the
       // error, not a spinner.
       sink.finalizeStreamingContent();
-      if (controller.signal.aborted || isAbortError(error)) {
+      if (controller.signal.aborted) {
+        markErrorHandled(error);
         sink.finalizeStreamingReasoning();
         sink.appendCancellation();
       } else {
-        // The stream broke for a reason other than the user stopping it:
-        // the user sees a generic message, Sentry gets the real one.
-        reportError(error, {
-          tags: { component: "assistant-chat", project: Boolean(projectId) },
+        const displayError = error instanceof Error && error.name === "AbortError"
+          ? new UserVisibleError(TURN_FAILED_MESSAGE, { kind: "network", retryable: true, cause: error })
+          : error;
+        const described = describeError(displayError, {
+          action: "get a response",
+          fallback: TURN_FAILED_MESSAGE,
+        });
+        const owner = error && typeof error === "object" && "reportingOwner" in error ? error.reportingOwner : undefined;
+        // This boundary shows these refusals with their recovery actions. Other
+        // terminal failures, including body reads and unowned gateway 5xxs,
+        // remain visible after readAssistantTurn has exhausted recovery.
+        const handledRefusal = described.status !== null && described.status >= 400 && described.status < 500;
+        if (owner === BACKEND_REPORTING_OWNER || handledRefusal) markErrorHandled(error);
+        else if (!isReported(error)) reportError(error, {
+          ...(described.status !== null && described.status < 500 ? { level: "warning" as const } : {}),
+          tags: {
+            component: "assistant-chat", operation: turnOperation,
+            stage: "chat-stream", project: Boolean(projectId),
+            http_status: described.status ?? undefined,
+            error_code: described.code ?? undefined,
+            request_id: described.requestId ?? undefined,
+          },
         });
         sink.endStreamingAfterFailure();
         if (cursor.chatId && cursor.turnId) {
           retrySnapshot.recoveryChatId = cursor.chatId;
         }
-        const described = describeError(error, {
-          action: "get a response",
-          fallback: TURN_FAILED_MESSAGE,
-        });
         const uncertain = isUncertainDelivery(
           error,
           Boolean(retrySnapshot.recoveryChatId),
         );
-        const failure = uncertain ? uncertainDeliveryError(error) : error;
+        const failure = uncertain ? uncertainDeliveryError(error) : displayError;
         if (uncertain && retrySnapshot.chatId) {
           retrySnapshot.recoveryChatId = retrySnapshot.chatId;
         }
@@ -709,6 +730,7 @@ export function useAssistantChat({
         }));
         notifyError(failure, {
           action: "get a response",
+          operation: turnOperation,
           fallback: TURN_FAILED_MESSAGE,
           dedupeKey: "assistant-chat",
           support: true,

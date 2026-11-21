@@ -1,5 +1,6 @@
-import { downloadFile, listFiles } from "./storage";
+import { downloadFileIfAvailable, listFiles } from "./storage";
 import { devLog } from "./log";
+import { guardedFetch } from "./mcp/client";
 import type { Db } from "./supabase";
 
 const COURTLISTENER_BASE = "https://www.courtlistener.com/api/rest/v4";
@@ -62,6 +63,14 @@ function parseCourtlistenerError(status: number, detail: string): string {
     return `CourtListener error (${status}): ${message}`;
 }
 
+function isCourtlistenerApiUrl(url: string): boolean {
+    try {
+        return new URL(url).origin === new URL(COURTLISTENER_BASE).origin;
+    } catch {
+        return false;
+    }
+}
+
 async function courtlistenerFetch<T>(
     pathOrUrl: string,
     init?: RequestInit,
@@ -70,19 +79,34 @@ async function courtlistenerFetch<T>(
     const url = pathOrUrl.startsWith("http")
         ? pathOrUrl
         : `${COURTLISTENER_BASE}${pathOrUrl}`;
+    // Absolute URLs come from CourtListener's own responses (the `next` link
+    // of a paginated list). The request carries the user's API token, so
+    // only ever send it to CourtListener itself: a link to any other host is
+    // refused rather than followed.
+    if (!isCourtlistenerApiUrl(url)) {
+        throw new Error("CourtListener returned a link outside its API.");
+    }
     devLog("[courtlistener/api] request", {
         method: init?.method ?? "GET",
         path: pathOrUrl,
         url,
     });
-    const response = await fetch(url, {
-        ...init,
-        signal: init?.signal ?? AbortSignal.timeout(15_000),
-        headers: {
-            ...courtlistenerHeaders(apiToken),
-            ...(init?.headers ?? {}),
+    // guardedFetch checks the address every connection actually goes to, so
+    // a DNS answer pointing at a private or loopback address is refused, and
+    // it follows redirects itself, re-checking each hop and dropping the
+    // token when a hop leaves CourtListener's origin.
+    const response = await guardedFetch(
+        url,
+        {
+            ...init,
+            signal: init?.signal ?? AbortSignal.timeout(15_000),
+            headers: {
+                ...courtlistenerHeaders(apiToken),
+                ...(init?.headers ?? {}),
+            },
         },
-    });
+        { label: "CourtListener URL" },
+    );
     devLog("[courtlistener/api] response", {
         method: init?.method ?? "GET",
         path: pathOrUrl,
@@ -828,7 +852,7 @@ async function getBulkCourtlistenerCaseOpinions(args: {
                     clusterId: args.clusterId,
                     key,
                 });
-                const bytes = await downloadFile(key);
+                const bytes = await downloadFileIfAvailable(key);
                 if (!bytes) {
                     devLog("[courtlistener/r2-opinions] download missing", {
                         clusterId: args.clusterId,

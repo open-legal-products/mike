@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
+import { GlassCardUI, PillButtonUI } from "@mike/ui";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import {
@@ -9,7 +9,6 @@ import {
   type SettingsSelectOption,
 } from "@/app/components/settings/SettingsSelectRow";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import {
   RESPONSE_STYLE_OPTIONS,
   getResponseStyle,

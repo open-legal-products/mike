@@ -14,7 +14,7 @@
  * included.
  */
 import { streamWordChat, streamWordChatTurn, readSSE } from "./mikeApi";
-import { MikeApiError, parseApiErrorBody } from "./client";
+import { responseError } from "./client";
 import {
   WordChatTerminalError,
   terminalErrorFromFrame,
@@ -104,23 +104,12 @@ async function consumeTurnStream(
   res: Response,
   params: WordTurnHandlers & { signal?: AbortSignal },
   onText: (text: string) => void,
+  request: { path: string; method: "GET" | "POST" },
 ): Promise<void> {
   if (!res.ok) {
-    // The chat endpoint answers with the same error envelope as the rest of
-    // the API, so it is parsed the same way: status/code/request id for
-    // classification, and never the raw body on screen.
-    const body = await res.text().catch(() => "");
-    const parsed = parseApiErrorBody({
-      status: res.status,
-      body,
-      requestId: res.headers.get("x-request-id"),
-    });
-    throw new MikeApiError({
-      status: res.status,
-      code: parsed.code,
-      requestId: parsed.requestId,
-      message: parsed.message,
-    });
+    // Share ownership and correlation with ordinary API failures. The
+    // reporter marks the error so the chat hook and notifier cannot repeat it.
+    throw await responseError(res, request.path, request.method, "word_chat.turn");
   }
   let streamError: WordChatTerminalError | null = null;
   const result = await readSSE(
@@ -230,7 +219,10 @@ export async function resumeAssistant(
     from: params.from ?? 1,
     signal: params.signal,
   });
-  await consumeTurnStream(res, params, onText);
+  await consumeTurnStream(res, params, onText, {
+    path: `/word-chat/${encodeURIComponent(params.chatId)}/turn/${encodeURIComponent(params.turnId)}/stream`,
+    method: "GET",
+  });
 }
 
 export async function streamAssistant(
@@ -272,5 +264,5 @@ export async function streamAssistant(
     client_tools: !!params.onClientToolCall,
     signal: params.signal,
   });
-  await consumeTurnStream(res, params, onText);
+  await consumeTurnStream(res, params, onText, { path: "/word-chat", method: "POST" });
 }

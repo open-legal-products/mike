@@ -3,16 +3,14 @@
 import React, { useSyncExternalStore } from "react";
 import { Settings2 } from "lucide-react";
 import { cn } from "@/app/lib/utils";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import {
+    TabPillButtonUI,
     Dropdown,
     DropdownContent,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import {
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SUBTLE_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";
 
 const DESKTOP_QUERY = "(min-width: 768px)";
 

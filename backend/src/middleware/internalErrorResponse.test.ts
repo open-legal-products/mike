@@ -10,6 +10,8 @@ vi.mock("../lib/observability/sentry", async (importOriginal) => ({
 import {
   INTERNAL_ERROR_CODE,
   INTERNAL_ERROR_MESSAGE,
+  SCHEMA_OUT_OF_DATE_MESSAGE,
+  sendInternalError,
 } from "../lib/httpError";
 import {
   handleUnhandledError,
@@ -79,6 +81,9 @@ describe("protectInternalErrorResponses", () => {
       const consoleError = vi
         .spyOn(console, "error")
         .mockImplementation(() => {});
+      const consoleWarn = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
 
       const res = await request(testApp(status, {
         detail: "relation private_table does not exist",
@@ -87,15 +92,45 @@ describe("protectInternalErrorResponses", () => {
 
       expect(res.status).toBe(status);
       expect(res.body).toEqual({
+        reporting_owner: "backend",
         code: INTERNAL_ERROR_CODE,
         detail: INTERNAL_ERROR_MESSAGE,
         request_id: "req-test-123",
       });
       expect(res.text).not.toContain("private_table");
       expect(res.text).not.toContain("secret stack");
-      expect(consoleError).toHaveBeenCalledOnce();
+      expect(reportMessage).toHaveBeenCalledOnce();
+      // Logged at warn: the console bridge forwards console.error as a
+      // second event for the failure reportMessage just filed.
+      expect(consoleWarn).toHaveBeenCalledOnce();
+      expect(consoleError).not.toHaveBeenCalled();
     },
   );
+
+  it("passes a sendInternalError 503 through with its code and does not report it again", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const app = express();
+    app.use((_req, res, next) => {
+      res.locals.requestId = "req-schema-123";
+      next();
+    });
+    app.use(protectInternalErrorResponses);
+    app.get("/test", (_req, res) => {
+      sendInternalError(res, { code: "PGRST205", message: "relation private_table" });
+    });
+
+    const res = await request(app).get("/test");
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      reporting_owner: "backend",
+      code: "schema_out_of_date",
+      detail: SCHEMA_OUT_OF_DATE_MESSAGE,
+      request_id: "req-schema-123",
+    });
+    expect(reportMessage).not.toHaveBeenCalled();
+  });
 
   it("does not rewrite intentional client errors", async () => {
     const body = { code: "invalid_filename", detail: "Filename is required" };
@@ -105,8 +140,8 @@ describe("protectInternalErrorResponses", () => {
   });
 
   it("strips extra fields from an otherwise sanitized 5xx response", async () => {
-    const consoleError = vi
-      .spyOn(console, "error")
+    const consoleWarn = vi
+      .spyOn(console, "warn")
       .mockImplementation(() => {});
     const res = await request(
       testApp(500, {
@@ -118,12 +153,13 @@ describe("protectInternalErrorResponses", () => {
     ).get("/test");
 
     expect(res.body).toEqual({
+      reporting_owner: "backend",
       code: INTERNAL_ERROR_CODE,
       detail: INTERNAL_ERROR_MESSAGE,
       request_id: "req-test-123",
     });
     expect(res.text).not.toContain("secret stack");
-    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleWarn).toHaveBeenCalledOnce();
   });
 
   it("sanitizes an unhandled route exception", async () => {
@@ -145,6 +181,7 @@ describe("protectInternalErrorResponses", () => {
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({
+      reporting_owner: "backend",
       code: INTERNAL_ERROR_CODE,
       detail: INTERNAL_ERROR_MESSAGE,
       request_id: "req-thrown-123",

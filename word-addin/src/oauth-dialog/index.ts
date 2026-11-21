@@ -3,7 +3,7 @@ import {
   GOOGLE_OAUTH_MESSAGE_TYPE,
   type GoogleOAuthDialogMessage,
 } from "../taskpane/auth/oauthProtocol";
-import { describeError } from "@mike/user-error";
+import { describeError } from "@mike/client";
 import { initAddinErrorReporting } from "../taskpane/lib/errorReporting";
 
 initAddinErrorReporting("oauth-dialog");

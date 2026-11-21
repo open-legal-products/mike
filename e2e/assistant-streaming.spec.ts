@@ -236,11 +236,16 @@ test("scoped document search activity streams, renders mocked history after relo
             return json([]);
         };
     });
-    await page.goto("/assistant/chat/search-activity");
+    // Start a new conversation. An empty saved chat redirects to /assistant,
+    // so opening the fixture's empty history races that redirect with typing.
+    // The first stream adopts search-activity; reloading below then exercises
+    // its stored question, search result and answer.
+    await page.goto("/assistant");
     const input = page.getByPlaceholder("How can I help?");
     await expect(page.getByRole("button", { name: "Choose model", exact: true })).toHaveAttribute("title", "Choose model — Claude Sonnet 5.5");
     await input.fill("Find documents containing a change of control clause in my document library.");
     await input.press("Enter");
+    await expect(page).toHaveURL(/\/assistant\/chat\/search-activity$/);
     await expect(page.getByRole("button", { name: /^Searching the document library for “change of control”\s*\.\.\.$/ })).toBeVisible();
     const progress = testInfo.outputPath("document-search-progress.png");
     await page.screenshot({ path: progress });

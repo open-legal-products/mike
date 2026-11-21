@@ -3,8 +3,8 @@ import type { Db } from "../../../lib/supabase";
 
 const { getUserApiKeys } = vi.hoisted(() => ({ getUserApiKeys: vi.fn() }));
 
-vi.mock("../../user/user.service", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../user/user.service")>()),
+vi.mock("../../../lib/providerCredentials/index", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/providerCredentials/index")>()),
   getUserApiKeys,
 }));
 

@@ -95,6 +95,14 @@ For the Supabase CLI stack used by `npm run test:e2e:local` and
 `npm run test:stack`, `supabase stop` removes the containers and keeps the
 data; `supabase stop --no-backup` removes both.
 
+## Supabase CLI stack
+
+`supabase start`, run from `backend/`, starts only the services Mike uses:
+Postgres, Auth, the data API, the gateway, and the local mail catcher. The
+others are disabled in `backend/supabase/config.toml`. To browse tables in
+Supabase Studio, set `enabled = true` under `[studio]` there and restart the
+stack; Studio is then at `http://localhost:54323`.
+
 ## Local service endpoints
 
 | Service | Address | Notes |

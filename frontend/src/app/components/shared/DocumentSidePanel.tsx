@@ -20,14 +20,12 @@ import { DocumentPaneTitle } from "@/app/components/shared/DocumentPaneTitle";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
-import { CloseButton } from "@/shared/ui/CloseButton";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { CloseButton, PillButtonUI } from "@mike/ui";
 import type { Document } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { cn } from "@/app/lib/utils";
-import {
+import { reportFault,
     UserVisibleError,
-    describeError,
     notifyError,
 } from "@/app/lib/userFacingError";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
@@ -332,9 +330,10 @@ export function DocumentSidePanel({
             setEditingName(false);
         } catch (err) {
             setNameError(
-                describeError(err, {
+                reportFault(err, {
                     action: "rename this version",
                     fallback: "Could not save the new name. Try again.",
+                    operation: "documents.edit",
                 }).message,
             );
         } finally {
@@ -352,10 +351,11 @@ export function DocumentSidePanel({
             await onUploadNewVersion(doc, file, file.name);
         } catch (err) {
             setUploadError(
-                describeError(err, {
+                reportFault(err, {
                     action: "upload a new version",
                     fallback:
                         "The new version could not be uploaded. Try again.",
+                    operation: "documents.upload",
                 }).message,
             );
         } finally {
@@ -374,6 +374,7 @@ export function DocumentSidePanel({
         } catch (err) {
             notifyError(err, {
                 action: "delete this version",
+                operation: "documents.edit",
                 onRetry: () => void handleDeleteVersion(versionIdToDelete),
                 supportNote: `Document: ${selectedFilename}`,
             });
@@ -416,9 +417,10 @@ export function DocumentSidePanel({
             setReplaceFile(null);
         } catch (err) {
             setUploadError(
-                describeError(err, {
+                reportFault(err, {
                     action: "replace this version",
                     fallback: "This version could not be replaced. Try again.",
+                    operation: "documents.upload",
                 }).message,
             );
         } finally {
@@ -442,6 +444,7 @@ export function DocumentSidePanel({
             setDeleteDocumentStatus("idle");
             notifyError(err, {
                 action: "delete this document",
+                operation: "documents.edit",
                 onRetry: requestDeleteDocument,
                 supportNote: `Document: ${selectedFilename}`,
             });

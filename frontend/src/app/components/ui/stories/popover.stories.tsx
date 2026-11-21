@@ -1,4 +1,4 @@
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 import {
     Popover,
     PopoverContent,

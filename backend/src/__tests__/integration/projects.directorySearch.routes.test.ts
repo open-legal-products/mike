@@ -1,17 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
-// ---------------------------------------------------------------------------
-// GET /projects?view=directory-search — the document picker's own access
-// branches.
-//
-// This route resolves the same project three different ways (created by me,
-// granted to me, in one of my orgs) and the shared per-table stub used by
-// projects.routes.test.ts cannot tell those reads apart. So this file drives
-// a FILTER-AWARE db instead, and records the filters each read was issued
-// with — the shape of the override query is itself one of the things under
-// test, not just its answer.
-// ---------------------------------------------------------------------------
+// The service delegates policy/filter/page selection to search_project_directory.
+// Real permission matrices live in performance.projects.sql and
+// performance.directory.sql. These HTTP tests protect workspace validation and
+// forwarding at that boundary, with explicitly seeded authoritative RPC pages.
 
 function mockSupabase() {
     return {
@@ -94,92 +87,25 @@ const AUTH = ["Authorization", "Bearer test"] as const;
 
 type Project = Record<string, unknown>;
 
-/**
- * A db that answers per (table, filters) and records what it was asked.
- * `reads` holds one entry per query with its filters in the order they were
- * applied, which is how the override-query shape is asserted.
- */
 function directorySearchDb(options: {
-    /** Rows the `projects` read scoped by `eq:user_id` returns. */
-    created?: Project[];
-    /** Rows the `projects` read scoped by `in:org_id` returns. */
-    orgProjects?: Project[];
+    pages?: Record<string, Project[]>;
     memberships?: { org_id: string; role: string }[];
-    denies?: string[];
 }) {
-    const created = options.created ?? [];
-    const orgProjects = options.orgProjects ?? [];
     const memberships = options.memberships ?? [];
-    const denied = new Set(options.denies ?? []);
-    const reads: { table: string; filters: string[] }[] = [];
-
-    const build = (
-        table: string,
-        resolve: (filters: Record<string, unknown>) => unknown[],
-    ) => {
-        const filters: Record<string, unknown> = {};
-        const record = { table, filters: [] as string[] };
-        reads.push(record);
-        const b: Record<string, unknown> = {};
-        for (const method of ["select", "order", "limit", "range", "ilike"])
-            b[method] = () => b;
-        b.is = () => b;
-        b.eq = (column: string, value: unknown) => {
-            filters[`eq:${column}`] = value;
-            record.filters.push(`eq:${column}`);
-            return b;
-        };
-        b.in = (column: string, value: unknown) => {
-            filters[`in:${column}`] = value;
-            record.filters.push(`in:${column}`);
-            return b;
-        };
-        b.single = () =>
-            Promise.resolve({ data: resolve(filters)[0] ?? null, error: null });
-        b.maybeSingle = b.single;
-        b.then = (onResolve: (v: unknown) => unknown) =>
-            Promise.resolve({ data: resolve(filters), error: null }).then(
-                onResolve,
-            );
-        return b;
-    };
-
-    const db = {
-        from: (table: string) => {
-            if (table === "projects")
-                return build(table, (filters) => {
-                    if (filters["in:org_id"]) return orgProjects;
-                    if (filters["in:id"]) return [];
-                    return created;
-                });
-            if (table === "project_org_access_overrides")
-                return build(table, (filters) => {
-                    const orgIds =
-                        (filters["in:org_id"] as string[] | undefined) ?? [];
-                    return orgProjects
-                        .filter(
-                            (project) =>
-                                denied.has(project.id as string) &&
-                                orgIds.includes(project.org_id as string),
-                        )
-                        .map((project) => ({
-                            project_id: project.id,
-                            role: "deny",
-                        }));
-                });
-            if (table === "org_members") return build(table, () => memberships);
-            return build(table, () => []);
-        },
-        rpc: () => Promise.resolve({ data: [], error: null }),
-        auth: {
-            getUser: () =>
-                Promise.resolve({
-                    data: { user: { id: "u1" } },
-                    error: null,
-                }),
-        },
-    };
-    return { db, reads };
+    const db = mockSupabase();
+    const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+        expect(name).toBe("search_project_directory");
+        expect(args).toMatchObject({ p_user_id: "u1", p_user_email: "u1@test.local" });
+        return { data: options.pages?.[String(args.p_workspace ?? "all")] ?? [], error: null };
+    });
+    const from = vi.fn((table: string) => {
+        const query = db.from();
+        if (table === "org_members") {
+            query.maybeSingle = () => Promise.resolve({ data: memberships[0] ?? null, error: null });
+        }
+        return query;
+    });
+    return { db: { ...db, from, rpc }, rpc, from };
 }
 
 function useDb(handle: { db: unknown }) {
@@ -207,13 +133,13 @@ describe("GET /projects?view=directory-search", () => {
         vi.clearAllMocks();
     });
 
-    it("hides an org project whose creator has left the organization", async () => {
+    it("returns an empty authoritative page after membership is revoked", async () => {
         // "I created it" is not a verdict on its own. checkProjectAccess —
         // which every other read path uses — answers "no access" for a
         // non-member, so the picker was the one surface still offering a
         // matter that 404s the moment it is opened.
         const handle = directorySearchDb({
-            created: [CREATED_ORG_PROJECT],
+            pages: { all: [] },
             memberships: [],
         });
         useDb(handle);
@@ -224,12 +150,11 @@ describe("GET /projects?view=directory-search", () => {
         expect(res.body).toEqual([]);
     });
 
-    it("keeps that project while its creator is still a member", async () => {
+    it("preserves an authorized organization project from the RPC", async () => {
         // The control. The org branch re-admits it, so leaving the org is
         // what removes it — not the change itself.
         const handle = directorySearchDb({
-            created: [CREATED_ORG_PROJECT],
-            orgProjects: [CREATED_ORG_PROJECT],
+            pages: { all: [CREATED_ORG_PROJECT] },
             memberships: [{ org_id: "o1", role: "member" }],
         });
         useDb(handle);
@@ -242,9 +167,9 @@ describe("GET /projects?view=directory-search", () => {
         ]);
     });
 
-    it("keeps a personal project the caller created, org membership or not", async () => {
+    it("preserves an authorized personal project without workspace membership", async () => {
         const handle = directorySearchDb({
-            created: [
+            pages: { all: [
                 {
                     id: "p-personal",
                     name: "Matter Personal",
@@ -252,7 +177,7 @@ describe("GET /projects?view=directory-search", () => {
                     user_id: "u1",
                     updated_at: "2026-09-01T00:00:00Z",
                 },
-            ],
+            ] },
             memberships: [],
         });
         useDb(handle);
@@ -265,30 +190,17 @@ describe("GET /projects?view=directory-search", () => {
         ]);
     });
 
-    it("asks for the caller's overrides by org, never by a list of project ids", async () => {
-        // The candidate-id list grows with the firm's matters and is spliced
-        // verbatim into the PostgREST query string, so a large tenant sent a
-        // URL past the server's request-line limit; the read then failed and
-        // the picker — which fails closed — went blank. org_id is bounded by
-        // the caller's memberships instead.
-        const handle = directorySearchDb({
-            created: [],
-            orgProjects: [CREATED_ORG_PROJECT],
-            memberships: [{ org_id: "o1", role: "member" }],
-        });
+    it("uses one bounded RPC instead of transmitting every candidate project ID", async () => {
+        const handle = directorySearchDb({ pages: { all: [CREATED_ORG_PROJECT] } });
         useDb(handle);
-
         const res = await search();
-
         expect(res.status).toBe(200);
-        const overrideReads = handle.reads.filter(
-            (read) => read.table === "project_org_access_overrides",
-        );
-        expect(overrideReads).toHaveLength(1);
-        // Every override the caller holds, not only the denials: a grant is
-        // what admits them to a private project.
-        expect(overrideReads[0].filters).toEqual(["in:org_id", "eq:user_id"]);
-        expect(overrideReads[0].filters).not.toContain("in:project_id");
+        expect(handle.rpc).toHaveBeenCalledTimes(1);
+        expect(handle.rpc).toHaveBeenCalledWith("search_project_directory", expect.objectContaining({
+            p_search_term: "Matter", p_limit: 20, p_offset: 0,
+        }));
+        expect(handle.from).not.toHaveBeenCalledWith("project_org_access_overrides");
+        expect(handle.from).not.toHaveBeenCalledWith("projects");
     });
 
     describe("narrowed to a workspace", () => {
@@ -305,8 +217,7 @@ describe("GET /projects?view=directory-search", () => {
         };
         const both = () =>
             directorySearchDb({
-                created: [firmProject, personalProject],
-                orgProjects: [firmProject],
+                pages: { all: [firmProject, personalProject], personal: [personalProject], [FIRM]: [firmProject] },
                 memberships: [{ org_id: FIRM, role: "member" }],
             });
         const searchIn = (workspace: string) =>
@@ -342,7 +253,7 @@ describe("GET /projects?view=directory-search", () => {
         it("404s a workspace the caller is not in", async () => {
             useDb(
                 directorySearchDb({
-                    created: [personalProject],
+                    pages: { all: [personalProject] },
                     memberships: [],
                 }),
             );

@@ -1,7 +1,46 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
+const { redisEnabled, reportError, redisConnect, streamChatWithTools } = vi.hoisted(() => ({
+    redisEnabled: vi.fn(() => false),
+    reportError: vi.fn(),
+    redisConnect: vi.fn(),
+    streamChatWithTools: vi.fn(),
+}));
+vi.mock("../../../lib/llm", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../lib/llm")>()),
+    streamChatWithTools,
+}));
+vi.mock("../tabular.rows", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../tabular.rows")>()),
+    loadRowDocumentText: async () => "document text",
+}));
+vi.mock("../../../lib/dbq/driver", () => ({
+    redisEnabled: () => redisEnabled(),
+}));
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("../../../lib/observability/sentry")
+    >()),
+    reportError,
+}));
+// A subscriber whose connection fails the way a down or misconfigured Redis
+// does: the constructor throws.
+vi.mock("ioredis", () => ({
+    default: class {
+        constructor() {
+            redisConnect();
+        }
+    },
+}));
+
+import { EventEmitter } from "node:events";
+import { AppError } from "../../../lib/appError";
+import { toProviderStreamError } from "../../../lib/llm/providerErrors";
+import { tableDb } from "../../../__tests__/helpers/tableDb";
 import {
     awaitCellTerminal,
+    streamTabularGenerateSync,
+    streamTabularRunView,
     targetPendingCells,
 } from "../tabular.generateStream";
 
@@ -150,6 +189,46 @@ describe("awaitCellTerminal", () => {
         expect(db.calls.every((c) => c.op === "select")).toBe(true);
     });
 
+    it("falls back to the DB poll and reports a failed subscribe under its kind", async () => {
+        process.env.ASYNC_TABULAR_EXTRACTION = "true";
+        redisEnabled.mockReturnValue(true);
+        const cause = Object.assign(new Error("connect refused"), {
+            code: "ECONNREFUSED",
+        });
+        redisConnect.mockImplementation(() => {
+            throw cause;
+        });
+        const log = { error: vi.fn() };
+        const db = makeCellDb([
+            { status: "done", content: JSON.stringify({ summary: "x" }) },
+        ]);
+
+        const terminal = await awaitCellTerminal({
+            db: db as never,
+            ...WAIT_ARGS,
+            log,
+            timeoutMs: 1_000,
+        });
+
+        // Degraded, not failed: the backstop still resolved the cell.
+        expect(terminal).toEqual({
+            status: "done",
+            content: { summary: "x", flag: undefined, reasoning: "" },
+        });
+        expect(reportError).toHaveBeenCalledTimes(1);
+        const [reported] = reportError.mock.calls[0];
+        expect(reported).toBeInstanceOf(AppError);
+        expect(reported.kind).toBe("tabular.stream_failed");
+        expect(reported.cause).toBe(cause);
+        // The log carries the reported object; the bridge files it once.
+        expect(log.error).toHaveBeenCalledWith(
+            "[tabular/regenerate-async] subscribe failed",
+            expect.objectContaining({ err: reported }),
+        );
+        redisEnabled.mockReturnValue(false);
+        redisConnect.mockReset();
+    });
+
     it("does not dial Redis in synchronous deployments", async () => {
         const db = makeCellDb([
             { status: "done", content: JSON.stringify({ summary: "x" }) },
@@ -163,5 +242,120 @@ describe("awaitCellTerminal", () => {
 
         // Flag unset above — the DB poll alone resolved it.
         expect(process.env.ASYNC_TABULAR_EXTRACTION).toBeUndefined();
+    });
+});
+
+describe("run-view reconcile poll", () => {
+    it("re-reads only the pending rows' finished cells, not the whole review", async () => {
+        vi.useFakeTimers();
+        try {
+            const rows = Array.from({ length: 40 }, (_, r) => ({ id: `row-${r}` }));
+            const cells = rows.flatMap((row, r) => [0, 1].map((c) => ({
+                id: `cell-${String(r * 2 + c).padStart(3, "0")}`, review_id: "rev", row_id: row.id,
+                column_index: c, status: "done", content: JSON.stringify({ summary: "x" }),
+            })));
+            // The view started while row-39 column 1 was still pending.
+            const cellMap = new Map(cells.map((cell) => [`${cell.row_id}:${cell.column_index}`, { ...cell }]));
+            cellMap.get("row-39:1")!.status = "generating";
+            const fake = tableDb({ tabular_cells: cells });
+            const writes: string[] = [];
+            const res = Object.assign(new EventEmitter(), {
+                setHeader: () => {}, flushHeaders: () => {}, writableEnded: false,
+                write: (chunk: string) => (writes.push(chunk), true),
+                end() { this.writableEnded = true; },
+            });
+            await streamTabularRunView({
+                res: res as never, db: fake.db, reviewId: "rev", columns: COLUMNS,
+                rows: rows as never, cellMap, log: { error: vi.fn() } as never,
+            });
+            await vi.advanceTimersByTimeAsync(3_000);
+            expect(writes.some((w) => w.includes('"row_id":"row-39"'))).toBe(true);
+            expect(writes.at(-1)).toBe("data: [DONE]\n\n");
+            // Only the pending row's finished cells travel: no read of the
+            // whole review, whatever number of pages the poll takes.
+            // (just the one pending cell: the row's resolved column is not re-sent)
+            expect(fake.calls.reduce((rows, c) => rows + c.returned, 0)).toBe(1);
+            expect(fake.calls.every((c) => c.inSizes[0] === 1)).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe("run-view reconcile poll pacing", () => {
+    it("skips a tick while the previous reconcile is still reading", async () => {
+        vi.useFakeTimers();
+        try {
+            let reads = 0;
+            let release: () => void = () => {};
+            const gate = new Promise<void>((resolve) => (release = resolve));
+            const builder: Record<string, unknown> = {};
+            for (const name of ["select", "eq", "in", "order", "limit", "gt"]) builder[name] = () => builder;
+            builder.then = (resolve: (value: unknown) => unknown) => {
+                reads++;
+                return gate.then(() => resolve({ data: [], error: null }));
+            };
+            const db = { from: () => builder };
+            const res = Object.assign(new EventEmitter(), {
+                setHeader: () => {}, flushHeaders: () => {}, writableEnded: false,
+                write: () => true, end() { this.writableEnded = true; },
+            });
+            await streamTabularRunView({
+                res: res as never, db: db as never, reviewId: "rev", columns: COLUMNS,
+                rows: ROWS as never, cellMap: new Map(), log: { error: vi.fn() } as never,
+            });
+            await vi.advanceTimersByTimeAsync(3_000 * 4);
+            // The first tick's read never returned: the next three ticks wait.
+            expect(reads).toBe(1);
+            release();
+            res.emit("close");
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe("streamTabularGenerateSync failure reports", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+        reportError.mockReset();
+        streamChatWithTools.mockReset();
+    });
+
+    // Every row of a run calls the same model with the same key, so a refused
+    // key fails each row alike: one report for the run, not one per row. A
+    // user's own rejected key is not reported at all: the grid is told why.
+    it.each([
+        ["the user's own key", 401, "user", null],
+        ["the user's out-of-credits account", 402, "user", "warning"],
+        ["the deployment's key", 401, "deployment", "error"],
+    ] as const)("reports a provider rejecting %s once per run", async (_name, status, keySource, level) => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const answer = Object.assign(new Error(`${status} from provider`), { name: "AI_APICallError", statusCode: status, responseBody: "" });
+        streamChatWithTools.mockImplementation(async () => {
+            throw toProviderStreamError(answer, { label: "Anthropic", modelId: "m", keySource, provider: "claude" });
+        });
+        const rows = ["row-1", "row-2", "row-3", "row-4"].map((id, sort_index) => ({
+            id, review_id: "rev-1", label: `${id}.pdf`, row_type: "document", folder_id: null,
+            library_folder_id: null, document_id: `doc-${id}`, sort_index, source_document_ids: [`doc-${id}`],
+        }));
+        const frames: Array<{ type: string; row_id: string; status: string; code?: string }> = [];
+
+        await streamTabularGenerateSync({
+            write: (line) => (frames.push(JSON.parse(line.slice(6))), true),
+            db: tableDb({ tabular_cells: [] }).db,
+            reviewId: "rev-1", columns: COLUMNS, rows: rows as never, cellMap: new Map(),
+            model: "m", apiKeys: {}, generationId: "gen-1", abortSignal: new AbortController().signal,
+        });
+
+        const reports = reportError.mock.calls.filter(([failure]) => (failure as AppError).kind === "tabular.generation_failed");
+        expect(reports).toHaveLength(level === null ? 0 : 1);
+        if (level !== null) expect(reports[0][1]).toMatchObject({ level });
+        // A rejected key, whoever's it is, is named to the grid once.
+        expect(frames.filter((frame) => frame.type === "error").map((frame) => frame.code))
+            .toEqual(status === 401 ? ["invalid_api_key"] : []);
+        // The grid still sees every cell of every row fail.
+        expect(frames.filter((frame) => frame.status === "error")).toHaveLength(rows.length * COLUMNS.length);
     });
 });

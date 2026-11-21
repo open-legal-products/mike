@@ -51,6 +51,7 @@ import {
     resolveEffectiveReasoningLevel,
 } from "../../lib/modelSelection";
 import { replaysReasoning } from "../../lib/llm/registry";
+import { disownsReplayedToolRecord } from "../../lib/llm/models";
 import {
     beginMemoryConversationTurn,
     releaseMemoryConversationTurn,
@@ -61,6 +62,7 @@ import {
 // this reaches chat via `chat.service` and re-exports the function by name —
 // the route imports everything it needs from its own service.
 import { updateChatTitle, type ChatWriteResult } from "../chat/chat.service";
+import { log } from "../../lib/log";
 
 export { updateChatTitle };
 export type { ChatWriteResult };
@@ -497,6 +499,7 @@ export async function prepareProjectChatStream(
             ? await attachPriorReasoning(messages, chatId, db)
             : messages;
         const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
+        const recordForUser = disownsReplayedToolRecord(selectedModel);
         const enrichedMessages = await enrichWithPriorEvents(
             historyMessages,
             chatId,
@@ -505,6 +508,7 @@ export async function prepareProjectChatStream(
             nonce,
             "chat_messages",
             timeZone,
+            recordForUser,
         );
         const messagesForLLM: ChatMessage[] = displayed_doc
             ? enrichedMessages.map((m, i) => {
@@ -566,6 +570,7 @@ export async function prepareProjectChatStream(
             nonce,
             "append",
             { timeZone, now: new Date(), userSentAt },
+            recordForUser,
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db, projectAccess.project.org_id ?? null);
@@ -613,7 +618,7 @@ export async function prepareProjectChatStream(
                     turn: memoryTurn,
                 });
             } catch {
-                console.warn("[memory] project chat activity release failed", {
+                log.warn("memory", "project chat activity release failed", {
                     chatId,
                 });
             }

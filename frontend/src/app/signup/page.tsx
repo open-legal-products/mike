@@ -3,20 +3,22 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signup } from "@/app/lib/authApi";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
+import {
+    InputUI,
+    PillButtonUI,
+    pillButtonUIClassName,
+    noticeActionClassName,
+    authGlassCardUIClassName,
+    authInputUIClassName,
+    AuthDividerUI,
+} from "@mike/ui";
 import Link from "next/link";
 import { SiteLogo } from "@/app/components/site-logo";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { cn } from "@/app/lib/utils";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
-import { noticeActionClassName } from "@/shared/ui/NoticeCardUI";
 import {
-    authGlassCardUIClassName,
-    authInputUIClassName,
-} from "@/shared/ui/AuthStylesUI";
-import {
+    reportFault,
     UserVisibleError,
     describeError,
     supportMailtoFor,
@@ -33,6 +35,17 @@ function localSignupError(message: string): UserFacingError {
 }
 
 /**
+ * Shown instead of the form while this deployment cannot send confirmation
+ * emails (a new Vercel deployment before its operator configures email):
+ * an account created now could never be confirmed. Same sentence as the
+ * API's `signup_email_not_configured` refusal.
+ */
+const SIGNUP_CLOSED_MESSAGE =
+    "Sign-up isn't open on this Mike deployment yet, because it can't send " +
+    "confirmation emails. Ask the person who set it up to configure email, or " +
+    "log in if you already have an account.";
+
+/**
  * The shared auth table with this screen's deltas. Anything not listed
  * falls through to `describeError` so a 429, a 5xx, or a dropped connection
  * still says what actually happened.
@@ -43,14 +56,16 @@ const SIGNUP_ERROR_MESSAGES = authMessages({
     over_email_send_rate_limit:
         "Too many signup emails have been requested. Wait a few minutes and try again.",
     request_timeout: "The signup request timed out. Try again.",
+    signup_email_not_configured: SIGNUP_CLOSED_MESSAGE,
 });
 
 /** Classify a signup failure into text a person can act on. */
 function describeSignupError(error: unknown): UserFacingError {
-    const described = describeError(error, {
+    const described = reportFault(error, {
         action: "create your account",
         codeMessages: SIGNUP_ERROR_MESSAGES,
         fallback: "Unable to create your account right now. Try again.",
+        operation: "auth.signup",
     });
     return described.kind === "rate_limited"
         ? { ...described, message: TOO_MANY_ATTEMPTS_MESSAGE }
@@ -63,8 +78,8 @@ import {
     minimumPasswordMessage,
 } from "@/app/components/auth/passwordPolicy";
 import { TOO_MANY_ATTEMPTS_MESSAGE, authMessages } from "@/app/lib/authMessages";
-import { AuthDividerUI } from "@/shared/ui/AuthDividerUI";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
+import { useSignInOptions } from "@/app/hooks/useSignInOptions";
 import { FieldLabel } from "@/app/components/ui/form-field";
 
 function SignupContent() {
@@ -80,6 +95,18 @@ function SignupContent() {
     const isAccountCreatedPreview =
         process.env.NODE_ENV !== "production" &&
         searchParams.get("preview") === "account-created";
+    const {
+        options: signInOptions,
+        loaded: signInOptionsLoaded,
+        providersKnown,
+    } = useSignInOptions();
+    const showGoogle = providersKnown && signInOptions.google;
+
+    // A new deployment has no accounts yet: its first account is created on
+    // the setup screen, which needs no confirmation email.
+    useEffect(() => {
+        if (signInOptions.setupRequired) router.replace("/setup");
+    }, [router, signInOptions.setupRequired]);
 
     useEffect(() => {
         if (isAccountCreatedPreview) return;
@@ -180,6 +207,39 @@ function SignupContent() {
         );
     }
 
+    if (signInOptionsLoaded && !signInOptions.signup) {
+        return (
+            <div className="relative flex min-h-dvh items-center justify-center bg-gray-50/80 px-6 py-24">
+                <div className="absolute top-4 md:top-8 left-1/2 -translate-x-1/2">
+                    <SiteLogo size="lg" asLink />
+                </div>
+                <div className="w-full max-w-md">
+                    <div className={authGlassCardUIClassName}>
+                        <h1 className="font-serif text-2xl font-medium text-gray-950">
+                            Sign-up isn&apos;t open yet
+                        </h1>
+                        <p className="mt-3 text-sm leading-relaxed text-gray-600">
+                            This Mike deployment can&apos;t send confirmation
+                            emails yet. Ask the person who set it up to
+                            configure email, or log in if you already have an
+                            account.
+                        </p>
+                        <Link
+                            href="/login"
+                            className={pillButtonUIClassName({
+                                tone: "black",
+                                size: "normal",
+                                className: "mt-6",
+                            })}
+                        >
+                            Log in
+                        </Link>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     // Default Signup Form View
     return (
         <div className="relative flex min-h-dvh items-center justify-center bg-gray-50/80 px-6 py-24">
@@ -268,12 +328,16 @@ function SignupContent() {
                             >
                                 {loading ? "Creating account..." : "Sign up"}
                             </PillButtonUI>
-                            <AuthDividerUI />
-                            <GoogleAuthButton
-                                onError={setError}
-                                disabled={loading}
-                                onLoadingChange={setLoading}
-                            />
+                            {showGoogle && (
+                                <>
+                                    <AuthDividerUI />
+                                    <GoogleAuthButton
+                                        onError={setError}
+                                        disabled={loading}
+                                        onLoadingChange={setLoading}
+                                    />
+                                </>
+                            )}
                         </div>
                     </form>
                 </div>

@@ -76,6 +76,9 @@ else
   echo "    already present, skipping"
 fi
 
+# Repair cached binaries too; never rely on a host Homebrew installation.
+node scripts/relocate-postgrest.mjs "$DEST"
+
 echo "==> GoTrue (supabase/auth) $GOTRUE_VERSION"
 # No usable official macOS binary: the release asset NAMED darwin-arm64
 # actually contains Linux ELF binaries (verified against v2.189.0 — both

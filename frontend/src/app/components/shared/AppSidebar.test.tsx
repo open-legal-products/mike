@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listProjectsPage } from "@/app/lib/mikeApi";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import { AppSidebar } from "./AppSidebar";
 
 const { signOut } = vi.hoisted(() => ({ signOut: vi.fn() }));

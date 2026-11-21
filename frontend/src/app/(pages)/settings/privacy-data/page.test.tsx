@@ -9,7 +9,7 @@ import {
     startUserExport,
 } from "@/app/lib/mikeApi";
 import PrivacyDataPage from "./page";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 
 // The export buttons drive the async job flow: schedule → poll → download.
 // These tests pin that wiring (start called with the right type, download

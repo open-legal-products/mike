@@ -27,7 +27,7 @@ export const TOO_MANY_ATTEMPTS_MESSAGE =
 
 const SESSION_EXPIRED_MESSAGE = "Your session has expired. Log in again.";
 
-export const WEAK_PASSWORD_MESSAGE = `Choose a stronger password: at least ${MIN_PASSWORD_LENGTH} characters, mixing letters, numbers, and symbols.`;
+const WEAK_PASSWORD_MESSAGE = `Choose a stronger password: at least ${MIN_PASSWORD_LENGTH} characters, mixing letters, numbers, and symbols.`;
 
 export const PASSWORD_LENGTH_MESSAGE = `Password must have at least ${MIN_PASSWORD_LENGTH} characters and use at most ${MAX_PASSWORD_LENGTH} UTF-8 bytes.`;
 
@@ -36,7 +36,7 @@ export const LINK_SPENT_MESSAGE =
     "This confirmation link is invalid or has expired. Request a new one.";
 
 /** Wording for a six-digit authenticator code, shared by every MFA screen. */
-export const MFA_CODE_INCORRECT_MESSAGE =
+const MFA_CODE_INCORRECT_MESSAGE =
     "That code is incorrect. Enter the current six-digit code from your authenticator app.";
 const MFA_CODE_EXPIRED_MESSAGE =
     "That code expired. Enter the current six-digit code from your authenticator app.";

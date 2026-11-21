@@ -93,8 +93,22 @@ begin
   v1:=(public.create_document_version(doc,'{"filename":"one.docx","storage_path":"one.docx","file_type":"docx"}',true)->>'id')::uuid;
   v2:=(public.create_document_version(doc,'{"filename":"two.docx","storage_path":"two.docx","file_type":"docx"}',true)->>'id')::uuid;
   alter table document_versions enable trigger document_text_changed;
+  perform set_config('mike.backfill_doc',doc::text,true);
+  perform set_config('mike.backfill_actor',actor::text,true);
+  perform set_config('mike.backfill_v1',v1::text,true);
+  perform set_config('mike.backfill_v2',v2::text,true);
+end;
+$$;
+-- Versions from before text search have no text row. The upgrade that made
+-- the sweep start from unfinished rows records them as pending first.
+\ir ../../../../migrations/20261101_23_document_text_backfill_from_unfinished.sql
+do $$
+declare actor uuid:=current_setting('mike.backfill_actor')::uuid; v1 uuid:=current_setting('mike.backfill_v1')::uuid;
+  v2 uuid:=current_setting('mike.backfill_v2')::uuid; revision uuid; r jsonb;
+begin
   perform pg_temp.assert_true(public.backfill_document_text(1,false)=1,'bounded first batch');
-  perform pg_temp.assert_true(exists(select 1 from document_version_texts where version_id=v2),'current versions prioritized');
+  perform pg_temp.assert_true(exists(select 1 from db_jobs where dedupe_key like 'document.text:'||v2||':%')
+    and not exists(select 1 from db_jobs where dedupe_key like 'document.text:'||v1||':%'),'current versions prioritized');
   perform pg_temp.assert_true(public.backfill_document_text(1,false)=1,'resumes into history');
   perform pg_temp.assert_true(public.backfill_document_text(1,false)=0,'live jobs deduplicated');
   update document_version_texts set status='failed',error_code='extraction_failed' where version_id=v2;

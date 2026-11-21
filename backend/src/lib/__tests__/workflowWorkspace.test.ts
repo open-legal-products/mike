@@ -46,17 +46,37 @@ describe("workflow workspace authorization", () => {
     fake.done();
   });
 
-  it("pages full records through the access-aware RPC and filters revoked access", async () => {
-    const full = { ...owned, prompt_md: "Instructions", columns_config: [{ name: "Clause" }] };
+  it("uses the access-aware RPC verdict without N individual workflow reads", async () => {
+    const full = Array.from({ length: 200 }, (_, i) => ({ ...owned, id: `wf-${i}`, prompt_md: "Instructions" }));
     const fake = scriptedDb([
-      { rpc: "get_workflows_overview", data: [full, { id: "revoked" }] },
-      { table: "workflows", data: owned },
-      { table: "workflows", data: null },
+      { rpc: "get_workflows_overview", data: full },
       { rpc: "get_workflows_overview", data: [] },
     ]);
-    expect(await listWorkspaceWorkflows(fake.db, { userId: "u", workspace: "personal" })).toEqual([full]);
-    expect(fake.calls[0].args).toMatchObject({ p_workspace: "personal", p_offset: 0 });
-    expect(fake.calls[3].args).toMatchObject({ p_workspace: "personal", p_offset: 2 });
+    expect(await listWorkspaceWorkflows(fake.db, { userId: "u", workspace: "personal" })).toEqual(full);
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls[1].args).toMatchObject({ p_workspace: "personal", p_offset: 200 });
+    fake.done();
+  });
+
+  it("normalizes personal organisation placement once per distinct organisation", async () => {
+    const full = Array.from({ length: 200 }, (_, i) => ({ ...owned, id: `wf-${i}`, org_id: "personal-org" }));
+    const fake = scriptedDb([
+      { rpc: "get_workflows_overview", data: full },
+      { table: "organizations", data: [{ id: "personal-org", kind: "personal" }] },
+      { rpc: "get_workflows_overview", data: [] },
+    ]);
+    expect(await listWorkspaceWorkflows(fake.db, { userId: "u", workspace: "personal" })).toEqual(full);
+    expect(fake.calls[1].filters).toContainEqual(["in", "id", ["personal-org"]]);
+    fake.done();
+  });
+
+  it("does not mix workspace placement even if a catalog response contains other rows", async () => {
+    const fake = scriptedDb([
+      { rpc: "get_workflows_overview", data: [owned, { ...owned, id: "team-wf", org_id: "firm" }] },
+      { table: "organizations", data: [{ id: "firm", kind: "team" }] },
+      { rpc: "get_workflows_overview", data: [] },
+    ]);
+    expect(await listWorkspaceWorkflows(fake.db, { userId: "u", workspace: "firm" })).toEqual([{ ...owned, id: "team-wf", org_id: "firm" }]);
     fake.done();
   });
 

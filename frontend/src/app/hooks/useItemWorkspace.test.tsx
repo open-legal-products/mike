@@ -21,7 +21,10 @@ vi.mock("@/app/contexts/WorkspaceContext", () => ({
         setWorkspace: state.setWorkspace,
     }),
 }));
-vi.mock("@/shared/lib/toastStore", () => ({ showToast: state.showToast }));
+vi.mock("@mike/client", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@mike/client")>()),
+    showToast: state.showToast,
+}));
 
 type Args = { itemId?: string | null; orgId?: string | null };
 const open = (initialProps: Args) =>

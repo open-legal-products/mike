@@ -1,23 +1,31 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 /**
  * Error reporting for the web app: a thin, testable layer over the Sentry
  * SDK. Application code calls these helpers instead of `@sentry/nextjs`
- * directly so the PII policy (see `@/shared/lib/sentryEvent`) and the
+ * directly so the PII policy (see `@mike/client`'s sentryEvent) and the
  * explicit opt-out rule live in one place.
  */
 
 import * as Sentry from "@sentry/nextjs";
-import { privacyBoundaryIntegration } from "@/shared/lib/sentryPrivacy";
 import {
+    privacyBoundaryIntegration,
+    eventBudget,
+    eventBudgetLimits,
+    type Operation,
     MIKE_SENTRY_DSN,
     createEventScrubber,
+    sentryEnvironment,
     installKind,
     normalizeApiPath,
     parseSampleRate,
     releaseName,
     resolveDsn,
-} from "@/shared/lib/sentryEvent";
+} from "@mike/client";
 
 export type ReportLevel = "fatal" | "error" | "warning";
+
+/** Where the browser SDK posts envelopes; served by app/monitoring/route.ts. */
+export const SENTRY_TUNNEL_PATH = "/monitoring";
 
 export type ReportContext = {
     tags?: Record<string, string | number | boolean | null | undefined>;
@@ -37,25 +45,10 @@ const scrubber = createEventScrubber({ install });
 /** `beforeSend` for every Sentry client in the web app (browser, server, edge). */
 export const scrubEvent = scrubber.scrubEvent;
 
-/**
- * The scrubber's "already sent" registry is a closure, so it can answer the
- * console bridge but not a caller. This mirror answers callers: a screen
- * that catches an error the API client already reported (every 5xx, every
- * transport failure) must not report it a second time under its own tags.
- */
-const reportedHere = new WeakSet<object>();
+// Reporting callers and automatic-capture deduplication share one registry.
+const markReported = scrubber.markReported;
+export const isReported = scrubber.isReported;
 
-function markReported(error: unknown): void {
-    scrubber.markReported(error);
-    if (error && typeof error === "object") reportedHere.add(error);
-}
-
-/** Has this exact error object already been sent to Sentry with context? */
-export function isReported(error: unknown): boolean {
-    return (
-        error !== null && typeof error === "object" && reportedHere.has(error)
-    );
-}
 
 function applyContext(scope: Sentry.Scope, context: ReportContext): void {
     if (context.level) scope.setLevel(context.level);
@@ -96,9 +89,13 @@ export function markErrorHandled(error: unknown): void {
 }
 
 /**
- * A backend 5xx seen from the browser. The request id is the same one the
- * backend attached to its own event, so the two sides of one failure can be
- * matched in Sentry by searching `request_id:<id>`.
+ * A backend 5xx seen from the browser, reported immediately with the
+ * operation known by its caller. The request id is the same one the backend
+ * attached to its own event, so the two sides of one failure can be matched
+ * in Sentry by searching `request_id:<id>`.
+ *
+ * Same rule as the Word add-in: only an explicit backend ownership marker
+ * suppresses a duplicate. Codes and statuses alone do not prove ownership.
  */
 export function reportApiFailure(failure: {
     path: string;
@@ -106,23 +103,22 @@ export function reportApiFailure(failure: {
     code?: string | null;
     requestId?: string | null;
     method?: string;
-    /**
-     * The error object the caller is about to throw. Marking it here means
-     * the `console.error(..., error)` a screen logs when it catches it is
-     * recognised by the console bridge as this same failure and not sent
-     * again.
-     */
+    operation?: Operation;
     error?: unknown;
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 }): string | null {
+    if (isReported(failure.error)) return null;
     markReported(failure.error);
+    if (failure.reportingOwner === BACKEND_REPORTING_OWNER) return null;
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";
-    return Sentry.withScope((scope) => {
+    return Sentry.withScope(scope => {
         applyContext(scope, {
             level: "error",
             tags: {
                 component: "mike-api",
+                operation: failure.operation,
                 http_status: failure.status,
                 http_method: method,
                 http_route: route,
@@ -130,13 +126,63 @@ export function reportApiFailure(failure: {
                 error_code: failure.code,
                 ...(route === "/observability/sentry-test" ? { diagnostic_test: "true" } : {}),
             },
-            extra: { path: failure.path },
             fingerprint: ["api-5xx", method, route, String(failure.status)],
         });
-        return Sentry.captureMessage(
-            `API ${failure.status} on ${method} ${route}`,
-            "error",
-        );
+        return failure.error instanceof Error
+            ? Sentry.captureException(failure.error)
+            : Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
+    });
+}
+
+/**
+ * A limit of whatever sits in front of the API (a reverse proxy, or the host
+ * running the web app's /api gateway) seen from the browser. Neither kind is
+ * visible anywhere else: a request the proxy refuses never reaches the
+ * gateway or the backend, and a response it cuts off ends like a finished
+ * one. Reported at warning level, because the cause is the deployment's
+ * configuration rather than a fault in the code. The privacy boundary groups
+ * by component, stage and route, so an oversized request is one issue per
+ * route (which says what to shrink) and a cut-off stream is one issue.
+ *
+ * - `payload-too-large`: a 413 that carries none of the backend's own codes,
+ *   so the body was refused before the backend saw it (for example a
+ *   serverless function's request-size cap).
+ * - `stream-incomplete`: an assistant stream that ended without its `[DONE]`
+ *   marker (for example a function time limit closing a long reply).
+ */
+class GatewayPayloadTooLargeError extends Error {
+    override name = "GatewayPayloadTooLargeError";
+    constructor() {
+        super("A request was refused as too large before it reached the API.");
+    }
+}
+
+class AssistantStreamIncompleteError extends Error {
+    override name = "AssistantStreamIncompleteError";
+    constructor() {
+        super("An assistant stream ended before the turn finished.");
+    }
+}
+
+export function reportGatewayLimit(
+    kind: "payload-too-large" | "stream-incomplete",
+    details: { path?: string; method?: string; status?: number; requestId?: string | null } = {},
+): string | null {
+    if (!Sentry.isEnabled()) return null;
+    const error =
+        kind === "payload-too-large"
+            ? new GatewayPayloadTooLargeError()
+            : new AssistantStreamIncompleteError();
+    return reportError(error, {
+        level: "warning",
+        tags: {
+            component: "gateway-limit",
+            stage: kind,
+            http_status: details.status,
+            http_method: details.method,
+            http_route: details.path ? normalizeApiPath(details.path) : undefined,
+            request_id: details.requestId,
+        },
     });
 }
 
@@ -247,7 +293,7 @@ export function resetApiUnreachableWindow(): void {
  */
 export function reportNetworkFailure(
     error: unknown,
-    request: { method: string; url: string },
+    request: { method: string; url: string; operation?: Operation },
 ): string | null {
     markReported(error);
     if (!Sentry.isEnabled() || pageIsBeingLeft()) return null;
@@ -284,6 +330,7 @@ export function reportNetworkFailure(
                 level: "warning",
                 tags: {
                     component: "mike-api",
+                    operation: request.operation,
                     stage: "api-unreachable",
                     network: true,
                     network_state: networkState,
@@ -329,30 +376,30 @@ export function setReportingUser(user: { id: string } | null): void {
 /**
  * Browser SDK options. `NEXT_PUBLIC_*` values are inlined at build time, so
  * the caller (instrumentation-client.ts) reads them literally and passes
- * them in; everything policy-shaped is decided here.
+ * them in. Reporting policy and destination belong to the server tunnel.
  */
 export function browserSentryOptions(env: {
-    disabled?: string;
-    dsn?: string;
     install?: string;
     environment?: string;
     release?: string;
+    version?: string;
     gitSha?: string;
     tracesSampleRate?: string;
     nodeEnv?: string;
 }): Sentry.BrowserOptions {
-    // ON BY DEFAULT: the Mike project's own DSN unless NEXT_PUBLIC_SENTRY_DISABLED
-    // or a DSN of your own is baked in at build time (README, "Telemetry").
-    const { dsn } = resolveDsn({
-        disabled: env.disabled,
-        dsn: env.dsn,
-        fallback: MIKE_SENTRY_DSN.frontend,
-    });
     return {
-        dsn: dsn || undefined,
-        enabled: dsn.length > 0,
-        environment: env.environment?.trim() || "self-hosted",
-        release: releaseName(env.release, env.gitSha),
+        // The SDK requires a valid DSN even with a tunnel. This placeholder
+        // never chooses the destination: /monitoring rewrites it. Always
+        // initialize so a runtime override can enable a baked-off image.
+        dsn: MIKE_SENTRY_DSN.frontend,
+        enabled: true,
+        environment: sentryEnvironment(env.environment, env.nodeEnv === "development"),
+        release: releaseName(env.release, env.version, env.gitSha),
+        // Every browser envelope goes through the Next server (see
+        // app/monitoring/route.ts), which applies the deployment's runtime
+        // opt-out and DSN before forwarding. The placeholder DSN above is only
+        // what the SDK needs to be enabled; the server decides where it goes.
+        tunnel: SENTRY_TUNNEL_PATH,
         tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
         // Session replay is deliberately NOT enabled: it would record
         // privileged document text on screen.
@@ -384,22 +431,107 @@ export function browserSentryOptions(env: {
     };
 }
 
+export type ReportingDestination = {
+    /** Empty when reporting is off. */
+    dsn: string;
+    source: "disabled" | "runtime" | "build" | "default" | "development";
+    /** For `source: "disabled"`: which variable switched reporting off. */
+    disabledBy?: "runtime" | "build";
+    /** Runtime overrides for every report; absent means "as built". */
+    environment?: string;
+    install?: ReturnType<typeof installKind>;
+};
+
+/**
+ * The ONE place that decides where the web app's error reports go: the Next
+ * server's own events and every browser envelope (tunneled through
+ * app/monitoring/route.ts) use this, so they can never diverge. Read at
+ * runtime on the Next server, in this order:
+ *
+ *   SENTRY_DISABLED=true          off, browser included
+ *   NEXT_PUBLIC_SENTRY_DISABLED   baked default when SENTRY_DISABLED is empty
+ *   SENTRY_DSN                    the deployment's project (FRONTEND_SENTRY_DSN in compose)
+ *   NEXT_PUBLIC_SENTRY_DSN        the project baked in at image build, for images
+ *                                 built with a DSN and run without the runtime one
+ *   otherwise                     the built-in Mike project (community default)
+ *
+ * The result is printed at boot (sentry.server.config.ts) and answered by
+ * GET /monitoring, so an operator can see which rule applied.
+ */
+export function reportingDestination(env: NodeJS.ProcessEnv): ReportingDestination {
+    const overrides = {
+        ...(env.SENTRY_ENVIRONMENT?.trim() ? { environment: env.SENTRY_ENVIRONMENT.trim() } : {}),
+        ...(env.SENTRY_INSTALL?.trim() ? { install: installKind(env.SENTRY_INSTALL) } : {}),
+    };
+    // An explicit runtime value (true or false) wins over the image's baked
+    // default; the sample .env leaves it empty to preserve that default.
+    const runtimeDisabled = env.SENTRY_DISABLED?.trim();
+    const runtimeDsn = env.SENTRY_DSN?.trim();
+    const buildDsn = env.NEXT_PUBLIC_SENTRY_DSN?.trim();
+    // Same "what counts as off / which DSN" rule as the browser, backend and
+    // add-in, so the four runtimes cannot drift apart.
+    const resolved = resolveDsn({
+        disabled: runtimeDisabled || env.NEXT_PUBLIC_SENTRY_DISABLED?.trim(),
+        dsn: runtimeDsn || buildDsn,
+        fallback: MIKE_SENTRY_DSN.frontend,
+        // `next dev` runs with NODE_ENV=development; `next build`/`next
+        // start` (every image) with production.
+        development: env.NODE_ENV === "development",
+    });
+    if (resolved.source === "development") {
+        return { dsn: "", source: "development", ...overrides };
+    }
+    if (resolved.source === "disabled") {
+        return {
+            dsn: "",
+            source: "disabled",
+            disabledBy: runtimeDisabled ? "runtime" : "build",
+            ...overrides,
+        };
+    }
+    if (resolved.source === "env") {
+        return { dsn: resolved.dsn, source: runtimeDsn ? "runtime" : "build", ...overrides };
+    }
+    return { dsn: resolved.dsn, source: "default", ...overrides };
+}
+
+/** One line for the boot log: which rule applied, never the DSN's key. */
+export function describeReportingDestination(destination: ReportingDestination): string {
+    const project = (() => {
+        try {
+            return new URL(destination.dsn).pathname.replace(/^\/+/, "") || "?";
+        } catch {
+            return "?";
+        }
+    })();
+    switch (destination.source) {
+        case "disabled":
+            return destination.disabledBy === "runtime"
+                ? "[sentry] web app reports: off (SENTRY_DISABLED=true at runtime), browser included"
+                : "[sentry] web app reports: off (NEXT_PUBLIC_SENTRY_DISABLED=true baked at build; set SENTRY_DISABLED=false to override), browser included";
+        case "development":
+            return "[sentry] web app reports: off (development build; set SENTRY_DSN to report to your own project), browser included";
+        case "runtime":
+            return `[sentry] web app reports → SENTRY_DSN project ${project} (runtime), browser included`;
+        case "build":
+            return `[sentry] web app reports → NEXT_PUBLIC_SENTRY_DSN project ${project} (baked at build; set SENTRY_DSN to change it at runtime), browser included`;
+        default:
+            return "[sentry] web app reports → Mike project Sentry (community default), browser included. Opt out with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.";
+    }
+}
+
 /** Server / edge SDK options; env is read at runtime on the Next server. */
 export function serverSentryOptions(
     runtime: "server" | "edge",
     env: NodeJS.ProcessEnv,
 ): Sentry.NodeOptions {
-    const { dsn } = resolveDsn({
-        disabled: env.SENTRY_DISABLED,
-        dsn: env.SENTRY_DSN,
-        fallback: MIKE_SENTRY_DSN.frontend,
-    });
+    const { dsn } = reportingDestination(env);
     return {
         dsn: dsn || undefined,
         enabled: dsn.length > 0,
-        environment: env.SENTRY_ENVIRONMENT?.trim() || "self-hosted",
-        integrations: [privacyBoundaryIntegration()],
-        release: releaseName(env.SENTRY_RELEASE, env.GIT_SHA),
+        environment: sentryEnvironment(env.SENTRY_ENVIRONMENT, env.NODE_ENV === "development"),
+        integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget(eventBudgetLimits(env.SENTRY_MAX_REPEAT_EVENTS_PER_DAY, dsn, Object.values(MIKE_SENTRY_DSN))) })],
+        release: releaseName(env.SENTRY_RELEASE, env.MIKE_VERSION, env.GIT_SHA),
         tracesSampleRate: parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
         dataCollection: {
             userInfo: false,

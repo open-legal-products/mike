@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
+import { pillButtonUIClassName } from "@mike/ui";
 import { CrashScreen } from "@/app/components/shared/CrashScreen";
 
 export default function Error({

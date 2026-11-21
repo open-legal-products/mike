@@ -75,13 +75,18 @@ describe("soffice discovery", () => {
     ).catch((error: unknown) => error);
 
     // The bundle binary was chosen and handed to spawn instead of the
-    // converter giving up with conversion_unavailable before trying.
+    // converter giving up with conversion_unavailable before trying. A spawn
+    // that then fails is still "unavailable" by kind, but the errno of the
+    // attempt (not the discovery code) is what reaches failure_code.
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]?.[0]).toBe(MAC_BUNDLE_SOFFICE);
-    expect(diagnosticErrorTags(failure).failure_code).not.toBe(
-      "conversion_unavailable",
+    expect(diagnosticErrorTags(failure)).toEqual({
+      error_kind: "conversion.unavailable",
+      failure_code: "ENOENT",
+    });
+    expect(((failure as Error).cause as { path?: string }).path).toBe(
+      MAC_BUNDLE_SOFFICE,
     );
-    expect((failure as { path?: string }).path).toBe(MAC_BUNDLE_SOFFICE);
   });
 
   it("says how to fix a missing LibreOffice without naming one hosting provider", async () => {
@@ -95,6 +100,7 @@ describe("soffice discovery", () => {
     )) as Error;
 
     expect(diagnosticErrorTags(failure)).toEqual({
+      error_kind: "conversion.unavailable",
       failure_code: "conversion_unavailable",
     });
     expect(failure.message).toContain("SOFFICE_BINARY_PATH");

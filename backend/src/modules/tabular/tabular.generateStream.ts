@@ -1,3 +1,4 @@
+import { createTextExtractionCache } from "../../lib/textExtractionCache";
 // Async + reconnectable variants of the tabular generate stream.
 //
 // LAYERING EXCEPTION: unlike the other service files, the ASYNC half of this
@@ -42,8 +43,13 @@ import {
     type RunProgressUpdate,
 } from "../../lib/queue/runProgress";
 import { type UserApiKeys } from "../../lib/llm";
+import { providerFailureKind, providerFailureStatus } from "../../lib/llm/providerErrors";
+import { AppError } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
 import { extractRowColumns, finalizeCell } from "./tabular.extractRow";
+import { gridErrorFrame, isRefusalShownToUser } from "./tabular.extraction";
 import { type ReviewRow } from "./tabular.rows";
+import { mutateInBatches, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import {
     finishGeneration,
     parseCellContent,
@@ -51,6 +57,22 @@ import {
     type Db,
     type Log,
 } from "./tabular.shared";
+
+/**
+ * The progress channel could not be subscribed: the stream falls back to
+ * polling the database, so nothing fails for the caller, but a Redis that is
+ * down or misconfigured is one issue. Returns the reported object so the
+ * caller logs that (the console bridge then files nothing twice).
+ */
+function reportStreamFailure(cause: unknown): AppError {
+    const failure = new AppError(
+        "tabular.stream_failed",
+        "Tabular progress channel subscribe failed",
+        { cause },
+    );
+    reportError(failure);
+    return failure;
+}
 
 /** How often the DB-poll backstop reconciles cell state (ms). */
 const RECONCILE_INTERVAL_MS = 3_000;
@@ -132,13 +154,12 @@ export async function claimCellsForGeneration(args: {
             }
         }
     }
-    if (existingIds.length) {
-        const { error } = await db
+    await mutateInBatches("generation cell claim", existingIds, (batch) =>
+        db
             .from("tabular_cells")
             .update({ generation_id: generationId })
-            .in("id", existingIds);
-        if (error) throw new Error(error.message);
-    }
+            .in("id", batch),
+    );
     if (inserts.length) {
         const { data, error } = await db
             .from("tabular_cells")
@@ -259,8 +280,10 @@ async function tailTabularRun(args: {
                 }
             });
         } catch (err) {
+            // The stream degrades to the DB-poll backstop; worth an issue
+            // (the Redis error is the cause), not a failed response.
             log.error("[tabular/generate-async] subscribe failed", {
-                err,
+                err: reportStreamFailure(err),
                 reviewId,
             });
         }
@@ -270,19 +293,45 @@ async function tailTabularRun(args: {
 
     // Backstop: reconcile against the DB in case a pub/sub frame was missed (or,
     // for a reconnecting view, to replay progress that happened while away).
+    // One reconcile at a time: a tick is now ceil(pending rows / 50) reads,
+    // and on a slow database overlapping ticks would pile up behind each
+    // other. A tick that finds the previous one still running is skipped.
+    let reconciling = false;
     poll = setInterval(() => {
-        if (finished) return;
+        if (finished || reconciling) return;
+        reconciling = true;
         void (async () => {
-            const { data: cells } = await db
-                .from("tabular_cells")
-                .select("row_id, column_index, status, content")
-                .eq("review_id", reviewId);
-            for (const c of (cells ?? []) as {
+            // Only the rows still waiting, and only cells that reached a
+            // terminal state: re-reading every cell's content of the whole
+            // review every 3 s per viewer was both wasteful and, past
+            // max_rows, blind to pending cells beyond the first page.
+            type PolledCell = {
+                id: string;
                 row_id: string;
                 column_index: number;
                 status: string;
                 content: unknown;
-            }[]) {
+            };
+            // Narrowed to the pending columns too, so the content of a
+            // pending row's already-resolved columns is not re-sent each tick
+            // (a row's cells still pending are a subset of these columns).
+            const pendingColumns = [
+                ...new Set([...pending].map((key) => Number(key.slice(key.lastIndexOf(":") + 1)))),
+            ];
+            const cells = await selectInBatches<PolledCell>(
+                "reconcile poll",
+                [...pending].map((key) => key.slice(0, key.lastIndexOf(":"))),
+                (batch) =>
+                    selectAllByKey<PolledCell>("reconcile poll", () =>
+                          db
+                            .from("tabular_cells")
+                            .select("id, row_id, column_index, status, content")
+                            .eq("review_id", reviewId)
+                            .in("row_id", batch)
+                            .in("column_index", pendingColumns)
+                            .in("status", ["done", "error"])),
+            );
+            for (const c of cells) {
                 const key = cellKey(c.row_id, c.column_index);
                 if (!pending.has(key)) continue;
                 if (c.status === "done" && c.content) {
@@ -303,12 +352,16 @@ async function tailTabularRun(args: {
                     });
                 }
             }
-        })().catch((err) =>
-            log.error("[tabular/generate-async] reconcile poll failed", {
-                err,
-                reviewId,
-            }),
-        );
+        })()
+            .catch((err) =>
+                log.error("[tabular/generate-async] reconcile poll failed", {
+                    err,
+                    reviewId,
+                }),
+            )
+            .finally(() => {
+                reconciling = false;
+            });
     }, RECONCILE_INTERVAL_MS);
     if (typeof poll.unref === "function") poll.unref();
 
@@ -412,7 +465,7 @@ export async function awaitCellTerminal(args: {
                     });
                 } catch (err) {
                     log.error("[tabular/regenerate-async] subscribe failed", {
-                        err,
+                        err: reportStreamFailure(err),
                         reviewId,
                     });
                 }
@@ -597,6 +650,25 @@ export async function streamTabularGenerateSync(args: {
         onError,
     } = args;
 
+    const textCache = createTextExtractionCache();
+    // Every row calls the same model with the same keys, so a refused key or
+    // an outage fails each row alike: report each kind of failure once per run.
+    // A user's own rejected key is not reported at all: the run sends the
+    // grid its frame below (the extract-row warning is its log line).
+    const reportedFailures = new Set<string>();
+    const reportFailure = (error: unknown): boolean => {
+        if (isRefusalShownToUser(error)) return false;
+        const kind = providerFailureKind(error);
+        // Unknown failures can be distinct adapter/application bugs with
+        // different stacks. Only identified provider conditions repeat here;
+        // the final transport owns sampling for everything else.
+        if (kind === "chat.stream_failed") return true;
+        const failure = `${kind}:${providerFailureStatus(error) ?? ""}`;
+        if (reportedFailures.has(failure)) return false;
+        reportedFailures.add(failure);
+        return true;
+    };
+    let sentErrorFrame = false;
     let nextRowIndex = 0;
     const cellFrame = (
         rowId: string,
@@ -622,6 +694,7 @@ export async function streamTabularGenerateSync(args: {
         // sink, which here writes SSE frames. It never decides the terminal
         // state of a column the model skipped; it reports those in `missing`.
         const { missing, error } = await extractRowColumns({
+            textCache,
             db,
             reviewId,
             row,
@@ -631,6 +704,7 @@ export async function streamTabularGenerateSync(args: {
             apiKeys,
             generationId,
             abortSignal,
+            reportFailure,
             sink: {
                 activity: args.onActivity,
                 generating: (rowId, columnIndex) =>
@@ -641,6 +715,11 @@ export async function streamTabularGenerateSync(args: {
         });
 
         if (error) onError?.(error);
+        const frame = error && !sentErrorFrame ? gridErrorFrame(error) : null;
+        if (frame) {
+            sentErrorFrame = true;
+            write(`data: ${JSON.stringify({ type: "error", ...frame })}\n\n`);
+        }
 
         // Stopped cells return to pending; genuine missing model output is
         // still an error. Completed cells remain untouched.

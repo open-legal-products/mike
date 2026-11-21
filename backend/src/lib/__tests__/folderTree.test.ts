@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  collectFolderSubtree,
+  folderPathResolver,
   parseFolderPath,
   validateFolderMove,
+  walkFolderGraph,
 } from "../folderTree";
 
 describe("folder path rules", () => {
@@ -77,14 +78,45 @@ describe("folder move ancestry", () => {
     ).toBeNull();
   });
 });
-it("collects only the selected subtree, retains traversal order, and terminates on cycles", () => {
-  expect([
-    ...collectFolderSubtree("root", [
-      { id: "root", parent_folder_id: "grandchild" },
-      { id: "a", parent_folder_id: "root" },
-      { id: "b", parent_folder_id: "root" },
-      { id: "grandchild", parent_folder_id: "a" },
-      { id: "other", parent_folder_id: null },
-    ]),
-  ]).toEqual(["root", "b", "a", "grandchild"]);
+describe("walkFolderGraph", () => {
+  it("loads one level per call and stops on a parent cycle", async () => {
+    const parent: Record<string, string | null> = { a: "b", b: "c", c: "a", d: null };
+    const levels: string[][] = [];
+    const rows = await walkFolderGraph(
+      ["a", "d"],
+      async (ids) => (levels.push(ids), ids.map((id) => ({ id, parent_folder_id: parent[id] }))),
+      (row) => [row.parent_folder_id],
+    );
+    expect(levels).toEqual([["a", "d"], ["b"], ["c"]]);
+    expect(rows.map((row) => row.id)).toEqual(["a", "d", "b", "c"]);
+  });
+});
+
+describe("folderPathResolver", () => {
+  it("walks each ancestor once across many lookups and stops at a cycle", () => {
+    const folders = Array.from({ length: 100 }, (_, i) => ({
+      id: `f${i}`,
+      name: `F${i}`,
+      parent_folder_id: i === 0 ? null : `f${i - 1}`,
+    }));
+    const resolve = folderPathResolver(folders);
+    // Every hop up the tree is one Map lookup; re-walking each chain from the
+    // leaf costs ~n²/2 = 5,000 for a 100-deep tree.
+    const lookups = vi.spyOn(Map.prototype, "get");
+    try {
+      for (const folder of folders) resolve(folder.id);
+      expect(lookups.mock.calls.length).toBeLessThan(1_000);
+    } finally {
+      lookups.mockRestore();
+    }
+    expect(resolve("f2")).toBe("F0 / F1 / F2");
+    expect(resolve("missing")).toBe("");
+    expect(resolve(null)).toBe("");
+
+    const cyclic = folderPathResolver([
+      { id: "a", name: "A", parent_folder_id: "b" },
+      { id: "b", name: "B", parent_folder_id: "a" },
+    ]);
+    expect(cyclic("a")).toBe("B / A");
+  });
 });

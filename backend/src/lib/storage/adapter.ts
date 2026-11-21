@@ -62,9 +62,15 @@ export type StorageAdapter = {
   /**
    * Open an object for streaming reads, or resolve null when it has no body.
    * Returns the raw byte iterable; the facade wraps it in a Node stream and
-   * owns the lazy-start and error-translation behavior around it.
+   * owns the lazy-start, timeout and error-translation behavior around it.
+   * When `signal` aborts, release the read: cancel the request and destroy a
+   * body that is already flowing, so a reader that went away (or timed out)
+   * does not leave a socket or file handle open.
    */
-  openReadStream(key: string): Promise<AsyncIterable<Uint8Array> | null>;
+  openReadStream(
+    key: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<AsyncIterable<Uint8Array> | null>;
   /** Object metadata, or null when the object does not exist. */
   headFile(key: string): Promise<StoredObjectMetadata | null>;
   /** Every key under the prefix, following pagination to the end. */

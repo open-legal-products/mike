@@ -19,7 +19,7 @@ import {
     DropdownItem,
     DropdownSeparator,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_GROUP_HOVER_CLASS,
@@ -92,7 +92,7 @@ function canPortalToDocument() {
     return typeof document !== "undefined";
 }
 
-export const TABLE_PRIMARY_CELL_WIDTH_CLASS =
+const TABLE_PRIMARY_CELL_WIDTH_CLASS =
     "w-[248px] sm:w-[292px] md:w-[332px] shrink-0";
 export const TABLE_CHECKBOX_CLASS =
     "mr-3 h-2.5 w-2.5 shrink-0 rounded border-gray-200 cursor-pointer accent-black";

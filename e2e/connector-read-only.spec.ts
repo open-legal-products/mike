@@ -4,7 +4,11 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 for (const width of [390, 1280]) {
   for (const darkMode of [false, true]) {
-    test(`connector read-only controls at ${width}px in ${darkMode ? "dark" : "light"} mode`, async ({ page }, testInfo) => {
+    // Each connector is an independent round trip (including reload). Give it
+    // its own fixture and deadline instead of sharing 90s across all five on
+    // the deliberately CPU-throttled development renderer.
+    for (const [name, id] of [["Google Drive", "google-drive"], ["Gmail", "gmail"], ["Google Calendar", "google-calendar"], ["Slack", "slack"], ["Custom MCP", "custom"]]) {
+    test(`${name} read-only controls at ${width}px in ${darkMode ? "dark" : "light"} mode`, async ({ page }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });
       const readOnly = new Map<string, boolean>();
       const definitions = [
@@ -35,7 +39,6 @@ for (const width of [390, 1280]) {
         return route.fulfill({ json: [] });
       });
       await page.goto("/settings/connectors");
-      for (const [name, id] of [["Google Drive", "google-drive"], ["Gmail", "gmail"], ["Google Calendar", "google-calendar"], ["Slack", "slack"], ["Custom MCP", "custom"]]) {
         const open = async () => {
           await page.getByRole("button", { name: `Manage ${name}`, exact: true }).click();
           const dialog = page.getByRole("dialog", { name, exact: true });
@@ -70,7 +73,7 @@ for (const width of [390, 1280]) {
         await expect(dialog.getByRole("switch", { name: "Ask for permission for write actions" })).toBeVisible();
         await expect(dialog.getByRole("switch", { name: "Delete record enabled" })).not.toBeChecked();
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
-      }
     });
+    }
   }
 }

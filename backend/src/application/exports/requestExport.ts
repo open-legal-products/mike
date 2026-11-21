@@ -1,0 +1,203 @@
+// Data export: scheduling the durable export jobs, polling their status and
+// loading the finished artifact.
+//
+// Application service invoked by the user HTTP entrypoint.
+import { AUDIT_EXPORT_LIMIT, canReadOrgAudit, parseQuery, type AuditQuery } from "../../lib/auditExport";
+import { enqueueDbJob } from "../../lib/dbq/enqueue";
+import { EXPORT_TYPES, MAX_ZIP_EXPORT_DOCUMENTS, type ExportType, } from "./exportContracts";
+import type { DbJob } from "../../lib/dbq/types";
+import { downloadFile } from "../../lib/storage";
+import { AppError } from "../../lib/appError";
+import type { Db } from "../../lib/supabase";
+import { errorMessage } from "../../modules/user/user.service";
+// ---------------------------------------------------------------------------
+// Async exports (durable): POST creates a DB-queue job that builds the
+// export off the request thread; GET polls it; the download endpoint streams
+// the finished artifact, so a large export can neither time out the request
+// nor die with a dropped tab. Artifacts expire after 24 hours (the runner's
+// retention sweep deletes the file and the job row).
+export type ValidateExportRequestResult =
+    | { ok: true; type: ExportType; payload: Record<string, unknown> }
+    | { ok: false; detail: string };
+/**
+ * Validates a POST /user/exports body and builds the job payload.
+ *
+ * `params` carries the inputs of the filtered exports: the History CSV's
+ * filters, and the document ids of a bulk zip. They are validated here, at
+ * request time, so a bad filter is a 400 instead of a job that fails minutes
+ * later with nowhere to report it.
+ */
+export function validateExportRequest(input: {
+    userId: string;
+    userEmail: string | undefined;
+    body: { type?: string; params?: Record<string, unknown> };
+}): ValidateExportRequestResult {
+    const { userId, userEmail, body } = input;
+    const type = body.type;
+    if (!type || !EXPORT_TYPES.includes(type as ExportType))
+        return {
+            ok: false,
+            detail: `type must be one of: ${EXPORT_TYPES.join(", ")}`,
+        };
+    const params = body.params ?? {};
+
+    const payload: Record<string, unknown> = {
+        userId,
+        userEmail: userEmail ?? null,
+        type,
+    };
+    if (type === "audit-csv") {
+        // Same filter validation GET /audit applies, capped at one CSV page.
+        const parsed = parseQuery(params, AUDIT_EXPORT_LIMIT);
+        if (!parsed.ok) return { ok: false, detail: parsed.error };
+        payload.query = parsed.query;
+    } else if (type === "documents-zip") {
+        const ids = params.document_ids;
+        if (
+            !Array.isArray(ids) ||
+            ids.length === 0 ||
+            ids.some((id) => typeof id !== "string" || !id)
+        )
+            return {
+                ok: false,
+                detail: "params.document_ids must be a non-empty array of document ids",
+            };
+        if (ids.length > MAX_ZIP_EXPORT_DOCUMENTS)
+            return {
+                ok: false,
+                detail: `params.document_ids is limited to ${MAX_ZIP_EXPORT_DOCUMENTS} documents`,
+            };
+        payload.document_ids = ids;
+    }
+
+    return { ok: true, type: type as ExportType, payload };
+}
+export type StartUserExportResult =
+    | { ok: true; exportId: string }
+    | { ok: false; detail: string; forbidden: true }
+    /** The enqueue failed; `error` is what the route hands sendInternalError. */
+    | { ok: false; detail: string; forbidden?: undefined; error: AppError };
+
+/** Enqueues the durable build job for an already-validated export request. */
+export async function startUserExport(
+    db: Db,
+    input: {
+        userId: string;
+        type: ExportType;
+        payload: Record<string, unknown>;
+    },
+): Promise<StartUserExportResult> {
+    const { userId, type, payload } = input;
+    const orgId = (payload.query as AuditQuery | undefined)?.orgId;
+    if (orgId && !(await canReadOrgAudit(db, userId, orgId)))
+        return { ok: false, forbidden: true, detail: "Only organization owners and admins can export its audit log." };
+    try {
+        // Deduped per (user, type, workspace) for the Settings exports: double
+        // clicks and impatient retries collapse into the already-running
+        // build. The filtered exports opt out — two requests differing
+        // only in their filters or selection are different artifacts.
+        // Each workspace's export is its own artifact.
+        const dedupeKey =
+            type === "audit-csv" || type === "documents-zip"
+                ? undefined
+                : `export:${userId}:${type}:${typeof payload.orgId === "string" ? payload.orgId : "personal"}`;
+        const out = await enqueueDbJob(db, {
+            kind: "export.build",
+            payload,
+            dedupeKey,
+            maxAttempts: 3,
+        });
+        if (!out.id)
+            return {
+                ok: false,
+                detail: "Failed to schedule export",
+                error: new AppError("export.failed", "export enqueue returned no job id"),
+            };
+        return { ok: true, exportId: out.id };
+    } catch (err) {
+        // One event, from the route's sendInternalError: the kind names the
+        // flow, the cause keeps the enqueue error's own code.
+        return {
+            ok: false,
+            detail: errorMessage(err),
+            error: new AppError("export.failed", "export enqueue failed", { cause: err }),
+        };
+    }
+}
+// Shared lookup: an export job is only visible to the user whose data it
+// exports. A foreign or unknown id is a 404 either way, so ids are not
+// probeable.
+async function loadOwnExportJob(
+    db: Db,
+    exportId: string,
+    userId: string,
+): Promise<Pick<DbJob, "id" | "status" | "result"> | null> {
+    const { data: job } = await db
+        .from("db_jobs")
+        .select("id, kind, status, payload, result")
+        .eq("id", exportId)
+        .eq("kind", "export.build")
+        .maybeSingle();
+    if (!job || (job.payload as { userId?: string })?.userId !== userId)
+        return null;
+    const orgId = (job.payload as { query?: AuditQuery })?.query?.orgId;
+    if (orgId && !(await canReadOrgAudit(db, userId, orgId))) return null;
+    return job as Pick<DbJob, "id" | "status" | "result">;
+}
+export type UserExportStatus =
+    | { ok: true; body: { status: "done"; filename: unknown } }
+    | { ok: true; body: { status: "failed" } }
+    | { ok: true; body: { status: "pending" } }
+    | { ok: false; kind: "not_found" };
+/** Poll state for GET /user/exports/:exportId. */
+export async function getUserExportStatus(
+    db: Db,
+    exportId: string,
+    userId: string,
+): Promise<UserExportStatus> {
+    const row = await loadOwnExportJob(db, exportId, userId);
+    if (!row) return { ok: false, kind: "not_found" };
+    if (row.status === "done" && row.result) {
+        return {
+            ok: true,
+            body: { status: "done", filename: row.result.filename ?? null },
+        };
+    }
+    if (row.status === "failed") return { ok: true, body: { status: "failed" } };
+    return { ok: true, body: { status: "pending" } };
+}
+export type UserExportArtifact =
+    | { ok: true; contentType: string; filename: string; body: Buffer }
+    | { ok: false; kind: "not_found" }
+    | { ok: false; kind: "expired" };
+/**
+ * The finished artifact for GET /user/exports/:exportId/download.
+ * Authenticated + ownership-checked on every request (unlike /download/:token,
+ * which only serves paths backed by a document_versions row and would 404 on
+ * an export artifact); artifacts expire after 24h.
+ */
+export async function loadUserExportArtifact(
+    db: Db,
+    exportId: string,
+    userId: string,
+): Promise<UserExportArtifact> {
+    const row = await loadOwnExportJob(db, exportId, userId);
+    if (!row || row.status !== "done" || !row.result)
+        return { ok: false, kind: "not_found" };
+    const storagePath = row.result.storage_path as string | undefined;
+    const filename =
+        (row.result.filename as string | undefined) ?? "export.json";
+    if (!storagePath) return { ok: false, kind: "not_found" };
+    const raw = await downloadFile(storagePath);
+    if (!raw) return { ok: false, kind: "expired" };
+    // Artifacts are no longer all JSON (CSV, zip). The builder records the
+    // type it produced; the default covers jobs finished before it did.
+    return {
+        ok: true,
+        contentType:
+            (row.result.content_type as string | undefined) ??
+            "application/json",
+        filename,
+        body: Buffer.from(raw),
+    };
+}

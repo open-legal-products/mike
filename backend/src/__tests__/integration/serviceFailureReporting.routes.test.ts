@@ -41,6 +41,7 @@ import { quickActionsRouter } from "../../modules/quick-actions/quickActions.rou
 import { workflowAddonsRouter } from "../../modules/workflows/workflowAddons.routes";
 import { diagnosticErrorTags } from "../../lib/observability/sentryPrivacy";
 import { SCHEMA_OUT_OF_DATE_MESSAGE } from "../../lib/httpError";
+import { resetSchemaOutOfDateReportsForTests } from "../../lib/schemaOutOfDate";
 
 // What PostgREST answers for a table that the database does not have (a
 // self-hosted install whose schema is behind the code).
@@ -81,6 +82,7 @@ function reported(): Error {
 describe("a PostgREST error returned by a list service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSchemaOutOfDateReportsForTests();
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     rpc.mockResolvedValue({ data: 0, error: null });
@@ -101,6 +103,7 @@ describe("a PostgREST error returned by a list service", () => {
       // fixed text, the request id, and nothing raw.
       expect(res.status).toBe(503);
       expect(res.body).toEqual({
+      reporting_owner: "backend",
         code: "schema_out_of_date",
         detail: SCHEMA_OUT_OF_DATE_MESSAGE,
         request_id: "7db9e42e-81ba-4b63-be51-4b6bb00e1866",
@@ -134,6 +137,7 @@ describe("a PostgREST error returned by a list service", () => {
 describe("GET /chat when the list RPC is missing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSchemaOutOfDateReportsForTests();
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -153,6 +157,7 @@ describe("GET /chat when the list RPC is missing", () => {
     expect(rpc).toHaveBeenCalledWith("get_chats_overview", expect.anything());
     expect(res.status).toBe(503);
     expect(res.body).toEqual({
+      reporting_owner: "backend",
       code: "schema_out_of_date",
       detail: SCHEMA_OUT_OF_DATE_MESSAGE,
       request_id: "7db9e42e-81ba-4b63-be51-4b6bb00e1866",
@@ -164,6 +169,6 @@ describe("GET /chat when the list RPC is missing", () => {
       tags: { component: "http", http_status: 503, http_route: "/chat" },
     });
     expect(warn).toHaveBeenCalledOnce();
-    expect(String(warn.mock.calls[0]![0])).toContain("backend/migrations");
+    expect(String(warn.mock.calls[0]![0])).toContain("backend/scripts/migrate.sh status");
   });
 });

@@ -3,10 +3,12 @@ import dns from "dns/promises";
 import net from "net";
 import { promisify } from "node:util";
 import { Agent, fetch as undiciFetch } from "undici";
+import { AppError } from "../appError";
 import {
     BlockedDestinationError,
     isBlockedDestinationError,
 } from "../blockedDestination";
+import { reportError } from "../observability/sentry";
 import { isBlockedIp } from "../privateIp";
 import { configuredApiPublicUrl } from "../runtimeConfig";
 import {
@@ -29,9 +31,7 @@ function encryptionSecret(): string {
         process.env.MCP_CONNECTORS_ENCRYPTION_SECRET ||
         process.env.USER_API_KEYS_ENCRYPTION_SECRET;
     if (!secret) {
-        throw new Error(
-            "MCP_CONNECTORS_ENCRYPTION_SECRET or USER_API_KEYS_ENCRYPTION_SECRET is not configured",
-        );
+        throw Object.assign(new AppError("configuration.encryption_secret_missing", "MCP_CONNECTORS_ENCRYPTION_SECRET or USER_API_KEYS_ENCRYPTION_SECRET is not configured"), { code: "configuration_invalid", configurationFields: ["MCP_CONNECTORS_ENCRYPTION_SECRET", "USER_API_KEYS_ENCRYPTION_SECRET"] });
     }
     return secret;
 }
@@ -117,8 +117,18 @@ export function decryptString(
         ]);
         return decrypted.toString("utf8");
     } catch (err) {
+        // A secret that no longer decrypts (rotated key, corrupt row) is a
+        // deployment problem nobody sees from "the connector stopped working".
+        // The Error object goes to Sentry with its kind; the log line
+        // carries the same object so the bridge does not file it twice.
+        const failure = new AppError(
+            "mcp.decrypt_failed",
+            "Failed to decrypt a connector secret",
+            { cause: err },
+        );
+        reportError(failure);
         console.error("[mcp-connectors] failed to decrypt string secret", {
-            error: err instanceof Error ? err.message : String(err),
+            error: failure,
         });
         return null;
     }
@@ -148,9 +158,15 @@ export function decryptAuthConfig(row: ConnectorRow): McpConnectorAuthConfig {
             ? (parsed as McpConnectorAuthConfig)
             : {};
     } catch (err) {
+        const failure = new AppError(
+            "mcp.decrypt_failed",
+            "Failed to decrypt a connector's auth config",
+            { cause: err },
+        );
+        reportError(failure);
         console.error("[mcp-connectors] failed to decrypt auth config", {
             connectorId: row.id,
-            error: err instanceof Error ? err.message : String(err),
+            error: failure,
         });
         return {};
     }
@@ -278,7 +294,7 @@ export function toConnectorSummary(
         serverUrl: connector.server_url,
         authType: connector.auth_type ?? "none",
         enabled: connector.enabled,
-        requireWriteApproval: connector.require_write_approval === true,
+        requireWriteApproval: connector.require_write_approval !== false,
         readOnly: connector.read_only === true,
         hasAuthConfig: !!connector.encrypted_auth_config,
         customHeaderKeys: Object.keys(authConfig.headers ?? {}),

@@ -5,7 +5,7 @@
 // only the verified-TOTP factor lookup lives here. Reuses the profile-row
 // helpers (ensureProfileRow / loadProfile) from user.profile.ts.
 
-import { getUserApiKeyStatus } from "./user.apiKeyStore";
+import { getUserApiKeyStatus } from "../../lib/providerCredentials/index";
 import { type Db } from "./user.shared";
 import { ensureProfileRow, loadProfile } from "./user.profile";
 

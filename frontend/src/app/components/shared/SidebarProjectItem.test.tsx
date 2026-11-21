@@ -141,6 +141,27 @@ describe("SidebarProjectItem", () => {
     );
   });
 
+  it("does not re-merge the loaded items when it re-renders unchanged", async () => {
+    const current = project();
+    const { rerender } = renderItem(current);
+    await screen.findByRole("link", { name: "Chat: Due diligence" });
+    const parse = vi.spyOn(Date, "parse");
+    try {
+      rerender(
+        <SidebarProjectItem
+          project={current}
+          pathname="/assistant/other"
+          expanded
+          onExpandedChange={vi.fn()}
+          onOpenProject={vi.fn()}
+        />,
+      );
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("marks the open chat as the current page", async () => {
     const current = project();
     renderItem(current, {

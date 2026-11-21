@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Message } from "@/app/components/shared/types";
 import type { ConnectorApprovalItem } from "@mike/contracts";
 import { streamChatTurn } from "./mikeApi";
+import { reportGatewayLimit } from "@/app/lib/errorReporting";
 import { beginAssistantTurn } from "./assistantTurns";
 import {
   consumeAssistantTurnStream,
@@ -11,7 +12,9 @@ import {
 } from "./assistantTurnStream";
 
 vi.mock("./mikeApi", () => ({ streamChatTurn: vi.fn(), stopChatTurn: vi.fn() }));
+vi.mock("@/app/lib/errorReporting", () => ({ reportGatewayLimit: vi.fn() }));
 const streamChatTurnMock = vi.mocked(streamChatTurn);
+const reportGatewayLimitMock = vi.mocked(reportGatewayLimit);
 
 /** An SSE body that emits the given chunks; `fail` makes it error out after them. */
 function sseResponse(chunks: string[], opts?: { fail?: boolean; status?: number }) {
@@ -45,6 +48,23 @@ afterEach(() => {
 });
 
 describe("consumeAssistantTurnStream", () => {
+  it("reports a stream that ends without [DONE], and not one that finishes or is stopped", async () => {
+    const consume = async (chunks: string[], signal?: AbortSignal) => {
+      const turn = begin();
+      await consumeAssistantTurnStream(sseResponse(chunks), {
+        turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a"), signal,
+      });
+      turn.finish();
+    };
+
+    await consume([frame(1, { type: "content_delta", text: "Half an ans" })]);
+    expect(reportGatewayLimitMock).toHaveBeenCalledExactlyOnceWith("stream-incomplete");
+
+    reportGatewayLimitMock.mockClear();
+    await consume([frame(1, { type: "content_delta", text: "Done." }), "data: [DONE]\n\n"]);
+    expect(reportGatewayLimitMock).not.toHaveBeenCalled();
+  });
+
   it("keeps text cards between prose segments and ignores malformed cards", async () => {
     const turn = begin();
     const card = { type: "text_card" as const, card_id: "card-1", title: "Draft", text: "First paragraph.\n\nSecond paragraph." };
@@ -66,10 +86,12 @@ describe("consumeAssistantTurnStream", () => {
       frame(1, { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } }),
       frame(2, { type: "response_details", reasoning: "high" }),
       frame(3, { type: "response_details", model: "gpt-6-luna", usage: { input_tokens: "lots" } }),
+      frame(4, { type: "response_details", model: "gpt-6-luna" }),
       "data: [DONE]\n\n",
     ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
     expect(turn.turn.assistant.events).toEqual([
       { type: "response_details", model: "gpt-6-luna", reasoning: "medium", usage: { input_tokens: 1200, output_tokens: 80 } },
+      { type: "response_details", model: "gpt-6-luna" },
       { type: "response_details", model: "gpt-6-luna" },
     ]);
     turn.finish();
@@ -113,6 +135,26 @@ describe("consumeAssistantTurnStream", () => {
     ]);
     turn.finish();
   });
+
+  it("shows an edit that was still running when the turn was stopped as stopped", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await consumeAssistantTurnStream(
+      sseResponse([
+        frame(1, { type: "doc_edited_start", filename: "brief.docx" }),
+        frame(2, { type: "cancelled" }),
+        "data: [DONE]\n\n",
+      ]),
+      { turn, sink, cursor: createTurnCursor("chat-a") },
+    );
+    expect(turn.turn.assistant.events?.[0]).toMatchObject({
+      type: "doc_edited",
+      filename: "brief.docx",
+      interrupted: true,
+    });
+    expect(turn.turn.assistant.events?.[0]).not.toHaveProperty("isStreaming");
+    turn.finish();
+  });
 });
 
 describe("readAssistantTurn", () => {
@@ -147,6 +189,27 @@ describe("readAssistantTurn", () => {
     });
     expect(text(turn.turn.assistant)).toBe("Hello world");
     expect(cursor.lastSeq).toBe(4);
+    turn.finish();
+  });
+
+  // The pairing the API gateway relies on: only a failed read resumes. A body
+  // that ends cleanly is taken as the end of the turn, which is why the
+  // gateway errors (never closes) an event stream whose backend went away.
+  it("treats a clean end of the body as the end of the turn and does not resume", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await readAssistantTurn({
+      open: async () =>
+        sseResponse([
+          frame(1, { type: "chat_id", chatId: "chat-a", turnId: "turn-1" }),
+          frame(2, { type: "content_delta", text: "Hello" }),
+        ]),
+      turn,
+      sink,
+      cursor: createTurnCursor("chat-a"),
+    });
+    expect(streamChatTurnMock).not.toHaveBeenCalled();
+    expect(text(turn.turn.assistant)).toBe("Hello");
     turn.finish();
   });
 
@@ -417,6 +480,23 @@ describe("error frames", () => {
     ]);
   });
 
+  it("hands the error frame's code and request id to the hook, and tolerates their absence", async () => {
+    const onErrorFrame = vi.fn();
+    const run = (data: object) =>
+      consumeAssistantTurnStream(sseResponse([frame(1, data), "data: [DONE]\n\n"]), {
+        turn: begin(),
+        sink: createTurnEventSink(begin(), []),
+        cursor: createTurnCursor("chat-a"),
+        hooks: { onErrorFrame },
+      });
+    await run({ type: "error", message: "x", code: "internal_error", request_id: "req-1", reporting_owner: "backend" });
+    await run({ type: "error", message: "x", request_id: 42 });
+    expect(onErrorFrame.mock.calls.map(([f]) => [f.code, f.requestId, f.reportingOwner])).toEqual([
+      ["internal_error", "req-1", "backend"],
+      [null, null, undefined],
+    ]);
+  });
+
   it("raises a rejected key as its own signal and stops the citation spinner", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);
@@ -442,6 +522,8 @@ describe("error frames", () => {
     expect(onErrorFrame).toHaveBeenCalledWith({
       message: expect.any(String),
       safeToDisplay: expect.any(Boolean),
+      code: "invalid_api_key",
+      requestId: null,
     });
     expect(turn.turn.loadingCitations).toBe(false);
     expect(turn.turn.assistant.events).toEqual([
@@ -453,6 +535,88 @@ describe("error frames", () => {
       },
     ]);
     turn.finish();
+  });
+
+  it("ends tool steps still in progress, as a deadline's error ends the turn", async () => {
+    expect(
+      await eventsOf([
+        { type: "doc_created_start", filename: "memo.docx" },
+        { type: "doc_replicate_start", filename: "answer.docx", count: 2 },
+        { type: "doc_edited_start", filename: "brief.docx" },
+        {
+          type: "error",
+          message: "The request timed out because it stopped responding. Please try again.",
+          safe_to_display: true,
+        },
+      ]),
+    ).toEqual([
+      { type: "doc_created", filename: "memo.docx", download_url: "", interrupted: true },
+      { type: "doc_replicated", filename: "answer.docx", count: 2, interrupted: true },
+      {
+        type: "doc_edited",
+        filename: "brief.docx",
+        document_id: "",
+        version_id: "",
+        download_url: "",
+        annotations: [],
+        interrupted: true,
+      },
+      {
+        type: "error",
+        message: "The request timed out because it stopped responding. Please try again.",
+        safe_to_display: true,
+      },
+    ]);
+  });
+
+  it("keeps a step that reported its result as done when the turn then fails", async () => {
+    const [edited] = (await eventsOf([
+      { type: "doc_edited_start", filename: "brief.docx" },
+      { type: "doc_edited", filename: "brief.docx", document_id: "doc-1", version_id: "ver-2" },
+      { type: "error", message: "boom" },
+    ])) ?? [];
+    expect(edited).toMatchObject({ type: "doc_edited", document_id: "doc-1", isStreaming: false });
+    expect(edited).not.toHaveProperty("interrupted");
+  });
+
+  // Every other kind of step a turn can end on before its result arrives.
+  const unfinishedSteps: [string, Frame, string][] = [
+    ["a connector call", { type: "mcp_tool_start", name: "crm_update_record" }, "mcp_tool_call"],
+    ["a case law search", { type: "courtlistener_search_case_law_start", query: "fair use" }, "courtlistener_search_case_law"],
+    ["a case fetch", { type: "courtlistener_get_cases_start", cluster_ids: [1, 2] }, "courtlistener_get_cases"],
+    ["a search in a case", { type: "courtlistener_find_in_case_start", cluster_id: 1, query: "damages" }, "courtlistener_find_in_case"],
+    ["a case read", { type: "courtlistener_read_case_start", cluster_id: 1 }, "courtlistener_read_case"],
+    ["a citation check", { type: "courtlistener_verify_citations_start", citation_count: 3 }, "courtlistener_verify_citations"],
+    ["a document read", { type: "doc_read_start", filename: "brief.docx" }, "doc_read"],
+    ["a document find", { type: "doc_find_start", filename: "brief.docx", query: "term" }, "doc_find"],
+    ["a document search", { type: "doc_search_start", search_id: "s1", scope: "project", query: "term", offset: 0 }, "doc_search"],
+    ["a web search", { type: "web_search_start", search_id: "w1", query: "news" }, "web_search"],
+    ["a web read", { type: "web_read_start", read_id: "r1", url: "https://example.com/a" }, "web_read"],
+    ["a subagent", { type: "delegation_start", delegation_id: "d1", title: "Research", task: "Find cases" }, "delegation"],
+  ];
+  const ending: [string, Frame][] = [
+    ["a deadline's error", { type: "error", message: "timed out", safe_to_display: true }],
+    ["Stop", { type: "cancelled" }],
+  ];
+
+  it.each(
+    unfinishedSteps.flatMap(([label, start, type]) =>
+      ending.map(([end, frame]) => [label, end, start, frame, type] as const),
+    ),
+  )("shows %s that %s ended before its result as stopped", async (_label, _end, start, end, type) => {
+    const step = ((await eventsOf([start, end])) ?? []).find((e) => e.type === type);
+    expect(step).toMatchObject({ type, interrupted: true });
+    expect(step).not.toHaveProperty("isStreaming");
+  });
+
+  it("keeps a search that reported its results as done when the turn is then stopped", async () => {
+    const search = ((await eventsOf([
+      { type: "web_search_start", search_id: "w1", query: "news" },
+      { type: "web_search", search_id: "w1", query: "news", results: [{ url: "https://example.com/a", title: "A" }] },
+      { type: "cancelled" },
+    ])) ?? []).find((e) => e.type === "web_search");
+    expect(search).toMatchObject({ type: "web_search", isStreaming: false });
+    expect(search).not.toHaveProperty("interrupted");
   });
 
   it("finalizes an in-flight content block before appending the error", async () => {
@@ -652,6 +816,19 @@ describe("MCP tool frames", () => {
       },
       thinking,
     ]);
+  });
+
+  it("keeps a tool's title only when the result names one", async () => {
+    const titled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "Search Drive", status: "ok" },
+    ]);
+    expect(titled?.[0]).toMatchObject({ type: "mcp_tool_call", tool_title: "Search Drive" });
+    const untitled = await eventsOf([
+      { type: "mcp_tool_start", name: "drive__search" },
+      { type: "mcp_tool_result", name: "drive__search", connector_name: "Drive", tool_name: "search", tool_title: "", status: "ok" },
+    ]);
+    expect((untitled?.[0] as { tool_title?: string } | undefined)?.tool_title).toBeUndefined();
   });
 
   it("keeps the approval id a result names, so the timeline can tie it to its decision", async () => {
@@ -1939,7 +2116,7 @@ describe("delegation", () => {
 
   it("stops a running delegation on Stop", async () => {
     expect(await eventsOf([start("d1"), { type: "cancelled" }])).toEqual([
-      { ...running("d1"), isStreaming: undefined },
+      { ...running("d1"), isStreaming: undefined, interrupted: true },
       { type: "content", text: "Cancelled by user." },
     ]);
   });

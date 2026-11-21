@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
+import { authInputUIClassName, InputUI, PillButtonUI, GlassCardUI } from "@mike/ui";
 import {
   MIN_PASSWORD_LENGTH,
   isPasswordTooLong,
@@ -13,8 +13,6 @@ import {
   authMessages,
 } from "@/app/lib/authMessages";
 import { Modal } from "@/app/components/modals/Modal";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { requestPasswordReset } from "@/app/lib/authApi";
@@ -24,11 +22,11 @@ import {
   supportMailtoFor,
   type UserFacingError,
 } from "@/app/lib/userFacingError";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "./SettingsHeading";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsDescription, SettingsLabel } from "./SettingsText";
 import { FieldLabel } from "@/app/components/ui/form-field";
+import { MfaVerificationPopup } from "@/app/components/popups/MfaVerificationPopup";
 
 /** The shared auth table with this section's deltas, keyed by the `code`
  *  GoTrue returns from `PATCH /api/auth/password`. */
@@ -49,6 +47,7 @@ export function PasswordSettingsSection() {
     useState<UserFacingError | null>(null);
   const [passwordStatus, setPasswordStatus] = useState<string | null>(null);
   const [passwordResetSending, setPasswordResetSending] = useState(false);
+  const [mfaRequired, setMfaRequired] = useState(false);
 
   const needsInitialPassword =
     user?.createdWithGoogle === true && profile?.passwordSet !== true;
@@ -82,6 +81,15 @@ export function PasswordSettingsSection() {
       setSetPasswordOpen(false);
       setPasswordStatus("Password added to your account.");
     } catch (error) {
+      // An account with an authenticator proves it before a password is
+      // added. As elsewhere in Settings, the form gives way to the existing
+      // verification popup, which steps the session up and retries.
+      const code = (error as { code?: unknown })?.code;
+      if (code === "insufficient_aal" || code === "mfa_verification_required") {
+        setSetPasswordOpen(false);
+        setMfaRequired(true);
+        return;
+      }
       // GoTrue's own wording ("Password should be at least 6 characters")
       // contradicts Mike's policy, so the code decides the text instead.
       setPasswordSetError(
@@ -134,7 +142,7 @@ export function PasswordSettingsSection() {
 
   return (
     <section className="space-y-3">
-      <SettingsHeading>Password</SettingsHeading>
+      <SettingsHeading id="password">Password</SettingsHeading>
       <GlassCardUI>
         <SettingsRow>
           <div className="min-w-0 space-y-1">
@@ -233,6 +241,21 @@ export function PasswordSettingsSection() {
           )}
         </div>
       </Modal>
+      <MfaVerificationPopup
+        open={mfaRequired}
+        onCancel={() => {
+          setMfaRequired(false);
+          setPasswordValue("");
+          setConfirmPassword("");
+        }}
+        onVerified={() => {
+          // Back in the form, so a failure of the retry is shown where the
+          // password was typed.
+          setMfaRequired(false);
+          setSetPasswordOpen(true);
+          void addPassword();
+        }}
+      />
     </section>
   );
 }

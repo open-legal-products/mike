@@ -20,14 +20,22 @@
 import "./instrument";
 
 import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
+import { extractionLauncherWarnings } from "./lib/runtimeConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
 import { flushSentry, reportError } from "./lib/observability/sentry";
+import { drainStdout } from "./lib/log";
+import { flushToolActivity } from "./lib/toolActivity";
+import { log, tpl } from "./lib/log";
 
 // A worker against an unmigrated database cannot run the cleanup kind at all,
 // so it would fail every row it claims. Say so once, loudly, and stop — and
 // only start claiming rows once the answer is in, so no job is touched by a
 // worker the database cannot back.
 async function main(): Promise<void> {
+  // Extraction jobs run the parser here when the API runs WORKERS_MODE=none.
+  for (const warning of extractionLauncherWarnings()) {
+    log.warn(tpl`[extraction] ${warning}`);
+  }
   await enforceDocumentLifecycleMigration();
   startAllWorkers();
   console.log("Mike worker process running");
@@ -59,6 +67,8 @@ async function shutdown(signal: string) {
     forceExit.unref();
     try {
         await stopAllWorkers();
+        flushToolActivity();
+        await drainStdout();
         await flushSentry();
         process.exit(0);
     } catch (err) {

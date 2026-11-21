@@ -1,12 +1,25 @@
 import type { Chat, Message, WordDocumentEdit } from "../types";
 import type { PersistedWordEditPatch } from "./wordChatTypes";
 import { notifyWordChatHistoryChanged } from "./wordChatHistoryEvents";
+import { UserVisibleError } from "./notify";
+
+/** Shown when this pane's code is older than the device-only chat database. */
+export const OUTDATED_ADDIN_MESSAGE =
+  "A newer version of Mike updated this device's chats. Close and reopen the add-in to load them.";
 
 const DATABASE_NAME = "mike-word-addin";
+// Keep the released version: an existing pane opens version 4 explicitly,
+// so upgrading it would prevent that pane from saving an in-flight answer.
+// Fresh databases can have the optional recency index without a version bump.
 const DATABASE_VERSION = 4;
+// PR previews created version 5 with only an extra index. Read those in place;
+// never delete/recreate a user's database in an attempt to downgrade it.
+const READABLE_PREVIEW_VERSION = 5;
 const CHAT_STORE = "word-chats";
 const MESSAGE_STORE = "word-chat-messages";
 const EDIT_STORE = "word-document-edits";
+const CHAT_RECENCY_INDEX = "owner_document_updated";
+const CHAT_RECENCY_KEY = ["owner_id", "document_id", "updated_at"];
 
 interface LocalChatRow extends Chat {
   document_id: string;
@@ -21,6 +34,12 @@ interface LocalChatRow extends Chat {
    * resume.
    */
   active_turn_id?: string | null;
+  /**
+   * The sequence the chat's next new message receives. Absent on chats
+   * written before this field (and on rows an older add-in rewrote), in
+   * which case it is derived once from the message count.
+   */
+  next_sequence?: number;
 }
 
 interface LocalMessageRow extends Message {
@@ -56,9 +75,9 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-function openDatabase(): Promise<IDBDatabase> {
+function openDatabase(readPreviewVersion = false): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    const request = indexedDB.open(DATABASE_NAME, readPreviewVersion ? undefined : DATABASE_VERSION);
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(CHAT_STORE)) {
@@ -67,10 +86,20 @@ function openDatabase(): Promise<IDBDatabase> {
         chats.createIndex("owner_document", ["owner_id", "document_id"], {
           unique: false,
         });
+        chats.createIndex(CHAT_RECENCY_INDEX, CHAT_RECENCY_KEY, {
+          unique: false,
+        });
       } else {
         const chats = request.transaction?.objectStore(CHAT_STORE);
         if (chats && !chats.indexNames.contains("owner_document")) {
           chats.createIndex("owner_document", ["owner_id", "document_id"], {
+            unique: false,
+          });
+        }
+        // createIndex on an existing store indexes the rows already in it,
+        // inside this upgrade transaction.
+        if (chats && !chats.indexNames.contains(CHAT_RECENCY_INDEX)) {
+          chats.createIndex(CHAT_RECENCY_INDEX, CHAT_RECENCY_KEY, {
             unique: false,
           });
         }
@@ -96,11 +125,30 @@ function openDatabase(): Promise<IDBDatabase> {
         }
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () =>
+    request.onsuccess = () => {
+      const database = request.result;
+      if (database.version > READABLE_PREVIEW_VERSION) {
+        database.close();
+        reject(new UserVisibleError(OUTDATED_ADDIN_MESSAGE));
+        return;
+      }
+      // A newer add-in build (another pane, another tab) upgrading the
+      // schema must not wait on this connection: close it and let the next
+      // operation reopen at the new version.
+      database.onversionchange = () => database.close();
+      resolve(database);
+    };
+    request.onerror = () => {
+      // An installed PR preview may already have added the version-5 index.
+      // Open its current version, then refuse unknown future schemas above.
+      if (!readPreviewVersion && request.error?.name === "VersionError") {
+        resolve(openDatabase(true));
+        return;
+      }
       reject(
         request.error ?? new Error("Could not open local Word chat storage."),
       );
+    };
   });
 }
 
@@ -247,15 +295,21 @@ export async function saveLocalWordMessage(args: {
       transaction.abort();
       throw new Error("Local message ID is already used by another chat.");
     }
-    const chatMessages = (await requestResult(
-      messages.index("chat_id").getAll(IDBKeyRange.only(args.chatId)),
-    )) as LocalMessageRow[];
+    // The counter rides on the chat row this transaction reads and writes
+    // anyway. Reading every message body to find the highest sequence made
+    // each save O(chat size), so a chat's lifetime of saves was O(M^2) bytes.
+    //
+    // Legacy rows: messages are only ever appended (one new sequence each,
+    // always highest + 1, with a missing sequence counting as its position)
+    // and only deleted together with their chat, so highest + 1 always
+    // equals the chat's message count. count() walks keys without cloning
+    // any message.
     const nextSequence =
-      chatMessages.reduce(
-        (highest, message, index) =>
-          Math.max(highest, message.sequence ?? index),
-        -1,
-      ) + 1;
+      existing?.next_sequence ??
+      (await requestResult(
+        messages.index("chat_id").count(IDBKeyRange.only(args.chatId)),
+      ));
+    const sequence = existingMessage?.sequence ?? nextSequence;
     chats.put({
       id: args.chatId,
       document_id: args.documentId,
@@ -272,13 +326,14 @@ export async function saveLocalWordMessage(args: {
         args.activeTurnId !== undefined
           ? args.activeTurnId
           : (existing?.active_turn_id ?? null),
+      next_sequence: Math.max(nextSequence, sequence + 1),
     } satisfies LocalChatRow);
     messages.put({
       ...args.message,
       id: messageId,
       chat_id: args.chatId,
       created_at: now,
-      sequence: existingMessage?.sequence ?? nextSequence,
+      sequence,
     } satisfies LocalMessageRow);
     await transactionDone(transaction);
     notifyWordChatHistoryChanged();
@@ -405,14 +460,52 @@ export async function listLocalWordChats(
   const database = await openDatabase();
   try {
     const transaction = database.transaction(CHAT_STORE, "readonly");
-    const index = transaction.objectStore(CHAT_STORE).index("owner_document");
-    const rows = (await requestResult(
-      index.getAll(IDBKeyRange.only([ownerId, documentId])),
-    )) as LocalChatRow[];
+    const chats = transaction.objectStore(CHAT_STORE);
+    if (!chats.indexNames.contains(CHAT_RECENCY_INDEX)) {
+      // Existing v4 databases cannot gain an index without locking out older
+      // panes. Retain their released listing behavior; new v4 databases and
+      // v5 previews use the indexed path below. Only chat metadata is read.
+      const rows = (await requestResult(
+        chats.index("owner_document").getAll(IDBKeyRange.only([ownerId, documentId])),
+      )) as LocalChatRow[];
+      await transactionDone(transaction);
+      return rows.sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .slice(offset, offset + Math.max(0, limit));
+    }
+    const index = chats.index(CHAT_RECENCY_INDEX);
+    // Walk this document's chats newest first and read only the page:
+    // advance() skips earlier pages without cloning them. Loading and
+    // sorting every chat per page made scrolling the history O(C^2 / page).
+    // [owner, document] sorts below every [owner, document, updated_at] and
+    // an array sorts above every string, so this range is exactly the
+    // document's chats.
+    const range = IDBKeyRange.bound(
+      [ownerId, documentId],
+      [ownerId, documentId, []],
+    );
+    const rows: LocalChatRow[] = [];
+    if (limit > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const request = index.openCursor(range, "prev");
+        let skipped = offset === 0;
+        request.onerror = () =>
+          reject(request.error ?? new Error("IndexedDB request failed."));
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return resolve();
+          if (!skipped) {
+            skipped = true;
+            cursor.advance(offset);
+            return;
+          }
+          rows.push(cursor.value as LocalChatRow);
+          if (rows.length >= limit) return resolve();
+          cursor.continue();
+        };
+      });
+    }
     await transactionDone(transaction);
-    return rows
-      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-      .slice(offset, offset + limit);
+    return rows;
   } finally {
     database.close();
   }
@@ -441,12 +534,41 @@ export async function getLocalWordChat(
         .index("chat_id")
         .getAll(IDBKeyRange.only(chatId)),
     )) as LocalMessageRow[];
-    const editRows = (await requestResult(
-      transaction
-        .objectStore(EDIT_STORE)
-        .index("owner_document")
-        .getAll(IDBKeyRange.only([ownerId, documentId])),
-    )) as LocalEditRow[];
+    // Read only this chat's edits, through the per-message index, and group
+    // them once. Loading the document's edit rows (every chat) and filtering
+    // them per assistant message made opening a chat cost
+    // messages x all edits ever proposed in the document.
+    const editIndex = transaction.objectStore(EDIT_STORE).index("message_id");
+    const editRowsByMessage = new Map(
+      await Promise.all(
+        rows
+          .filter((row) => row.role === "assistant")
+          .map(
+            async (row) =>
+              [
+                row.id,
+                (
+                  (await requestResult(
+                    editIndex.getAll(IDBKeyRange.only(row.id)),
+                  )) as LocalEditRow[]
+                )
+                  .filter(
+                    (edit) =>
+                      edit.document_id === documentId &&
+                      edit.owner_id === ownerId,
+                  )
+                  .sort((left, right) => left.blockIndex - right.blockIndex)
+                  .map(
+                    ({
+                      document_id: _documentId,
+                      owner_id: _ownerId,
+                      ...edit
+                    }) => edit,
+                  ),
+              ] as const,
+          ),
+      ),
+    );
     await transactionDone(transaction);
     return {
       chat,
@@ -470,23 +592,7 @@ export async function getLocalWordChat(
           }) => ({
             ...message,
             ...(message.role === "assistant"
-              ? {
-                  edits: editRows
-                    .filter(
-                      (edit) =>
-                        edit.messageId === message.id &&
-                        edit.document_id === documentId &&
-                        edit.owner_id === ownerId,
-                    )
-                    .sort((left, right) => left.blockIndex - right.blockIndex)
-                    .map(
-                      ({
-                        document_id: _documentId,
-                        owner_id: _ownerId,
-                        ...edit
-                      }) => edit,
-                    ),
-                }
+              ? { edits: editRowsByMessage.get(message.id) ?? [] }
               : {}),
           }),
         ),
@@ -509,23 +615,30 @@ export async function clearLocalWordChats(ownerId: string): Promise<void> {
     const edits = transaction.objectStore(EDIT_STORE);
     const allChats = (await requestResult(chats.getAll())) as LocalChatRow[];
     const allEdits = (await requestResult(edits.getAll())) as LocalEditRow[];
-
-    for (const chat of allChats) {
-      if (chat.owner_id !== ownerId) continue;
-      const chatMessages = (await requestResult(
-        messages.index("chat_id").getAllKeys(IDBKeyRange.only(chat.id)),
-      )) as IDBValidKey[];
-      for (const messageId of chatMessages) messages.delete(messageId);
-      for (const edit of allEdits) {
-        if (
-          edit.owner_id === ownerId &&
-          chatMessages.some((messageId) => String(messageId) === edit.messageId)
-        ) {
-          edits.delete(edit.id);
-        }
+    const ownedChats = allChats.filter((chat) => chat.owner_id === ownerId);
+    // One key read per chat, issued together, then a single pass over the
+    // edits against a Set (was: per chat, every edit x every message id).
+    const messageKeysByChat = await Promise.all(
+      ownedChats.map(
+        (chat) =>
+          requestResult(
+            messages.index("chat_id").getAllKeys(IDBKeyRange.only(chat.id)),
+          ) as Promise<IDBValidKey[]>,
+      ),
+    );
+    const ownedMessageIds = new Set<string>();
+    for (const keys of messageKeysByChat) {
+      for (const messageId of keys) {
+        messages.delete(messageId);
+        ownedMessageIds.add(String(messageId));
       }
-      chats.delete(chat.id);
     }
+    for (const edit of allEdits) {
+      if (edit.owner_id === ownerId && ownedMessageIds.has(edit.messageId)) {
+        edits.delete(edit.id);
+      }
+    }
+    for (const chat of ownedChats) chats.delete(chat.id);
 
     await transactionDone(transaction);
     notifyWordChatHistoryChanged();

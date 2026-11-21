@@ -1,8 +1,10 @@
 import { type Response } from "express";
+import type { StreamRunWriteOptions } from "./streamRuns";
 
 export function openAssistantSse(res: Response): {
   signal: AbortSignal;
-  write: (line: string) => boolean;
+  /** Same signature as a run's writer; a single socket has nothing to replay. */
+  write: (line: string, opts?: StreamRunWriteOptions) => boolean;
   finish: () => void;
 } {
   res.setHeader("Content-Type", "text/event-stream");

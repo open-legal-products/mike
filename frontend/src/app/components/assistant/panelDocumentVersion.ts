@@ -1,4 +1,5 @@
 import type { PanelDocument } from "../shared/types";
+import { documentCapabilities } from "../shared/documentCapabilities";
 import {
     listDocumentVersions,
     MikeApiError,
@@ -46,7 +47,8 @@ export async function resolvePanelDocumentVersionResult(
     loadVersions: (documentId: string) => Promise<VersionList> =
         listDocumentVersions,
 ): Promise<PanelDocumentResolution> {
-    if (document.type === "case" || document.version_id)
+    // A provider-backed source has no versions to resolve.
+    if (documentCapabilities(document).external || document.version_id)
         return { status: "resolved", document };
 
     let result: VersionList;

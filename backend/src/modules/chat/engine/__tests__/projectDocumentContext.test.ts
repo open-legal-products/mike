@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildProjectDocContext } from "../contextBuilders";
+import { tableDb } from "../../../../__tests__/helpers/tableDb";
 import type { createServerSupabase } from "../../../../lib/supabase";
 
 function contextDatabase() {
@@ -58,6 +59,11 @@ function contextDatabase() {
     const query = {
       select: vi.fn(() => query),
       order: vi.fn(() => query),
+      limit: vi.fn(() => query),
+      gt: vi.fn((field: string, value: string) => {
+        rows = rows.filter((row) => String(row[field]) > value);
+        return query;
+      }),
       eq: vi.fn((field: string, value: unknown) => {
         rows = rows.filter((row) => row[field] === value);
         return query;
@@ -139,9 +145,13 @@ describe("project chat document context", () => {
         files: [{ filename: "project.pdf", document_id: "project-doc" }],
       },
     ]);
-    expect(
-      from.mock.calls.filter(([table]) => table === "documents"),
-    ).toHaveLength(1);
+    // Only the paged project listing reads documents; no query looks the
+    // attachment up by id.
+    const documentQueries = from.mock.calls
+      .map(([table], i) => [table, from.mock.results[i].value] as const)
+      .filter(([table]) => table === "documents");
+    expect(documentQueries.length).toBeGreaterThan(0);
+    expect(documentQueries.every(([, query]) => query.in.mock.calls.length === 0)).toBe(true);
   });
 });
 
@@ -154,4 +164,21 @@ it("includes an attachment shared through the project caller's email", async () 
     role: "user", content: "read attachment", files: [{ document_id: "private-doc", filename: "private-doc.pdf" }],
   }], "reader@example.com");
   expect(Object.values(context.docIndex).map(d => d.document_id)).toContain("private-doc");
+});
+
+describe("project chat document context at scale", () => {
+  it("gives the model every ready document of a project past max_rows", async () => {
+    const ids = Array.from({ length: 1200 }, (_, i) => `doc-${String(i).padStart(4, "0")}`);
+    const fake = tableDb({
+      documents: ids.map((id, i) => ({
+        id, project_id: "p1", status: "ready", current_version_id: `v-${id}`,
+        created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
+      })),
+      document_versions: ids.map((id) => ({ id: `v-${id}`, storage_path: `files/${id}`, deleted_at: null })),
+      project_subfolders: [],
+    });
+    const context = await buildProjectDocContext("p1", "u1", fake.db);
+    expect(Object.keys(context.docIndex)).toHaveLength(1200);
+    expect(context.docIndex["doc-0"].document_id).toBe("doc-0000");
+  });
 });

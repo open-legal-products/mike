@@ -5,7 +5,7 @@ import {
     getLibraryFilterOptions,
     getLibraryLevels,
 } from "@/app/lib/mikeApi";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import {
     LibraryCollectionPage,
     LibraryWorkspaceLayout,

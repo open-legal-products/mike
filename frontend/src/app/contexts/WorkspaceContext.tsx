@@ -25,20 +25,21 @@ import {
     type Org,
     type OrgApiKeySettings,
 } from "@/app/lib/mikeApi";
-import { useWorkspaceSelection } from "@/shared/hooks/useWorkspaceSelection";
 import {
     PERSONAL_WORKSPACE,
+    readStoredWorkspaceNow,
     storeWorkspace as storeWorkspaceIn,
     workspaceOrgId,
     type SyncWorkspaceStorage,
-} from "@/shared/lib/workspaceSelection";
+} from "@mike/client";
+import { useWorkspaceSelection } from "@mike/ui";
 
 // The rules (remembering, falling back, switching) are shared with the Word
 // add-in; re-exported so the app keeps importing them from here.
 export {
     PERSONAL_WORKSPACE,
     PERSONAL_WORKSPACE_LABEL,
-} from "@/shared/lib/workspaceSelection";
+} from "@mike/client";
 
 interface WorkspaceContextValue {
     /** Account that owns ephemeral state in this workspace. */
@@ -83,6 +84,15 @@ const browserStorage: SyncWorkspaceStorage = {
     getItem: (key) => window.localStorage.getItem(key),
     setItem: (key, value) => window.localStorage.setItem(key, value),
 };
+
+/**
+ * The remembered workspace, or Personal. Exported for onboarding, which runs
+ * outside the provider and wants to know which organization the person just
+ * joined.
+ */
+export function readStoredWorkspace(userId: string | undefined): string {
+    return readStoredWorkspaceNow(browserStorage, userId) ?? PERSONAL_WORKSPACE;
+}
 
 /** Also used during onboarding, before the app's WorkspaceProvider mounts. */
 export function storeWorkspace(userId: string | undefined, workspaceId: string) {

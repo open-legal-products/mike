@@ -10,6 +10,7 @@ import { createDocumentVersion } from "../documents/documents.service";
 // workflows.service.ts, the module facade.
 
 import crypto from "crypto";
+import { AppError } from "../../lib/appError";
 import type { Db } from "../../lib/supabase";
 import { downloadFile, storageKey, uploadFile } from "../../lib/storage";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
@@ -201,7 +202,13 @@ export type ImportedWorkflow = Record<string, unknown> & {
 // `sendServiceFailure` produces for kind "error".
 export type WorkflowAddonImportFailure =
   | ServiceFailure
-  | { ok: false; kind: "assets_copy_failed"; detail: string };
+  | {
+      ok: false;
+      kind: "assets_copy_failed";
+      detail: string;
+      /** What went wrong, for the route's report; never for the response. */
+      error: AppError;
+    };
 
 export type ImportWorkflowAddonResult =
   | { ok: true; data: ImportedWorkflow }
@@ -322,7 +329,7 @@ export async function importWorkflowAddon(
         .eq("id", documentId);
       if (readyError) throw readyError;
     }
-  } catch {
+  } catch (error) {
     // Rollback order matters: drop the workflow row first, so nothing can
     // reference the half-made copies, then hand the object deletes to the
     // durable storage.cleanup job. A Promise.all of best-effort
@@ -335,10 +342,17 @@ export async function importWorkflowAddon(
       .eq("id", workflow.id)
       .eq("user_id", userId);
     await enqueueStorageCleanup(db, createdStoragePaths);
+    // The storage or database failure is the cause: its code reaches
+    // Sentry as failure_code, where the bare detail string said nothing.
     return {
       ok: false,
       kind: "assets_copy_failed",
       detail: "Failed to copy add-on assets",
+      error: new AppError(
+        "workflows.addon_failed",
+        "Workflow add-on assets could not be copied",
+        { cause: error },
+      ),
     };
   }
 

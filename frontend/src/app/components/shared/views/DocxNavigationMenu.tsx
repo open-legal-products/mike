@@ -3,14 +3,14 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Ellipsis, ListTree } from "lucide-react";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import {
+    TextButtonUI,
     Dropdown,
     DropdownButton,
     DropdownCheckboxItem,
     DropdownContent,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 
 /** Extend EigenPal's overflow panel; keep navigation available when nothing overflows. */
 export function DocxNavigationMenu({ toolbar, open, onToggle }: {

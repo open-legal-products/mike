@@ -13,6 +13,7 @@ import { isUuid } from "../../lib/uuid";
 // chat-activity write (`recordWordChatActivity`) live here.
 
 import { randomUUID } from "node:crypto";
+import { queryFailureCause, selectAllByKey, selectInBatches } from "../../lib/batchedQuery";
 import type { Db } from "../../lib/supabase";
 import { resolveRequestTimeZone } from "../../lib/userTime";
 import {
@@ -28,6 +29,7 @@ import {
   buildWordChatSystemPrompt,
   buildWorkflowStore,
   attachPriorReasoning,
+  createAssistantHistoryLoader,
   enrichWithPriorEvents,
   loadUserMessageSentTimes,
   generateSpotlightNonce,
@@ -45,6 +47,7 @@ import {
   resolveEffectiveReasoningLevel,
 } from "../../lib/modelSelection";
 import { replaysReasoning } from "../../lib/llm/registry";
+import { disownsReplayedToolRecord } from "../../lib/llm/models";
 import {
   getPlaybook,
   PlaybookRequestError,
@@ -60,12 +63,28 @@ import {
   findNewAttachmentsOutsideWorkspace,
 } from "../../lib/documentWorkspace";
 import type { WordEditApplyMode } from "../chat/chat.service";
+import { withKind, type ErrorKind } from "../../lib/appError";
+import { reportError } from "../../lib/observability/sentry";
+import { log } from "../../lib/log";
 
 /** A device-only (storage: "local") chat was asked for in an organization. */
 export const WORD_ORG_CHAT_REQUIRES_CLOUD_CODE = "word_org_chat_requires_cloud";
 
+/**
+ * A lookup that could not be answered. `error` is what the route hands
+ * sendInternalError: its kind names what broke, the PostgREST object stays
+ * the cause so its code still extracts, and nothing is logged here — the
+ * route logs the same object once, with the request id.
+ */
 type LookupResult<T> =
-  { ok: true; value: T | null } | { ok: false; detail: string };
+  { ok: true; value: T | null } | { ok: false; error: Error };
+
+/** The route maps `kind: "error"` onto a 500; `error` is what it reports. */
+type ServiceFailure = { ok: false; kind: "error"; error: Error };
+
+function serviceFailure(kind: ErrorKind, message: string, cause: unknown): ServiceFailure {
+  return { ok: false, kind: "error", error: withKind(cause, kind, message) };
+}
 
 /** The canonical payload of a proposed Word edit, as parsed by the route. */
 export type ProposedWordEdit = {
@@ -119,7 +138,11 @@ async function getWordDocumentRowId(
     .eq("user_id", userId)
     .eq("client_document_id", clientDocumentId)
     .maybeSingle();
-  if (error) return { ok: false, detail: error.message };
+  if (error)
+    return {
+      ok: false,
+      error: withKind(error, "word.session_failed", "Word document lookup failed"),
+    };
   if (!data) return { ok: true, value: null };
   return { ok: true, value: data.id as string };
 }
@@ -128,7 +151,7 @@ async function ensureWordDocumentRow(
   clientDocumentId: string,
   userId: string,
   db: Db,
-): Promise<string | null> {
+): Promise<{ ok: true; id: string } | { ok: false; error: Error }> {
   const { data, error } = await db
     .from("word_documents")
     .upsert(
@@ -142,10 +165,12 @@ async function ensureWordDocumentRow(
     .select("id")
     .single();
   if (error || !data) {
-    console.error("[word-chat] failed to resolve document", error);
-    return null;
+    return {
+      ok: false,
+      error: withKind(error ?? { message: "upsert returned no row" }, "word.session_failed", "Word document row could not be resolved"),
+    };
   }
-  return data.id as string;
+  return { ok: true, id: data.id as string };
 }
 
 async function getAccessibleWordChat(
@@ -161,7 +186,11 @@ async function getAccessibleWordChat(
     .eq("word_document_id", wordDocumentRowId)
     .eq("user_id", userId)
     .maybeSingle();
-  if (error) return { ok: false, detail: error.message };
+  if (error)
+    return {
+      ok: false,
+      error: withKind(error, "word.chat_lookup_failed", "Word chat lookup failed"),
+    };
   if (!data) return { ok: true, value: null };
   // A chat in a team organization's workspace stays with the organization:
   // its author reaches it only while still a member, and otherwise it reads
@@ -193,7 +222,11 @@ async function getAccessibleWordMessage(args: {
     .select("id, chat_id, role")
     .eq("id", args.messageId)
     .maybeSingle();
-  if (error) return { ok: false, detail: error.message };
+  if (error)
+    return {
+      ok: false,
+      error: withKind(error, "db.query_failed", "Word chat message lookup failed"),
+    };
   if (!message || message.role !== "assistant") {
     return { ok: true, value: null };
   }
@@ -223,20 +256,14 @@ export async function listWordChats(
     offset: number;
   },
 ): Promise<
-  { ok: true; chats: Record<string, unknown>[] } | { ok: false; kind: "error" }
+  { ok: true; chats: Record<string, unknown>[] } | ServiceFailure
 > {
   const documentLookup = await getWordDocumentRowId(
     args.clientDocumentId,
     args.userId,
     db,
   );
-  if (!documentLookup.ok) {
-    console.error(
-      "[word-chat] failed to load document chats",
-      documentLookup.detail,
-    );
-    return { ok: false, kind: "error" };
-  }
+  if (!documentLookup.ok) return { ok: false, kind: "error", error: documentLookup.error };
   const wordDocumentRowId = documentLookup.value;
   // No stored document row yet means this pane has never persisted a chat.
   if (!wordDocumentRowId) return { ok: true, chats: [] };
@@ -259,10 +286,7 @@ export async function listWordChats(
       ? query.range(args.offset, args.offset + args.limit - 1)
       : query.limit(args.limit);
   const { data, error } = await query;
-  if (error) {
-    console.error("[word-chat] failed to list chats", error);
-    return { ok: false, kind: "error" };
-  }
+  if (error) return serviceFailure("word.chat_lookup_failed", "Word chat list failed", error);
   // Unnarrowed (a pane from before workspaces), the list still leaves out
   // chats in an organization the caller has left, as the detail route does.
   const reachable = new Map<string | null, Promise<boolean>>();
@@ -293,20 +317,14 @@ export async function getWordChatWithMessages(
       messages: Record<string, unknown>[];
     }
   | { ok: false; kind: "not_found" }
-  | { ok: false; kind: "error" }
+  | ServiceFailure
 > {
   const documentLookup = await getWordDocumentRowId(
     args.clientDocumentId,
     args.userId,
     db,
   );
-  if (!documentLookup.ok) {
-    console.error(
-      "[word-chat] failed to resolve chat document",
-      documentLookup.detail,
-    );
-    return { ok: false, kind: "error" };
-  }
+  if (!documentLookup.ok) return { ok: false, kind: "error", error: documentLookup.error };
   const wordDocumentRowId = documentLookup.value;
   if (!wordDocumentRowId) return { ok: false, kind: "not_found" };
   const chatLookup = await getAccessibleWordChat(
@@ -315,10 +333,7 @@ export async function getWordChatWithMessages(
     args.userId,
     db,
   );
-  if (!chatLookup.ok) {
-    console.error("[word-chat] failed to load chat", chatLookup.detail);
-    return { ok: false, kind: "error" };
-  }
+  if (!chatLookup.ok) return { ok: false, kind: "error", error: chatLookup.error };
   const chat = chatLookup.value;
   if (!chat) return { ok: false, kind: "not_found" };
 
@@ -327,10 +342,7 @@ export async function getWordChatWithMessages(
     .select("*")
     .eq("chat_id", args.chatId)
     .order("created_at", { ascending: true });
-  if (error) {
-    console.error("[word-chat] failed to load messages", error);
-    return { ok: false, kind: "error" };
-  }
+  if (error) return serviceFailure("db.query_failed", "Word chat messages load failed", error);
   const visibleMessages = withoutEmptyAssistantReservations(messages ?? []);
   const assistantMessageIds = visibleMessages.flatMap((message) =>
     message.role === "assistant" && typeof message.id === "string"
@@ -339,16 +351,31 @@ export async function getWordChatWithMessages(
   );
   const editsByMessage = new Map<string, Record<string, unknown>[]>();
   if (assistantMessageIds.length > 0) {
-    const { data: edits, error: editsError } = await db
-      .from("word_document_edits")
-      .select("*")
-      .in("word_chat_message_id", assistantMessageIds)
-      .order("block_index", { ascending: true });
-    if (editsError) {
-      console.error("[word-chat] failed to load document edits", editsError);
-      return { ok: false, kind: "error" };
+    let edits: Record<string, unknown>[];
+    try {
+      // Paged per batch: 50 long assistant turns can carry more edits than
+      // max_rows, and a truncated read dropped the rest from the transcript.
+      edits = await selectInBatches<Record<string, unknown>>(
+        "Word document edits load",
+        assistantMessageIds,
+        (batch) =>
+          selectAllByKey<Record<string, unknown>>("Word document edits load", () =>
+            db
+              .from("word_document_edits")
+              .select("*")
+              .in("word_chat_message_id", batch),
+          ),
+      );
+      // Grouped per message below; within a message, document order.
+      edits.sort(
+        (a, b) =>
+          Number(a.block_index ?? 0) - Number(b.block_index ?? 0) ||
+          String(a.id).localeCompare(String(b.id)),
+      );
+    } catch (editsError) {
+      return serviceFailure("db.query_failed", "Word document edits load failed", queryFailureCause(editsError));
     }
-    for (const edit of (edits ?? []) as Record<string, unknown>[]) {
+    for (const edit of edits) {
       const messageId = edit.word_chat_message_id;
       if (typeof messageId !== "string") continue;
       const current = editsByMessage.get(messageId) ?? [];
@@ -381,7 +408,7 @@ export async function updateWordChatModel(
 ): Promise<
   | { ok: true; model: string }
   | { ok: false; kind: "not_found" }
-  | { ok: false; kind: "error" }
+  | ServiceFailure
   | { ok: false; kind: "model"; status: number; code: string; detail: string }
 > {
   const documentLookup = await getWordDocumentRowId(
@@ -389,13 +416,7 @@ export async function updateWordChatModel(
     args.userId,
     db,
   );
-  if (!documentLookup.ok) {
-    console.error(
-      "[word-chat] failed to resolve model-selection document",
-      documentLookup.detail,
-    );
-    return { ok: false, kind: "error" };
-  }
+  if (!documentLookup.ok) return { ok: false, kind: "error", error: documentLookup.error };
   if (!documentLookup.value) return { ok: false, kind: "not_found" };
   const chatLookup = await getAccessibleWordChat(
     args.chatId,
@@ -403,13 +424,7 @@ export async function updateWordChatModel(
     args.userId,
     db,
   );
-  if (!chatLookup.ok) {
-    console.error(
-      "[word-chat] failed to load model-selection chat",
-      chatLookup.detail,
-    );
-    return { ok: false, kind: "error" };
-  }
+  if (!chatLookup.ok) return { ok: false, kind: "error", error: chatLookup.error };
   if (!chatLookup.value) return { ok: false, kind: "not_found" };
 
   // The chat's organization decides which keys, and so which models, it has.
@@ -442,22 +457,14 @@ export async function updateWordChatModel(
     })
     .eq("id", args.chatId)
     .eq("user_id", args.userId);
-  if (error) {
-    console.error("[word-chat] failed to save selected chat model", error);
-    return { ok: false, kind: "error" };
-  }
+  if (error) return serviceFailure("db.query_failed", "Word chat model save failed", error);
   const profileError = await persistLastSelectedChatModel(
     args.userId,
     resolution.model,
     db,
   );
-  if (profileError) {
-    console.error(
-      "[word-chat] failed to save last-selected model",
-      profileError,
-    );
-    return { ok: false, kind: "error" };
-  }
+  if (profileError)
+    return serviceFailure("db.query_failed", "last-selected model save failed", profileError);
   return { ok: true, model: resolution.model };
 }
 
@@ -471,7 +478,7 @@ export async function updateWordChatReasoning(
     reasoningLevel: ReturnType<typeof resolveEffectiveReasoningLevel>;
   },
 ): Promise<
-  { ok: true } | { ok: false; kind: "not_found" } | { ok: false; kind: "error" }
+  { ok: true } | { ok: false; kind: "not_found" } | ServiceFailure
 > {
   const documentLookup = await getWordDocumentRowId(
     args.clientDocumentId,
@@ -498,13 +505,14 @@ export async function updateWordChatReasoning(
     })
     .eq("id", args.chatId)
     .eq("user_id", args.userId);
-  if (error) return { ok: false, kind: "error" };
+  if (error) return serviceFailure("db.query_failed", "Word chat reasoning save failed", error);
   const profileError = await persistLastSelectedReasoningLevel(
     args.userId,
     args.reasoningLevel,
     db,
   );
-  if (profileError) return { ok: false, kind: "error" };
+  if (profileError)
+    return serviceFailure("db.query_failed", "last-selected reasoning save failed", profileError);
   return { ok: true };
 }
 
@@ -525,7 +533,7 @@ export async function saveProposedWordEdit(
 ): Promise<
   | { ok: true; edit: Record<string, unknown> }
   | { ok: false; kind: "not_found" }
-  | { ok: false; kind: "error" }
+  | ServiceFailure
 > {
   const messageLookup = await getAccessibleWordMessage({
     messageId: args.messageId,
@@ -533,13 +541,7 @@ export async function saveProposedWordEdit(
     userId: args.userId,
     db,
   });
-  if (!messageLookup.ok) {
-    console.error(
-      "[word-chat] failed to validate edit message",
-      messageLookup.detail,
-    );
-    return { ok: false, kind: "error" };
-  }
+  if (!messageLookup.ok) return { ok: false, kind: "error", error: messageLookup.error };
   if (!messageLookup.value) return { ok: false, kind: "not_found" };
   const { error: insertError } = await db
     .from("word_document_edits")
@@ -555,10 +557,7 @@ export async function saveProposedWordEdit(
       },
     )
     .select("id");
-  if (insertError) {
-    console.error("[word-chat] failed to save edit", insertError);
-    return { ok: false, kind: "error" };
-  }
+  if (insertError) return serviceFailure("db.query_failed", "Word edit save failed", insertError);
   // The first sealed payload is canonical. A retry returns that row without
   // rewriting its text, apply mode, or any lifecycle state already recorded.
   const { data, error } = await db
@@ -567,10 +566,12 @@ export async function saveProposedWordEdit(
     .eq("word_chat_message_id", args.messageId)
     .eq("block_index", args.blockIndex)
     .maybeSingle();
-  if (error || !data) {
-    console.error("[word-chat] failed to load edit", error);
-    return { ok: false, kind: "error" };
-  }
+  if (error || !data)
+    return serviceFailure(
+      "db.query_failed",
+      "saved Word edit could not be read back",
+      error ?? { message: "no row after upsert" },
+    );
   return { ok: true, edit: data as Record<string, unknown> };
 }
 
@@ -591,7 +592,7 @@ export async function updateWordEditOutcome(
   | { ok: true; edit: Record<string, unknown> }
   | { ok: false; kind: "message_not_found" }
   | { ok: false; kind: "edit_not_found" }
-  | { ok: false; kind: "error" }
+  | ServiceFailure
 > {
   const messageLookup = await getAccessibleWordMessage({
     messageId: args.messageId,
@@ -599,7 +600,7 @@ export async function updateWordEditOutcome(
     userId: args.userId,
     db,
   });
-  if (!messageLookup.ok) return { ok: false, kind: "error" };
+  if (!messageLookup.ok) return { ok: false, kind: "error", error: messageLookup.error };
   if (!messageLookup.value) return { ok: false, kind: "message_not_found" };
   const { data, error } = await db
     .from("word_document_edits")
@@ -608,10 +609,7 @@ export async function updateWordEditOutcome(
     .eq("block_index", args.blockIndex)
     .select("*")
     .maybeSingle();
-  if (error) {
-    console.error("[word-chat] failed to update edit", error);
-    return { ok: false, kind: "error" };
-  }
+  if (error) return serviceFailure("db.query_failed", "Word edit outcome update failed", error);
   if (!data) return { ok: false, kind: "edit_not_found" };
   return { ok: true, edit: data as Record<string, unknown> };
 }
@@ -677,6 +675,7 @@ export async function prepareWordChatStream(
   },
 ): Promise<
   | { ok: true; prepared: PreparedWordChatStream }
+  /** Every 500 carries `error`: the route reports it, once, with the request id. */
   | { ok: false; status: number; code?: string; detail: string; error?: unknown }
 > {
   const {
@@ -707,7 +706,12 @@ export async function prepareWordChatStream(
     );
     if (playbookError) return { ok: false, ...playbookError };
   } catch (error) {
-    return { ok: false, status: 500, detail: "Could not check the playbook", error };
+    return {
+      ok: false,
+      status: 500,
+      detail: "Could not check the playbook",
+      error: withKind(error, "db.query_failed", "attached playbook check failed"),
+    };
   }
 
   // The workspace the chat belongs to: a resumed chat's own, fixed when it
@@ -723,8 +727,12 @@ export async function prepareWordChatStream(
       db,
     );
     if (!documentLookup.ok) {
-      console.error("[word-chat] failed to resume chat", documentLookup.detail);
-      return { ok: false, status: 500, detail: "Failed to resume Word chat" };
+      return {
+        ok: false,
+        status: 500,
+        detail: "Failed to resume Word chat",
+        error: documentLookup.error,
+      };
     }
     if (!documentLookup.value) {
       return { ok: false, status: 404, detail: "Chat not found" };
@@ -737,8 +745,12 @@ export async function prepareWordChatStream(
       db,
     );
     if (!existingLookup.ok) {
-      console.error("[word-chat] failed to resume chat", existingLookup.detail);
-      return { ok: false, status: 500, detail: "Failed to resume Word chat" };
+      return {
+        ok: false,
+        status: 500,
+        detail: "Failed to resume Word chat",
+        error: existingLookup.error,
+      };
     }
     const existing = existingLookup.value;
     if (!existing) {
@@ -788,22 +800,29 @@ export async function prepareWordChatStream(
         detail: CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL };
     }
   } catch (error) {
-    return { ok: false, status: 500, detail: "Could not validate Word chat attachments", error };
+    return {
+      ok: false,
+      status: 500,
+      detail: "Could not validate Word chat attachments",
+      error: withKind(error, "db.query_failed", "Word chat attachment check failed"),
+    };
   }
 
   if (persistChat && !wordDocumentRowId) {
-    wordDocumentRowId = await ensureWordDocumentRow(
+    const documentRow = await ensureWordDocumentRow(
       clientDocumentId,
       userId,
       db,
     );
-    if (!wordDocumentRowId) {
+    if (!documentRow.ok) {
       return {
         ok: false,
         status: 500,
         detail: "Failed to initialize Word chat storage",
+        error: documentRow.error,
       };
     }
+    wordDocumentRowId = documentRow.id;
   }
 
   const selection = await resolveUserChatSelection(db, {
@@ -832,7 +851,12 @@ export async function prepareWordChatStream(
       .eq("id", chatId)
       .eq("user_id", userId);
     if (error) {
-      return { ok: false, status: 500, detail: "Failed to save chat model" };
+      return {
+        ok: false,
+        status: 500,
+        detail: "Failed to save chat model",
+        error: withKind(error, "db.query_failed", "Word chat model save failed"),
+      };
     }
   }
 
@@ -849,8 +873,12 @@ export async function prepareWordChatStream(
       .select("id, title")
       .single();
     if (error || !data) {
-      console.error("[word-chat] failed to create chat", error);
-      return { ok: false, status: 500, detail: "Failed to create Word chat" };
+      return {
+        ok: false,
+        status: 500,
+        detail: "Failed to create Word chat",
+        error: withKind(error ?? { message: "insert returned no row" }, "word.session_failed", "Word chat row could not be created"),
+      };
     }
     chatId = data.id as string;
     chatTitle = (data.title as string | null) ?? null;
@@ -873,7 +901,12 @@ export async function prepareWordChatStream(
       author_user_id: userId,
     });
     if (error) {
-      return { ok: false, status: 500, detail: "Failed to save Word message" };
+      return {
+        ok: false,
+        status: 500,
+        detail: "Failed to save Word message",
+        error: withKind(error, "word.session_failed", "Word user message save failed"),
+      };
     }
   }
 
@@ -896,6 +929,7 @@ export async function prepareWordChatStream(
   // reservation taken above: the route's finally block only runs once this
   // function has returned it. Release on the way out instead.
   try {
+    const history = createAssistantHistoryLoader(db, persistChat ? chatId : null, "word_chat_messages");
     const { docIndex, docStore } = await buildDocContext(
       messages,
       userId,
@@ -903,6 +937,7 @@ export async function prepareWordChatStream(
       persistChat ? chatId : null,
       "word_chat_messages",
       userEmail,
+      history,
     );
     const activeDocumentText = args.documentContext;
     if (activeDocumentText !== undefined) {
@@ -935,9 +970,11 @@ export async function prepareWordChatStream(
           persistChat ? chatId : null,
           db,
           "word_chat_messages",
+          history,
         )
       : messages;
     const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
+    const recordForUser = disownsReplayedToolRecord(selectedModel);
     const enrichedMessages = await enrichWithPriorEvents(
       historyMessages,
       persistChat ? chatId : null,
@@ -946,6 +983,7 @@ export async function prepareWordChatStream(
       nonce,
       "word_chat_messages",
       timeZone,
+      recordForUser,
     );
     const { api_keys: configuredApiKeys, personalisation } = modelSettings;
     const apiKeys = { ...configuredApiKeys };
@@ -977,6 +1015,7 @@ export async function prepareWordChatStream(
       nonce,
       "replace",
       { timeZone, now: new Date(), userSentAt },
+      recordForUser,
     );
     const workflowStore = await buildWorkflowStore(userId, userEmail, db, orgId);
 
@@ -1008,8 +1047,14 @@ export async function prepareWordChatStream(
           conversationId: chatId,
           turn: memoryTurn,
         });
-      } catch {
-        console.warn("[memory] Word activity release failed", { chatId });
+      } catch (releaseError) {
+        // The original failure is rethrown below and reported by the route;
+        // a lease that would not release is its own, lesser, event.
+        reportError(
+          withKind(releaseError, "db.rpc_failed", "Word memory turn release failed"),
+          { level: "warning", tags: { component: "word-chat" } },
+        );
+        log.warn("memory", "Word activity release failed", { chatId });
       }
     }
     throw error;
@@ -1048,7 +1093,12 @@ export async function recordWordChatActivity(
     .eq("id", args.chatId)
     .eq("user_id", args.userId);
   if (error) {
-    console.error("[word-chat] failed to update chat activity", error);
+    // Post-stream and best-effort: the turn already succeeded, so the lost
+    // title or timestamp is a warning, reported before the same object is
+    // logged (the console bridge knows it is already sent).
+    const failure = withKind(error, "db.query_failed", "Word chat activity update failed");
+    reportError(failure, { level: "warning", tags: { component: "word-chat" } });
+    console.error("[word-chat] failed to update chat activity", failure);
     return null;
   }
   return nextTitle;

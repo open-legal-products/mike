@@ -11,8 +11,10 @@
   // `npm run typecheck` (tsc over tsconfig.json) instead.
   //
   // frontend/src/__tests__/architecture.test.ts asserts that nothing this
-  // program includes reaches outside frontend/, and that the exclusions below
-  // drop test-only files and nothing else.
+  // program includes reaches outside the Docker image, and that the exclusions
+  // below drop test-only files and nothing else. The `../packages` patterns
+  // are needed because an exclude glob is anchored at this directory: a bare
+  // `**/*.test.ts` does not match the shared packages' colocated tests.
   "extends": "./tsconfig.json",
   "exclude": [
     "node_modules",
@@ -22,6 +24,8 @@
     "**/*.spec.tsx",
     "**/__tests__/**",
     "vitest.config.mts",
-    "vitest.setup.ts"
+    "vitest.setup.ts",
+    "../packages/**/*.test.ts",
+    "../packages/**/*.test.tsx"
   ]
 }

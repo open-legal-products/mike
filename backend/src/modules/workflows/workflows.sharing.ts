@@ -2,7 +2,7 @@
 import { type Db } from "../../lib/supabase";
 import { findMissingUserEmails, loadProfileUsersByEmail } from "../../lib/userLookup";
 import { type ProjectRole } from "../../lib/permissions";
-import { deleteOrgAccessOverride, findAssignableOrgMember, isOrgAssignableRole, listOrgAccessPeople, setOrgAccessOverrides } from "../../lib/orgAccessOverrides";
+import { deleteOrgAccessOverride, findAssignableOrgMembers, isOrgAssignableRole, listOrgAccessPeople, setOrgAccessOverrides } from "../../lib/orgAccessOverrides";
 import { resolveWorkflowAccess, resolveCreatorScopedWorkflow } from "./workflows.access";
 
 export type ListSharesResult =
@@ -275,18 +275,15 @@ export async function shareWorkflow(
     // an admin — returned 400 with the first two overrides already
     // persisted: the caller read "nothing happened" while access had
     // silently changed for two people.
-    const targets: { userId: string }[] = [];
-    for (const email of normalizedEmails) {
-      const target = await findAssignableOrgMember(
-        db,
-        orgId,
-        email,
-        wf.user_id,
-        wf.visibility,
-      );
-      if (!target.ok) return target;
-      targets.push({ userId: target.member.userId });
-    }
+    const found = await findAssignableOrgMembers(
+      db,
+      orgId,
+      normalizedEmails,
+      wf.user_id,
+      wf.visibility,
+    );
+    if (!found.ok) return found;
+    const targets = found.members.map((member) => ({ userId: member.userId }));
     // Validation is complete, so only a database failure can still stop
     // this — and it must not stop it HALF WAY. One bulk upsert is one
     // statement: the org-membership triggers on the override table can

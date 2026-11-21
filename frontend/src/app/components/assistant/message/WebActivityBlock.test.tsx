@@ -26,6 +26,21 @@ describe("web activity blocks", () => {
         expect(screen.getByText("Trap")).toBeInTheDocument();
     });
 
+    it("labels a stopped search and read as stopped, and does not link the unread page", () => {
+        render(
+            <>
+                <WebSearchBlock event={{ ...search, results: [] }} interrupted />
+                <WebReadBlock
+                    event={{ type: "web_read", read_id: "r1", url: "https://example.com/a" }}
+                    interrupted
+                />
+            </>,
+        );
+        expect(screen.getByText(/Web search stopped/)).toBeInTheDocument();
+        expect(screen.getByText("Read stopped")).toBeInTheDocument();
+        expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
     it("shows the server's message for a failed search", () => {
         render(
             <WebSearchBlock

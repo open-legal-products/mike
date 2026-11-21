@@ -4,6 +4,12 @@
 # working directory name when running `supabase init`.
 project_id = "backend"
 
+# This stack runs only what Mike uses: Postgres, Auth, the data API (PostgREST),
+# the Kong gateway, and the local mail catcher. Realtime, Studio, Storage, Edge
+# Functions, and Analytics are switched off below because no Mike code calls
+# them, and together they are most of the stack's memory (over 2 GB with
+# them, about 0.4 GB without).
+
 [api]
 enabled = true
 # Port to use for the API URL.
@@ -84,15 +90,20 @@ allowed_cidrs_v6 = ["::/0"]
 # [db.ssl_enforcement]
 # enabled = true
 
+# Off by default: Mike streams over its own server-sent events and opens no Realtime channel.
+# See "Supabase CLI stack" in docs/local-development.md.
 [realtime]
-enabled = true
+enabled = false
 # Bind realtime via either IPv4 or IPv6. (default: IPv4)
 # ip_version = "IPv6"
 # The maximum length in bytes of HTTP request headers. (default: 4096)
 # max_header_length = 4096
 
+# Off by default: Developer dashboard only. Disabling it also drops postgres-meta, which exists to
+# serve it. To browse tables locally, set this to true on your machine.
+# See "Supabase CLI stack" in docs/local-development.md.
 [studio]
-enabled = true
+enabled = false
 # Port to use for Supabase Studio.
 port = 54323
 # External URL of the API server that frontend connects to.
@@ -112,8 +123,10 @@ port = 54324
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
+# Off by default: Mike keeps files in S3-compatible object storage (RustFS locally), not Supabase Storage.
+# See "Supabase CLI stack" in docs/local-development.md.
 [storage]
-enabled = true
+enabled = false
 # The maximum file size allowed (e.g. "5MB", "500KB").
 file_size_limit = "50MiB"
 
@@ -388,8 +401,10 @@ authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
 
+# Off by default: Mike has no Edge Functions; server logic lives in the Express backend.
+# See "Supabase CLI stack" in docs/local-development.md.
 [edge_runtime]
-enabled = true
+enabled = false
 # Supported request policies: `oneshot`, `per_worker`.
 # `per_worker` (default) — enables hot reload during local development.
 # `oneshot` — fallback mode if hot reload causes issues (e.g. in large repos or with symlinks).
@@ -402,8 +417,10 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Off by default: Logflare, plus the Vector container that feeds it. Only the Studio log viewer reads it.
+# See "Supabase CLI stack" in docs/local-development.md.
 [analytics]
-enabled = true
+enabled = false
 port = 54327
 # Configure one of the supported backends: `postgres`, `bigquery`.
 backend = "postgres"

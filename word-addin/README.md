@@ -14,7 +14,7 @@ memory learning. This does not purge previously stored chats or memory.
 
 ## Prerequisites
 
-- Node.js 22 or newer
+- Node.js 22.19 or newer
 - Microsoft Word desktop or Word on the web
 - A running Mike backend and Supabase environment configured according to the
   [local development guide](../docs/local-development.md)

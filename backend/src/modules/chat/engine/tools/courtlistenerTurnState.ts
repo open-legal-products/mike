@@ -1,4 +1,5 @@
 import { normalizeCaseDocument } from "../../../../lib/sourceDocuments";
+import { stampSourceDocument } from "../../../source-documents/sourceDocuments.service";
 import type { CaseCitationEvent } from "./courtlistenerTools";
 import { convert } from "html-to-text";
 
@@ -148,14 +149,18 @@ export function caseCitationEventFromRecord(
     url: record.url,
     pdfUrl: record.pdfUrl,
     dateFiled: record.dateFiled,
-    document: normalizeCaseDocument({
-      clusterId: record.clusterId,
-      caseName: record.caseName,
-      citations: record.citations,
-      url: record.url,
-      pdfUrl: record.pdfUrl,
-      dateFiled: record.dateFiled,
-    }),
+    // Stamped like every provider document, so the client learns the origin
+    // from the wire rather than from the document type.
+    document: stampSourceDocument(
+      normalizeCaseDocument({
+        clusterId: record.clusterId,
+        caseName: record.caseName,
+        citations: record.citations,
+        url: record.url,
+        pdfUrl: record.pdfUrl,
+        dateFiled: record.dateFiled,
+      }),
+    ),
   };
 }
 
@@ -216,10 +221,26 @@ export function courtlistenerFetchedCaseMetadata(
   };
 }
 
+// Keyed by the opinions array: upserts replace it rather than mutate it, so
+// identity means the same opinions. Returning the same entries lets callers
+// memoize per-opinion work (normalizedTextFor) across tool calls in a turn.
+const opinionTextsByOpinions = new WeakMap<unknown[], CachedCaseOpinionText[]>();
+
 export function cachedCaseOpinionTexts(
   record: CourtlistenerCaseRecord,
 ): CachedCaseOpinionText[] {
-  return (record.opinions ?? [])
+  const raw = record.opinions;
+  if (!raw) return [];
+  let texts = opinionTextsByOpinions.get(raw);
+  if (!texts) {
+    texts = buildCaseOpinionTexts(raw);
+    opinionTextsByOpinions.set(raw, texts);
+  }
+  return texts;
+}
+
+function buildCaseOpinionTexts(opinions: unknown[]): CachedCaseOpinionText[] {
+  return opinions
     .map((raw) => {
       const opinion = recordFromUnknown(raw);
       if (!opinion) return null;

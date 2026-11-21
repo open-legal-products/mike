@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "../../lib/reportedUpstreamCodes";
 // HTTP layer of the tabular-review module. Handlers parse and validate the
 // request, call the module's service files, and map their typed results onto
 // status codes. No handler queries the database.
@@ -30,6 +31,8 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
+import { isReported, reportError, setOperation } from "../../lib/observability/sentry";
+import { AppError } from "../../lib/appError";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
     AssistantStreamError,
@@ -40,6 +43,7 @@ import {
     runLLMStream,
     stripTransientAssistantEvents,
     TABULAR_TOOLS,
+    throwIfTurnStopped,
     type ChatMessage,
     parseOptionalModel,
     parseOptionalReasoning,
@@ -56,6 +60,7 @@ import {
     ensureReviewGenerateStopAccess,
     prepareTabularGenerate,
     prepareTabularRunView,
+    runFrameFilterFor,
 } from "./tabular.generate";
 import {
     claimCellsForGeneration,
@@ -90,6 +95,7 @@ import {
     extractTabularAnnotations,
     listTabularReviewChatMessages,
     listTabularReviewChats,
+    markSavedTabularChatTurnStopped,
     prepareTabularChat,
     saveTabularChatTurn,
     titleTabularChat,
@@ -112,6 +118,7 @@ import {
 } from "../../lib/workspace";
 import { parseTabularReviewSort } from "../../lib/sort";
 import { parseTabularReviewScope } from "./tabular.overview";
+import { log } from "../../lib/log";
 
 export const tabularRouter = Router();
 // The lease timings live in modules/tabular/tabular.shared.ts because the queue
@@ -289,6 +296,7 @@ tabularRouter.get("/:reviewId", requireAuth, asyncRoute(async (req, res) => {
     const { reviewId } = req.params;
     const result = await getTabularReviewDetail(createServerSupabase(), {
         reviewId,
+        cellRevision: typeof req.query.cell_revision === "string" ? req.query.cell_revision : undefined,
         userId: res.locals.userId as string,
         userEmail: res.locals.userEmail as string | undefined,
     });
@@ -406,6 +414,7 @@ tabularRouter.post(
     "/:reviewId/regenerate-cell",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.cell");
         const { row_id, column_index } = req.body as {
             row_id?: string;
             column_index: number;
@@ -430,6 +439,7 @@ tabularRouter.post(
 
 // POST /tabular-review/:reviewId/generate
 tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("tabular.run");
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
@@ -629,7 +639,6 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
         // an internal error unreportable.
         attachStreamRunSse(res, run);
 
-        let sentGenerationError = false;
         const completed = await streamTabularGenerateSync({
             onActivity: run.touch,
             write,
@@ -642,15 +651,6 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             apiKeys: api_keys,
             generationId,
             abortSignal: generationSignal,
-            onError: (error) => {
-                if (sentGenerationError) return;
-                const payload = assistantStreamErrorPayload(error);
-                if (payload.code !== "invalid_api_key") return;
-                sentGenerationError = true;
-                write(
-                    `data: ${JSON.stringify({ type: "error", ...payload })}\n\n`,
-                );
-            },
         });
 
         if (completed) {
@@ -672,11 +672,12 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
         }
     } catch (err) {
         if (!generationSignal.aborted) {
+            if (!isReported(err)) reportError(err, { tags: { operation: "tabular.generate", stage: "generation-stream" } });
             console.error("[tabular/generate] stream error", err);
             if (res.headersSent) {
                 try {
                     write(
-                        `data: ${JSON.stringify({ type: "error", message: ASSISTANT_ERROR_MESSAGE })}\n\ndata: [DONE]\n\n`,
+                        `data: ${JSON.stringify({ type: "error", message: ASSISTANT_ERROR_MESSAGE, reporting_owner: BACKEND_REPORTING_OWNER })}\n\ndata: [DONE]\n\n`,
                     );
                 } catch {
                     /* ignore */
@@ -684,6 +685,7 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             } else if (!res.destroyed && !res.writableEnded) {
                 res.status(500).json({
                     detail: "Failed to prepare tabular review generation",
+                    reporting_owner: BACKEND_REPORTING_OWNER,
                 });
             }
         }
@@ -723,6 +725,7 @@ tabularRouter.post(
     "/:reviewId/generate/stop",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.run");
         const { reviewId } = req.params;
         // Edit standing only — not a usable model or keys for the caller, who
         // may not be the collaborator who started the run.
@@ -761,6 +764,7 @@ tabularRouter.get(
     "/:reviewId/generate/stream",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.run");
         const { reviewId } = req.params;
         const db = createServerSupabase();
         const view = await prepareTabularRunView(db, {
@@ -778,7 +782,14 @@ tabularRouter.get(
         if (run) {
             const rawFrom = Number.parseInt(String(req.query.from ?? "1"), 10);
             const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 1;
-            return void attachStreamRunSse(res, run, from);
+            // The run's frames are its starter's; this viewer gets only the
+            // rows they can read, as the review read gives them.
+            return void attachStreamRunSse(
+                res,
+                run,
+                from,
+                runFrameFilterFor(view.data.rows),
+            );
         }
 
         // No run here: the async path (the work is the queue's), another
@@ -826,6 +837,7 @@ tabularRouter.get(
     "/:reviewId/chats/:chatId/turn/:turnId/stream",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.chat");
         const { reviewId, chatId, turnId } = req.params;
         const gate = await ensureReviewChatReadAccess(
             createServerSupabase(),
@@ -858,6 +870,7 @@ tabularRouter.post(
     "/:reviewId/chats/:chatId/turn/:turnId/stop",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("tabular.chat");
         const { reviewId, chatId, turnId } = req.params;
         const gate = await ensureReviewChatWriteAccess(
             createServerSupabase(),
@@ -944,6 +957,7 @@ tabularRouter.get(
 
 // POST /tabular-review/:reviewId/chat
 tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("tabular.chat");
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
@@ -1006,6 +1020,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         memorySharedAudience,
         memoryTurn,
         model: selectedChatModel,
+        nonce,
         orgId,
         readableMemoryProjectId,
         reasoningLevel: selectedReasoningLevel,
@@ -1027,8 +1042,18 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                 conversationId: chatId as string,
                 turn: memoryTurn,
             });
-        } catch {
-            console.warn("[memory] tabular activity release failed", {
+        } catch (error) {
+            // The lease lapses on its own; the turn is answered either way.
+            // Reported as a warning, with the database's error as the cause.
+            reportError(
+                new AppError(
+                    "memory.consolidation_failed",
+                    "Memory activity lease could not be released",
+                    { cause: error },
+                ),
+                { level: "warning" },
+            );
+            log.warn("memory", "tabular activity release failed", {
                 chatId,
             });
         }
@@ -1076,6 +1101,10 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         );
     }
 
+    // Whether the finished answer was stored, once it was. A stop that is seen
+    // only after the save marks that row as stopped instead of inserting the
+    // turn a second time.
+    let assistantSaved = false;
     try {
         const { fullText, events } = await runLLMStream({
             onActivity: run?.touch,
@@ -1086,6 +1115,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             db,
             write,
             extraTools: TABULAR_TOOLS,
+            nonce,
             includeResearchTools: false,
             tabularStore,
             buildCitations: (text) =>
@@ -1101,11 +1131,13 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             memorySharedAudience,
             emitDone: false,
         });
+        // A stream that returns after the turn was stopped must not be saved
+        // as a completed answer: the abort handler below stores the stop.
+        throwIfTurnStopped(stream.signal, { fullText, events });
 
         const persistedEvents = stripTransientAssistantEvents(events);
         const annotations = extractTabularAnnotations(fullText, tabularStore);
 
-        let assistantSaved = false;
         if (chatId) {
             const saved = await saveTabularChatTurn(db, {
                 chatId,
@@ -1124,6 +1156,12 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             assistantSaved = saved.saved;
         }
 
+        // The answer is saved, but the turn may have been stopped while it
+        // was being saved. A stop seen here still ends it as stopped: no
+        // title, no memory consolidation, and the stored answer gets the stop
+        // label.
+        throwIfTurnStopped(stream.signal, { fullText, events });
+
         // Generate title on first exchange
         if (chatId && isFirstExchange && !chatTitle && lastUser.content) {
             const title = await titleTabularChat(db, {
@@ -1139,6 +1177,9 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                     `data: ${JSON.stringify({ type: "chat_title", chatId, title })}\n\n`,
                 );
             }
+            // Titling is a model call of its own; a stop during it ends the
+            // turn as stopped too, before it is curated.
+            throwIfTurnStopped(stream.signal, { fullText, events });
         }
 
         // Only a durably saved, successful turn is worth consolidating: an
@@ -1166,7 +1207,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         write("data: [DONE]\n\n");
     } catch (err) {
         if (isAbortError(err)) {
-            console.log("[tabular/chat] turn stopped", { chatId });
+            log.info("tabular/chat", "turn stopped", { chatId });
             if (chatId && err instanceof AssistantStreamError) {
                 const partial = buildStoppedAssistantMessage({
                     stopReason: run?.stopReason,
@@ -1175,15 +1216,24 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                     buildCitations: (fullText) =>
                         extractTabularAnnotations(fullText, tabularStore),
                 });
-                const { error: saveError } = await saveTabularChatTurn(db, {
-                    chatId,
-                    messageId: assistantMessageId,
-                    authorUserId: userId,
-                    memoryInputMessageId: inputMessageId,
-                    content: partial.events,
-                    annotations: partial.citations,
-                    touch: "always",
-                });
+                // Once the finished answer is stored, only mark that row as
+                // stopped; inserting it again would fail on its id.
+                const { error: saveError } = assistantSaved
+                    ? await markSavedTabularChatTurnStopped(db, {
+                          chatId,
+                          messageId: assistantMessageId,
+                          content: partial.events,
+                          annotations: partial.citations,
+                      })
+                    : await saveTabularChatTurn(db, {
+                          chatId,
+                          messageId: assistantMessageId,
+                          authorUserId: userId,
+                          memoryInputMessageId: inputMessageId,
+                          content: partial.events,
+                          annotations: partial.citations,
+                          touch: "always",
+                      });
                 if (saveError)
                     console.error(
                         "[tabular/chat] failed to save aborted stream",
@@ -1197,6 +1247,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             write("data: [DONE]\n\n");
             return;
         }
+        if (!isReported(err)) reportError(err, { tags: { operation: "tabular.chat", stage: "chat-stream" } });
         console.error("[tabular/chat] error", err);
         const errorPayload = assistantStreamErrorPayload(err);
         const message = errorPayload.message;

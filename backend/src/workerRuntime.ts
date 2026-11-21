@@ -26,6 +26,9 @@ import { startUploadProcessingWorkers } from "./modules/uploads/uploads.service"
 import { uploadProcessingConfiguration } from "./lib/runtimeConfig";
 import { createServerSupabase } from "./lib/supabase";
 import { reportError } from "./lib/observability/sentry";
+import { createPollFailureGate } from "./lib/observability/pollFailureGate";
+import { asReportableError } from "./lib/httpError";
+import { log } from "./lib/log";
 
 const SWEEP_INTERVAL_MS = (() => {
     const raw = Number(process.env.STALE_SWEEP_INTERVAL_MS);
@@ -43,6 +46,17 @@ const MCP_REFRESH_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
  * a dead grant re-enqueues a doomed job for the rest of the deployment's life.
  */
 const MCP_REFRESH_MAX_EXPIRED_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * One report per failure class per process: an unreachable database fails
+ * every 5-minute tick identically, and each tick was its own event
+ * (MIKE-BACKEND-E7). The interval is fixed, so the gate's backoff is unused.
+ */
+const mcpRefreshFailures = createPollFailureGate({
+    label: "[mcp-refresh-sweep]",
+    baseDelayMs: MCP_REFRESH_SWEEP_INTERVAL_MS,
+    maxDelayMs: MCP_REFRESH_SWEEP_INTERVAL_MS,
+});
 
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 let initialSweep: ReturnType<typeof setTimeout> | null = null;
@@ -64,7 +78,9 @@ async function runMcpTokenRefreshSweep(): Promise<void> {
         .not("encrypted_refresh_token", "is", null)
         .lt("expires_at", new Date(now + MCP_TOKEN_REFRESH_WINDOW_MS).toISOString())
         .gt("expires_at", new Date(now - MCP_REFRESH_MAX_EXPIRED_AGE_MS).toISOString());
-    if (error) throw new Error(error.message);
+    // Keep the PostgREST object as the cause: supabase-js puts the network
+    // errno in `details`, which `new Error(error.message)` dropped.
+    if (error) throw asReportableError(error, runMcpTokenRefreshSweep);
 
     for (const row of (data ?? []) as { connector_id: string }[]) {
         if (!row.connector_id) continue;
@@ -80,10 +96,34 @@ async function runMcpTokenRefreshSweep(): Promise<void> {
 }
 let started = false;
 
-/** Start every background worker (idempotent). */
-export function startAllWorkers(): void {
+/**
+ * Background work splits into two roles so the thread deployment can give each
+ * its own thread: a slow job can then never stop uploads from being processed,
+ * and a burst of uploads never delays the job queue.
+ *   "uploads" — upload-session processing and its own stale-session cleanup.
+ *   "jobs"    — everything else: queue workers, the DB-job runner, sweeps.
+ */
+export type WorkerRole = "jobs" | "uploads";
+export const WORKER_ROLES: readonly WorkerRole[] = ["jobs", "uploads"];
+
+/** Start the background workers for the given roles (idempotent). */
+export function startAllWorkers(
+    roles: readonly WorkerRole[] = WORKER_ROLES,
+): void {
     if (started) return;
     started = true;
+
+    if (roles.includes("uploads")) {
+        // Lease-based claims over Postgres, so any number of runtimes can
+        // poll concurrently without double-processing.
+        const uploadProcessing = uploadProcessingConfiguration();
+        stopUploadWorker = startUploadProcessingWorkers(uploadProcessing);
+        console.log(
+            `Upload processing started with ${uploadProcessing.concurrency} workers ` +
+                `and a ${uploadProcessing.maxRunningPerUser}-job per-user cap`,
+        );
+    }
+    if (!roles.includes("jobs")) return;
 
     // BullMQ workers: conversion/extraction when their flags are on, plus
     // the app-jobs delivery worker — all only when the Redis driver is
@@ -96,15 +136,6 @@ export function startAllWorkers(): void {
     // up, poll-driven otherwise) — see lib/dbq/runner.ts.
     startDbJobRunner(DB_JOB_HANDLERS, DB_JOB_FAILURE_HOOKS);
 
-    // Upload-session processing: lease-based claims over Postgres, so any
-    // number of runtimes can poll concurrently without double-processing.
-    const uploadProcessing = uploadProcessingConfiguration();
-    stopUploadWorker = startUploadProcessingWorkers(uploadProcessing);
-    console.log(
-        `Upload processing started with ${uploadProcessing.concurrency} workers ` +
-            `and a ${uploadProcessing.maxRunningPerUser}-job per-user cap`,
-    );
-
     // Stale-work reaper: a crash between "status = processing/generating"
     // and the finalizing write strands rows in a transient state forever —
     // nothing else owns them. Sweep shortly after boot (crash recovery) and
@@ -113,7 +144,7 @@ export function startAllWorkers(): void {
         void runStaleWorkSweep()
             .then(({ documents, cells }) => {
                 if (documents || cells)
-                    console.warn("[stale-sweep] flipped", { documents, cells });
+                    log.warn("stale-sweep", "flipped", { documents, cells });
             })
             .catch((err) => {
                 reportError(err, { tags: { component: "stale-sweep" } });
@@ -128,10 +159,15 @@ export function startAllWorkers(): void {
     // rather than inside whichever request first trips over the expiry. The
     // lazy refresh in lib/mcp/oauth.ts stays as the last line of defense.
     const runMcpRefresh = () =>
-        void runMcpTokenRefreshSweep().catch((err) => {
-            reportError(err, { tags: { component: "mcp-refresh-sweep" } });
-            console.error("[mcp-refresh-sweep] failed", err);
-        });
+        void runMcpTokenRefreshSweep()
+            .then(() => mcpRefreshFailures.success())
+            .catch((thrown) => {
+                const error = asReportableError(thrown);
+                if (mcpRefreshFailures.failure(error).report) {
+                    reportError(error, { tags: { component: "mcp-refresh-sweep" } });
+                    console.error("[mcp-refresh-sweep] failed", error);
+                }
+            });
     mcpRefreshTimer = setInterval(runMcpRefresh, MCP_REFRESH_SWEEP_INTERVAL_MS);
     mcpRefreshTimer.unref();
 }

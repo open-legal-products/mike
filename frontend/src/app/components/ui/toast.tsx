@@ -15,7 +15,7 @@ import {
     showToast,
     toastHasActions,
     useToasts,
-} from "@/shared/ui/ToastUI";
+} from "@mike/ui";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 
 export {
@@ -28,7 +28,7 @@ export {
     type ToastInput,
     type ToastRecord,
     type ToastTone,
-} from "@/shared/ui/ToastUI";
+} from "@mike/ui";
 
 export const OFFLINE_TOAST_KEY = "connectivity";
 

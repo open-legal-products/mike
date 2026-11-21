@@ -1,9 +1,26 @@
 import { randomUUID } from "node:crypto";
+import { AppError } from "../appError";
+import { reportError } from "../observability/sentry";
 import { envInt } from "../runtimeConfig";
 import type { Db } from "../dbq/types";
 import { redisEnabled } from "../dbq/driver";
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import type { MemorySurface } from "./files";
+import { log } from "../log";
+
+/**
+ * Curation is optional for the conversation, so none of these failures reach
+ * the caller; each used to vanish into a console.warn with no stack and no
+ * code. Reported as a warning under one kind, with the database's or queue's
+ * own error as the cause (its code reaches Sentry as failure_code). Nothing
+ * but the fixed message and that cause travel.
+ */
+function reportCurationSkipped(message: string, cause: unknown): void {
+  reportError(
+    new AppError("memory.consolidation_failed", message, { cause }),
+    { level: "warning" },
+  );
+}
 
 export const MEMORY_INACTIVITY_MS =
   envInt("MEMORY_INACTIVITY_SECONDS", 300) * 1_000;
@@ -59,10 +76,11 @@ export async function beginMemoryConversationTurn(args: {
       p_quiet_seconds: MEMORY_INACTIVITY_SECONDS,
     });
     if (error) throw error;
-  } catch {
+  } catch (error) {
+    reportCurationSkipped("Memory activity lease could not be taken", error);
     // Never leak DB internals; the ids are enough to correlate with the
     // database log.
-    console.warn("[memory] activity lease skipped; turn will not be curated", {
+    log.warn("memory", "activity lease skipped; turn will not be curated", {
       surface: args.surface,
       conversationId: args.conversationId,
     });
@@ -125,7 +143,7 @@ export async function scheduleMemoryConsolidation(args: {
       // message was not this actor's, or the lease had already been reaped.
       // The caller releases the lease; leave a breadcrumb so a turn that is
       // never learned is at least visible in the logs.
-      console.warn("[memory] no consolidation scheduled for completed turn", {
+      log.warn("memory", "no consolidation scheduled for completed turn", {
         surface: args.surface,
         conversationId: args.conversationId,
       });
@@ -140,18 +158,25 @@ export async function scheduleMemoryConsolidation(args: {
         await enqueueAppJobDelivery(scheduled.job_id, {
           delayMs: MEMORY_INACTIVITY_MS,
         });
-      } catch {
-        // Postgres is the durable outbox; the worker poller is the backstop.
+      } catch (error) {
+        // Postgres is the durable outbox; the worker poller is the backstop,
+        // so the job still runs — later than it should, which is worth one
+        // warning.
+        reportCurationSkipped(
+          "Memory consolidation delivery could not be enqueued",
+          error,
+        );
       }
     }
     return scheduled;
-  } catch {
+  } catch (error) {
+    reportCurationSkipped("Memory consolidation could not be scheduled", error);
     // The caller owns the lease: it releases every turn that was not
     // scheduled, so releasing here as well would only produce a second,
     // failing release. Conversation delivery succeeds independently of
     // optional memory curation. Keep the error free of prompts, object
     // paths, and DB details.
-    console.warn("[memory] curator scheduling failed", {
+    log.warn("memory", "curator scheduling failed", {
       surface: args.surface,
       conversationId: args.conversationId,
     });

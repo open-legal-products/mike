@@ -139,11 +139,10 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
     }
 
     function handleToggleAllReviews() {
+        const selected = new Set(selectedReviewIds);
         const allSelected =
             visibleReviews.length > 0 &&
-            visibleReviews.every((review) =>
-                selectedReviewIds.includes(review.id),
-            );
+            visibleReviews.every((review) => selected.has(review.id));
         if (allSelected) setSelectedReviewIds([]);
         else void selectAllMatching();
     }
@@ -194,8 +193,9 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         const blocked = ids.length - owned.length;
         setSelectedReviewIds([]);
         const snapshot = reviews;
+        const ownedIds = new Set(owned);
         setReviews((current) =>
-            current.filter((review) => !owned.includes(review.id)),
+            current.filter((review) => !ownedIds.has(review.id)),
         );
         const { failedIds } =
             await deleteTabularReviewsWithConcurrency(

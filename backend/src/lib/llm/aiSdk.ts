@@ -1,5 +1,6 @@
+import { installProviderWarningLogger } from "./warnings";
 import { normalizeReasoningLevelForModel } from "./models";
-import type { LanguageModel, ToolSet } from "ai" with {
+import type { LanguageModel, LanguageModelMiddleware, ToolSet } from "ai" with {
   "resolution-mode": "import",
 };
 import type * as AiSdk from "ai" with { "resolution-mode": "import" };
@@ -15,8 +16,40 @@ import type {
 } from "./types";
 import type { WebSource } from "@mike/contracts";
 import { providerDeadlines } from "./providerDeadlines";
-import { asProviderStallError, streamErrorMessage, toProviderStreamError } from "./providerErrors";
+import {
+  loadToolInputChecker,
+  type ToolInputChecker,
+} from "./toolInputValidation";
+import {
+  asProviderStallError,
+  isDeterministicProviderQuota,
+  streamErrorMessage,
+  toProviderStreamError,
+  withKeySource,
+  type ProviderKeySource,
+} from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
+
+installProviderWarningLogger();
+
+/** Keep SDK retry backoff for throttling, but don't repeat a proven account refusal. */
+function quotaRefusalRetries(): LanguageModelMiddleware {
+  const attempt = async <T>(call: () => PromiseLike<T>): Promise<T> => {
+    try { return await call(); }
+    catch (error) {
+      if (isDeterministicProviderQuota(error) && error instanceof Error) {
+        // APICallError exposes this flag to the SDK retry loop. Preserve the
+        // actual exception, provider response, stack and cause for its owner.
+        Object.defineProperty(error, "isRetryable", { value: false, configurable: true });
+      }
+      throw error;
+    }
+  };
+  return {
+    wrapGenerate: ({ doGenerate }) => attempt(doGenerate),
+    wrapStream: ({ doStream }) => attempt(doStream),
+  };
+}
 
 /**
  * Per-step output limit, or undefined to leave it to the provider.
@@ -221,6 +254,12 @@ export type AiSdkAdapterConfig = {
   label: string;
   model: Exclude<LanguageModel, string>;
   modelId: string;
+  /**
+   * Whose key this adapter sends: a user's own, or the deployment's
+   * environment key. Recorded on a failure so a refusal of the operator's
+   * key is reported and a user's is not (providerFailureLevel).
+   */
+  keySource?: ProviderKeySource;
   /** Some protocol-compatible gateways reject reasoning request fields. */
   supportsReasoning?: boolean;
   /** OpenAI's CourtListener tools require an extra instruction after use. */
@@ -231,6 +270,8 @@ export type AiSdkAdapterConfig = {
   replayReasoning?: boolean;
   /** Mark the prefix-cache breakpoint with a Bedrock cache point as well. */
   bedrockCachePoint?: boolean;
+  /** The adapter accepts Anthropic cache controls on source text blocks. */
+  anthropicCachePoint?: boolean;
   /**
    * Output ceiling for a chat step at the given reasoning level, for SDKs
    * that send none by default. LLM_MAX_OUTPUT_TOKENS still wins.
@@ -238,7 +279,25 @@ export type AiSdkAdapterConfig = {
   defaultMaxOutputTokens?: (
     reasoning: StreamChatParams["reasoning"],
   ) => number | undefined;
+  /**
+   * Provider options every request from this adapter carries, chat and
+   * one-shot alike: the data-retention settings chosen in providers.ts.
+   */
+  requestProviderOptions?: StreamTextProviderOptions;
 };
+
+/** Per-namespace merge: a later set's fields win within a namespace. */
+function mergeProviderOptions(
+  ...sets: Array<StreamTextProviderOptions | undefined>
+): StreamTextProviderOptions {
+  const merged: StreamTextProviderOptions = {};
+  for (const set of sets) {
+    for (const [namespace, options] of Object.entries(set ?? {})) {
+      merged[namespace] = { ...merged[namespace], ...options };
+    }
+  }
+  return merged;
+}
 
 type PendingToolExecution = {
   call: NormalizedToolCall;
@@ -314,6 +373,7 @@ function toAiSdkTools(
   runTools?: StreamChatParams["runTools"],
   sdk?: Pick<typeof AiSdk, "jsonSchema" | "tool">,
   onRunToolsFailure?: (error: unknown) => void,
+  inputChecker?: ToolInputChecker,
 ): ToolSet | undefined {
   if (!schemas.length) return undefined;
   if (!sdk) throw new Error("AI SDK tool helpers are unavailable.");
@@ -323,10 +383,18 @@ function toAiSdkTools(
 
   return Object.fromEntries(
     schemas.map((schema) => {
+      // With a validate function, the SDK refuses a call whose arguments do
+      // not match the schema and answers it with the error, as it does for
+      // unparseable JSON; see toolInputValidation.ts.
+      const validate = inputChecker?.(
+        schema.function.name,
+        schema.function.parameters,
+      );
       const definition = {
         description: schema.function.description,
         inputSchema: sdk.jsonSchema<Record<string, unknown>>(
           schema.function.parameters as never,
+          validate ? { validate } : undefined,
         ),
         ...(batcher
           ? {
@@ -446,7 +514,7 @@ function toModelMessage(
 
 export function withPrefixCacheHints(
   params: StreamChatParams,
-  options: { replayReasoning?: boolean; bedrockCachePoint?: boolean } = {},
+  options: { replayReasoning?: boolean; bedrockCachePoint?: boolean; sourceCachePoint?: boolean } = {},
 ): {
   messages: AiSdk.ModelMessage[];
   providerOptions?: StreamTextProviderOptions;
@@ -457,7 +525,7 @@ export function withPrefixCacheHints(
           toModelMessage(m, options.replayReasoning === true),
         )
       : params.messages;
-  if (!params.conversationId || !messages.length) {
+  if ((!params.conversationId && !params.sourcePrefixLength) || !messages.length) {
     return { messages };
   }
   const last = messages.length - 1;
@@ -467,6 +535,22 @@ export function withPrefixCacheHints(
       ? { bedrock: { cachePoint: { type: "default" } } }
       : {}),
   };
+  const source = messages[0];
+  const end = params.sourcePrefixLength;
+  if (options.sourceCachePoint && end && Number.isSafeInteger(end) &&
+      messages.length === 1 && source.role === "user" && typeof source.content === "string" &&
+      end > 0 && end < source.content.length) {
+    return {
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: source.content.slice(0, end), providerOptions: breakpoint },
+          { type: "text", text: source.content.slice(end) },
+        ],
+      }],
+    };
+  }
+  if (!params.conversationId) return { messages };
   return {
     messages: messages.map((message, index): AiSdk.ModelMessage => {
       if (index !== last) return message;
@@ -496,10 +580,19 @@ export async function streamAiSdk(
   if (params.abortSignal?.aborted) forwardAbort();
   else params.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
   const runToolsFailure: { first: { error: unknown } | null } = { first: null };
-  const functionTools = toAiSdkTools(params.tools ?? [], params.runTools, sdk, (error) => {
-    runToolsFailure.first ??= { error };
-    internalAbort.abort();
-  });
+  const inputChecker = params.tools?.length
+    ? await loadToolInputChecker()
+    : undefined;
+  const functionTools = toAiSdkTools(
+    params.tools ?? [],
+    params.runTools,
+    sdk,
+    (error) => {
+      runToolsFailure.first ??= { error };
+      internalAbort.abort();
+    },
+    inputChecker,
+  );
   const webSearch =
     params.providerWebSearch && config.webSearchTool
       ? {
@@ -529,10 +622,11 @@ export async function streamAiSdk(
   const cacheHints = withPrefixCacheHints(params, {
     replayReasoning: config.replayReasoning,
     bedrockCachePoint: config.bedrockCachePoint,
+    sourceCachePoint: config.anthropicCachePoint || config.bedrockCachePoint,
   });
-  const providerOptions: StreamTextProviderOptions = {
-    ...(cacheHints.providerOptions ?? {}),
-    ...(config.provider === "openrouter"
+  const providerOptions = mergeProviderOptions(
+    cacheHints.providerOptions,
+    config.provider === "openrouter"
       ? {
           // OpenRouter's adapter does not consume AI SDK's call-level
           // `reasoning` option. Its per-request namespace is merged into the
@@ -541,8 +635,9 @@ export async function streamAiSdk(
             reasoning: { effort: params.reasoning ?? "none" },
           },
         }
-      : {}),
-  };
+      : undefined,
+    config.requestProviderOptions,
+  );
   const rawStreamRecorder = createRawLlmStreamRecorder({
     provider: config.provider,
     model: config.modelId,
@@ -558,7 +653,7 @@ export async function streamAiSdk(
     const result = sdk.streamText({
       model: sdk.wrapLanguageModel({
         model: config.model,
-        middleware: providerDeadlines(params.callbacks?.onActivity),
+        middleware: [providerDeadlines(params.callbacks?.onActivity), quotaRefusalRetries()],
       }),
       system: params.systemPrompt,
       messages: cacheHints.messages,
@@ -714,6 +809,10 @@ export async function streamAiSdk(
               {
                 inputTokens: part.usage.inputTokens ?? 0,
                 outputTokens: part.usage.outputTokens ?? 0,
+                ...(part.usage.inputTokenDetails?.cacheReadTokens !== undefined &&
+                  { cacheReadTokens: part.usage.inputTokenDetails.cacheReadTokens }),
+                ...(part.usage.inputTokenDetails?.cacheWriteTokens !== undefined &&
+                  { cacheWriteTokens: part.usage.inputTokenDetails.cacheWriteTokens }),
               },
               part.finishReason,
             );
@@ -778,7 +877,8 @@ export async function streamAiSdk(
     );
     if (notice) {
       fullText += notice;
-      params.callbacks?.onContentDelta?.(notice);
+      if (params.callbacks?.onStopNotice) params.callbacks.onStopNotice(notice);
+      else params.callbacks?.onContentDelta?.(notice);
     }
     await rawStreamRecorder?.flush("completed");
     return { fullText };
@@ -805,30 +905,40 @@ export async function completeAiSdkText(
   },
   config: AiSdkAdapterConfig,
 ): Promise<string> {
-  const { generateText } = await import("ai");
+  const { generateText, wrapLanguageModel } = await import("ai");
   const reasoning =
     config.supportsReasoning === false
       ? undefined
       : normalizeReasoningLevelForModel(config.modelId, "none");
   const requested = params.maxTokens ?? 512;
-  const result = await generateText({
-    model: config.model,
-    system: params.systemPrompt,
-    prompt: params.user,
-    abortSignal: params.abortSignal,
-    // Some models cannot turn thinking off ("none" is normalized to the
-    // lowest level they accept), and thinking is output too. Without
-    // headroom a short call — a 64-token title — can spend its whole
-    // allowance thinking and return no text. The cap is only a ceiling, so
-    // the headroom costs nothing unless the model actually uses it.
-    maxOutputTokens:
-      reasoning && reasoning !== "none"
-        ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
-        : requested,
-    reasoning: reasoning as
-      | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
-      | undefined,
-  });
+  let result: Awaited<ReturnType<typeof generateText>>;
+  try {
+    result = await generateText({
+      model: wrapLanguageModel({ model: config.model, middleware: quotaRefusalRetries() }),
+      system: params.systemPrompt,
+      prompt: params.user,
+      abortSignal: params.abortSignal,
+      // Some models cannot turn thinking off ("none" is normalized to the
+      // lowest level they accept), and thinking is output too. Without
+      // headroom a short call — a 64-token title — can spend its whole
+      // allowance thinking and return no text. The cap is only a ceiling, so
+      // the headroom costs nothing unless the model actually uses it.
+      maxOutputTokens:
+        reasoning && reasoning !== "none"
+          ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
+          : requested,
+      reasoning: reasoning as
+        | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
+        | undefined,
+      ...(config.requestProviderOptions
+        ? { providerOptions: config.requestProviderOptions }
+        : {}),
+    });
+  } catch (error) {
+    // The provider's own error, unconverted (callers classify it), with
+    // whose key was sent recorded on it for the reporting level.
+    throw withKeySource(error, config.keySource, config.provider);
+  }
   return result.text;
 }
 

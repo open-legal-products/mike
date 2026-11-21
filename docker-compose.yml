@@ -124,8 +124,24 @@ services:
   # --- One-shot: load schema.sql on a new volume, then apply any pending
   # migrations with backend/scripts/migrate.sh, which records each one in
   # public.schema_migrations so the next start skips it; grant service_role.
+  # Runs from the backend image (which carries schema.sql, migrations/ and the
+  # scripts, plus psql) rather than bind-mounting them from the checkout, so a
+  # pulled image can never be paired with another version's migrations.
   db-init:
-    image: supabase/postgres:17.6.1.136
+    # Every backend consumer (db-init, workflow-sync, backend, worker) runs the
+    # same image, so code, schema and migrations always come from one release.
+    # The default tag is the version in /VERSION; `docker compose up --build`
+    # still builds it from source (backend/src/__tests__/releaseVersion.test.ts
+    # keeps the two in step).
+    build: &backend-build
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # Release identity for Sentry (docs/observability.md): build args, not
+        # runtime variables, because the Dockerfile bakes them into the image.
+        MIKE_VERSION: ${MIKE_VERSION:-}
+        GIT_SHA: ${GIT_SHA:-}
+    image: &backend-image ${MIKE_IMAGE_REPO:-ghcr.io/open-legal-products}/mike-backend:${MIKE_IMAGE_TAG:-2.1.0}
     depends_on:
       db:
         condition: service_healthy
@@ -134,12 +150,9 @@ services:
     environment:
       DB: postgres://postgres:postgres@db:5432/postgres
       DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
-      MIGRATIONS_DIR: /migrations
-    volumes:
-      - ./backend/schema.sql:/schema.sql:ro
-      - ./backend/migrations:/migrations:ro
-      - ./backend/scripts/migrate.sh:/migrate.sh:ro
-      - ./docker/db-init/adopt-ledger.sh:/adopt-ledger.sh:ro
+      MIGRATIONS_DIR: /app/migrations
+      # adopt-ledger.sh (pre-ledger volumes) runs migrate.sh from here too.
+      MIGRATE_SH: /app/scripts/migrate.sh
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -149,13 +162,13 @@ services:
         if ! psql "$$DB" -tAc "select to_regclass('public.user_profiles')" | grep -q user_profiles; then
           # New volume: schema.sql is the complete schema, and it records every
           # migration it already contains in the ledger.
-          psql "$$DB" -v ON_ERROR_STOP=1 -f /schema.sql || exit 1;
+          psql "$$DB" -v ON_ERROR_STOP=1 -f /app/schema.sql || exit 1;
         elif ! psql "$$DB" -tAc "select to_regclass('public.schema_migrations')" | grep -q schema_migrations; then
           # Volume from before the ledger: replay one last time the way
           # db-init used to on every start, then record it.
-          bash /adopt-ledger.sh || exit 1;
+          bash /app/docker/db-init/adopt-ledger.sh || exit 1;
         fi
-        bash /migrate.sh up || exit 1;
+        bash /app/scripts/migrate.sh up || exit 1;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;
@@ -192,21 +205,53 @@ services:
       - storage_data:/data
     restart: unless-stopped
 
+  # Writes the bucket CORS policy createbucket installs: browsers PUT uploads
+  # straight to storage, so the bucket must allow every origin the backend
+  # trusts (FRONTEND_URL, WORD_ADDIN_URL, ALLOWED_ORIGINS). It runs the
+  # backend image's own origin parser (docker/storage-cors.mjs) with the
+  # backend's env_file and the same overrides as the backend service below,
+  # so the two allowlists cannot disagree. Keep these three blocks in step
+  # with the backend service (backend/src/__tests__/storageCors.test.ts).
+  storage-cors:
+    build: *backend-build
+    image: *backend-image
+    env_file:
+      - path: ./backend/.env
+        required: false
+      - path: .env
+        required: false
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - MIKE_ORIGINS_MODULE=/app/dist/lib/origins.js
+    volumes:
+      - ./docker/storage-cors.mjs:/storage-cors.mjs:ro
+      - storage_cors:/cors
+    entrypoint: /bin/sh
+    command: ["-c", "node /storage-cors.mjs > /cors/storage-cors.json"]
+    # It reads the backend's env_file (provider keys and signing secrets
+    # included) only to print a JSON policy, so it gets no network at all.
+    network_mode: none
+    restart: "no"
+
   createbucket:
     image: amazon/aws-cli
     depends_on:
-      - storage
+      storage:
+        condition: service_started
+      storage-cors:
+        condition: service_completed_successfully
     environment:
       AWS_ACCESS_KEY_ID: rustfsadmin
       AWS_SECRET_ACCESS_KEY: rustfsadmin
       AWS_DEFAULT_REGION: us-east-1
     volumes:
-      - ./docker/storage-cors.json:/storage-cors.json:ro
+      - storage_cors:/cors:ro
     entrypoint: /bin/sh
     command: >
       -c "until aws --endpoint-url http://storage:9000 s3 ls; do echo 'waiting for storage'; sleep 2; done;
           aws --endpoint-url http://storage:9000 s3 mb s3://mike || true;
-          aws --endpoint-url http://storage:9000 s3api put-bucket-cors --bucket mike --cors-configuration file:///storage-cors.json"
+          aws --endpoint-url http://storage:9000 s3api put-bucket-cors --bucket mike --cors-configuration file:///cors/storage-cors.json"
     restart: "no"
 
   # --- Redis: backs the BullMQ job queues (conversion, extraction, fast
@@ -233,10 +278,8 @@ services:
 
   # --- One-shot: download, validate, and transactionally import mike-workflows.
   workflow-sync:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    image: mike-backend:local
+    build: *backend-build
+    image: *backend-image
     env_file:
       - path: ./backend/.env
         required: false
@@ -259,14 +302,8 @@ services:
         condition: service_healthy
     restart: "no"
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      args:
-        # Release tag for Sentry (docs/observability.md). A build arg, not a
-        # runtime variable: the Dockerfile bakes it into the image.
-        GIT_SHA: ${GIT_SHA:-}
-    image: mike-backend:local
+    build: *backend-build
+    image: *backend-image
     ports:
       - "${BACKEND_PORT:-3001}:3001"
     # ponytail: both optional — local dev keeps secrets in backend/.env, hosted
@@ -290,7 +327,11 @@ services:
       - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0}
       - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU}
       - R2_ENDPOINT_URL=http://storage:9000
-      - R2_PUBLIC_ENDPOINT_URL=${R2_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
+      # The storage URL BROWSERS reach for direct uploads/downloads. The
+      # default only works when the app is opened on this machine; for any
+      # other host set it to a public (https under an https front end) URL
+      # that reaches the storage service. See docs/deployment.md.
+      - R2_PUBLIC_ENDPOINT_URL=${R2_PUBLIC_ENDPOINT_URL:-http://localhost:${STORAGE_PORT:-9000}}
       - R2_ACCESS_KEY_ID=rustfsadmin
       - R2_SECRET_ACCESS_KEY=rustfsadmin
       - R2_BUCKET_NAME=mike
@@ -330,9 +371,8 @@ services:
   # BullMQ partitions per connection and the DB queue claims with
   # FOR UPDATE SKIP LOCKED, so replicas divide jobs, never duplicate them.
   # worker:
-  #   build:
-  #     context: .
-  #     dockerfile: backend/Dockerfile
+  #   build: *backend-build
+  #   image: *backend-image
   #   command: ["node", "dist/worker.js"]
   #   env_file:
   #     - path: ./backend/.env
@@ -363,6 +403,8 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
+        # Release identity (docs/observability.md), as for the backend image.
+        MIKE_VERSION: ${MIKE_VERSION:-}
         # The browser-side Sentry DSN is inlined by `next build`, so it is a
         # build argument, not a runtime variable (docs/observability.md).
         NEXT_PUBLIC_SENTRY_DSN: ${FRONTEND_SENTRY_DSN:-}
@@ -372,12 +414,22 @@ services:
         NEXT_PUBLIC_SENTRY_DISABLED: ${SENTRY_DISABLED:-}
         NEXT_PUBLIC_SENTRY_INSTALL: ${SENTRY_INSTALL:-}
         GIT_SHA: ${GIT_SHA:-}
+        # Sentry source-map upload (docs/observability.md); the token is the
+        # build secret below.
+        SENTRY_ORG: ${SENTRY_ORG:-}
+        SENTRY_PROJECT: ${SENTRY_PROJECT:-}
+        SENTRY_UPLOAD_ENABLED: ${SENTRY_UPLOAD_ENABLED:-0}
+      secrets:
+        - SENTRY_AUTH_TOKEN
+    # Same default tag as the backend image; pull both or build both.
+    image: ${MIKE_IMAGE_REPO:-ghcr.io/open-legal-products}/mike-frontend:${MIKE_IMAGE_TAG:-2.1.0}
     environment:
       - API_BASE_URL=${API_BASE_URL:-http://backend:3001}
       # Next server side (the /api gateway); same project as the browser.
       - SENTRY_DISABLED=${SENTRY_DISABLED:-}
       - SENTRY_INSTALL=${SENTRY_INSTALL:-}
       - SENTRY_DSN=${FRONTEND_SENTRY_DSN:-}
+      - SENTRY_MAX_REPEAT_EVENTS_PER_DAY=${SENTRY_MAX_REPEAT_EVENTS_PER_DAY:-}
       - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-}
       - SENTRY_RELEASE=${SENTRY_RELEASE:-}
     ports:
@@ -390,4 +442,10 @@ services:
 volumes:
   db_data:
   storage_data:
+  storage_cors:
   redis_data:
+
+secrets:
+  SENTRY_AUTH_TOKEN:
+    # Must be exported/injected into the Compose process, not only in .env.
+    environment: SENTRY_AUTH_TOKEN

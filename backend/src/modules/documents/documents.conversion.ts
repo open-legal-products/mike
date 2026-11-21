@@ -3,8 +3,9 @@ import { enqueueDbJob } from "../../lib/dbq/enqueue";
 import { type ConversionJobData } from "../../lib/queue/conversionQueue";
 import { downloadFile, uploadFile } from "../../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../../lib/convert";
-import { reportError } from "../../lib/observability/sentry";
+import { markStage, reportError, setOperation } from "../../lib/observability/sentry";
 import { createServerSupabase, type Db } from "../../lib/supabase";
+import { log } from "../../lib/log";
 
 /**
  * Convert one uploaded DOCX/DOC to PDF and finalize the document.
@@ -28,6 +29,7 @@ export async function runConversionJob(
     data: ConversionJobData,
     db: Db = createServerSupabase(),
 ): Promise<void> {
+    setOperation("documents.convert");
     const { documentId, versionId, userId, storagePath } = data;
     const finalize = data.finalizeDocumentStatus !== false;
 
@@ -41,6 +43,7 @@ export async function runConversionJob(
 
     let pdfBuf: Buffer | null = null;
     try {
+        markStage("docx-to-pdf");
         pdfBuf = await docxToPdf(Buffer.from(original));
     } catch (err) {
         // Conversion failure is non-fatal (mirrors the sync path): the version
@@ -114,7 +117,7 @@ export async function runConversionJob(
             );
     }
     if (pdfBuf)
-        console.log("[conversion-worker] converted", { documentId, versionId });
+        log.info("conversion-worker", "converted", { documentId, versionId });
 }
 
 /**

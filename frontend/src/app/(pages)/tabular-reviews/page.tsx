@@ -40,6 +40,7 @@ import {
     notifyBulkReviewDeleteOutcome,
 } from "@/app/lib/deleteTabularReviewsWithConcurrency";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
+import { useIdSet } from "@/app/hooks/useIdSet";
 
 type ReviewScope = TabularReviewScope;
 
@@ -104,6 +105,7 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
         scope: activeScope,
         sort,
     });
+    const selectedIdSet = useIdSet(selectedIds);
     /**
      * A refusal plus the person who can lift it. Unlike the projects overview,
      * the reviews overview RPC returns no contact columns at all — only
@@ -153,7 +155,7 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
 
     const allSelected =
         visibleReviews.length > 0 &&
-        visibleReviews.every((r) => selectedIds.includes(r.id));
+        visibleReviews.every((r) => selectedIdSet.has(r.id));
 
     function toggleAll() {
         if (allSelected) {
@@ -348,8 +350,9 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
         const blocked = ids.length - owned.length;
         setSelectedIds([]);
         const snapshot = reviews;
+        const ownedIds = new Set(owned);
         setReviews((current) =>
-            current.filter((review) => !owned.includes(review.id)),
+            current.filter((review) => !ownedIds.has(review.id)),
         );
         const { failedIds } =
             await deleteTabularReviewsWithConcurrency(

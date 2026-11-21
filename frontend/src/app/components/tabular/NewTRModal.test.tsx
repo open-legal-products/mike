@@ -10,8 +10,8 @@ import {
     uploadStandaloneDocuments,
     type OrgMember,
 } from "@/app/lib/mikeApi";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
-import { UPLOAD_LIMIT_MESSAGES } from "@/shared/api/uploadSessionClient";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
+import { UPLOAD_LIMIT_MESSAGES } from "@mike/client";
 import { UNSUPPORTED_DOCUMENT_WARNING_MESSAGE } from "@/app/lib/documentUploadValidation";
 import type { Document } from "../shared/types";
 import { NewTRModal } from "./NewTRModal";
@@ -20,8 +20,8 @@ vi.mock("@/app/lib/mikeApi", async () => {
     // The upload error copy is real shared code; only the network calls are
     // stubbed, so the modal's failure messages are the ones users would see.
     const uploads = await vi.importActual<
-        typeof import("@/shared/api/uploadSessionClient")
-    >("@/shared/api/uploadSessionClient");
+        typeof import("@mike/client")
+    >("@mike/client");
     class MikeApiError extends Error {
         status = 500;
     }

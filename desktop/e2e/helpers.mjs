@@ -90,7 +90,8 @@ export async function signUpThroughUi(page, { email, password }) {
  * Step 1 (/onboarding/profile) collects Name + Organisation — the two fields
  * the old signup form used to ask for, which is why they are filled here — and
  * step 2 (/onboarding/practice) collects optional practice details. "Skip"
- * advances to step 3 (/onboarding/invitations), where "Finish" completes
+ * advances to step 3 (/onboarding/invitations); "Continue" advances to step 4
+ * (/onboarding/models, the provider key grid), where "Finish" completes
  * onboarding and replaces the URL with /assistant.
  */
 export async function completeOnboardingIfRequired(
@@ -125,6 +126,10 @@ export async function completeOnboardingIfRequired(
       await page.waitForURL(/\/onboarding\/practice/, { timeout: 20_000 });
       await page.getByRole("button", { name: "Skip", exact: true }).click();
       await page.waitForURL(/\/onboarding\/invitations/, { timeout: 20_000 });
+      await page
+        .getByRole("button", { name: "Continue", exact: true })
+        .click();
+      await page.waitForURL(/\/onboarding\/models/, { timeout: 20_000 });
       await page.getByRole("button", { name: "Finish", exact: true }).click();
     }
   }

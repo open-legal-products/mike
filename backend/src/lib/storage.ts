@@ -3,7 +3,9 @@
  *
  * The transport lives behind the StorageAdapter interface
  * (./storage/adapter.ts); the default is the S3-protocol adapter
- * (./storage/s3.ts — Cloudflare R2, RustFS, MinIO). This module owns the
+ * (./storage/s3.ts — Cloudflare R2, RustFS, MinIO); STORAGE_DRIVER selects
+ * ./storage/filesystem.ts ("fs") or ./storage/supabase.ts ("supabase")
+ * instead. This module owns the
  * policy every backend shares: not-configured degradation (reads return
  * null/empty, writes throw), error logging, StorageOperationError wrapping,
  * Content-Disposition building, and the storage-key layout.
@@ -12,6 +14,7 @@
  * file and call setStorageAdapter() at boot; no call sites change.
  */
 
+import { AppError, type ErrorKind } from "./appError";
 import { bestEffort } from "./observability/sentry";
 import { Readable } from "node:stream";
 import type {
@@ -20,7 +23,9 @@ import type {
 } from "./storage/adapter";
 import { createS3StorageAdapter } from "./storage/s3";
 import { createFilesystemStorageAdapter } from "./storage/filesystem";
+import { createSupabaseStorageAdapter } from "./storage/supabase";
 import { buildContentDisposition } from "./storage/filenames";
+import { storageReadTimeoutMs } from "./storage/timeouts";
 export { BlobUploadSizeError } from "./storage/filesystem";
 export {
   buildContentDisposition,
@@ -31,9 +36,18 @@ export {
 
 export type { StorageAdapter, StoredObjectMetadata } from "./storage/adapter";
 
-let adapter: StorageAdapter = process.env.STORAGE_DRIVER === "fs"
-  ? createFilesystemStorageAdapter()
-  : createS3StorageAdapter();
+function createConfiguredAdapter(): StorageAdapter {
+  switch (process.env.STORAGE_DRIVER) {
+    case "fs":
+      return createFilesystemStorageAdapter();
+    case "supabase":
+      return createSupabaseStorageAdapter();
+    default:
+      return createS3StorageAdapter();
+  }
+}
+
+let adapter: StorageAdapter = createConfiguredAdapter();
 
 export let storageEnabled = adapter.enabled;
 
@@ -43,13 +57,34 @@ export function setStorageAdapter(next: StorageAdapter): void {
   storageEnabled = next.enabled;
 }
 
-export class StorageOperationError extends Error {
-  constructor(readonly operation: string, options?: { cause?: unknown }) {
-    super(`Object storage ${operation} failed`, options);
-    this.name = "StorageOperationError";
+const STORAGE_FAILURE_KIND = {
+  HEAD: "storage.head_failed",
+  copy: "storage.copy_failed",
+  upload: "storage.upload_failed",
+  download: "storage.download_failed",
+  delete: "storage.delete_failed",
+} as const satisfies Record<string, ErrorKind>;
+
+export type StorageOperation = keyof typeof STORAGE_FAILURE_KIND;
+
+/**
+ * One object-storage call failed. The operation is the kind (one issue per
+ * operation), the adapter's own error is the cause (its AWS/system code
+ * reaches Sentry as `failure_code`); the key never leaves the process.
+ */
+export class StorageOperationError extends AppError {
+  constructor(readonly operation: StorageOperation, options?: { cause?: unknown }) {
+    super(STORAGE_FAILURE_KIND[operation], `Object storage ${operation} failed`, options);
   }
 }
 
+/**
+ * A storage failure this facade absorbs: the caller gets null, as it does
+ * when storage is not configured, so nothing above reports it. Report it
+ * here, once, with the operation (and the SDK's code via the cause) on the
+ * event, then log the SAME object: the console bridge recognises a reported
+ * error and files no second, context-free "Failure in application".
+ */
 function requireStorageConfig(): void {
   if (!adapter.enabled) {
     throw new Error(adapter.configurationHint);
@@ -111,8 +146,14 @@ export async function getSignedUploadUrl(
       expiresIn,
     );
   } catch (error) {
-    console.error("[storage] getSignedUploadUrl failed", { key, error });
-    return null;
+    // Thrown once with the SDK's own code on the cause; the route that
+    // answers reports it. Logging and returning null here filed the failure
+    // twice: once from storage, once from the caller's cause-less throw.
+    throw new AppError(
+      "storage.signed_url_failed",
+      "Object storage signed upload URL failed",
+      { cause: error },
+    );
   }
 }
 
@@ -123,7 +164,8 @@ export async function headFile(
   try {
     return await adapter.headFile(key);
   } catch (error) {
-    console.error("[storage] headFile failed", { key, error });
+    // Thrown, not logged: the caller that catches this reports it, and a
+    // console line here filed the same failure a second time.
     throw new StorageOperationError("HEAD", { cause: error });
   }
 }
@@ -149,12 +191,25 @@ export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
   try {
     return await adapter.downloadFile(key);
   } catch (error) {
-    console.error("[storage] downloadFile failed", {
-      key,
-      error: error,
-    });
-    return null;
+    // null is "not there" (the adapters translate a missing object); a
+    // transport or permission failure is thrown so the caller's handler
+    // reports it once, with the store's own code on the cause.
+    throw new StorageOperationError("download", { cause: error });
   }
+}
+
+/**
+ * Read an object the caller can go on without: a cached rendition, an
+ * optional PDF copy, a fallback source. null for an object that is not
+ * there, and null for a failure too, which is reported once here as a
+ * warning with the store's code, because the caller will carry on and
+ * nothing else would file it. A read the caller cannot do without uses
+ * downloadFile, whose failure propagates to the handler that reports it.
+ */
+export async function downloadFileIfAvailable(
+  key: string,
+): Promise<ArrayBuffer | null> {
+  return (await bestEffort(downloadFile(key), { what: "optional-read" })) ?? null;
 }
 
 /**
@@ -176,12 +231,118 @@ export function createFileReadStream(key: string): Readable {
           yield chunk;
         }
       } catch (error) {
-        console.error("[storage] createFileReadStream failed", { key, error });
+        // Thrown, not logged (see headFile).
         if (error instanceof StorageOperationError) throw error;
         throw new StorageOperationError("download", { cause: error });
       }
     })(),
   );
+}
+
+function asDownloadError(error: unknown): StorageOperationError {
+  return error instanceof StorageOperationError
+    ? error
+    : new StorageOperationError("download", { cause: error });
+}
+
+/**
+ * Wait for one step of a storage read, but never longer than the read timeout
+ * and never past an abort. The race settles even when the store has stalled
+ * (and its own promise never settles), which is what lets a timed-out or
+ * abandoned read be torn down instead of pinning its caller.
+ */
+function boundedStep<T>(step: Promise<T>, controller: AbortController): Promise<T> {
+  // The losing side of the race may reject later; it is already handled.
+  step.catch(() => undefined);
+  const { signal } = controller;
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => reject(signal.reason);
+    const timer = setTimeout(() => {
+      controller.abort(
+        new DOMException("Object storage read timed out", "TimeoutError"),
+      );
+    }, storageReadTimeoutMs());
+    signal.addEventListener("abort", onAbort, { once: true });
+    step.then(resolve, reject).finally(() => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
+}
+
+/**
+ * Open an object for a streamed response (a download handed straight to the
+ * client) without holding the whole object in memory.
+ *
+ * The object is opened, and its first chunk read, before this resolves, so a
+ * store that cannot serve it fails HERE with a StorageOperationError while the
+ * caller can still answer with an error status. After that, failures surface
+ * as an error on the returned stream.
+ *
+ * Every wait on the store is bounded by the storage read timeout, and the
+ * read is released (the request cancelled, the socket or file closed) when
+ * the returned stream is destroyed, the timeout fires, or `signal` aborts.
+ * Unlike downloadFile, the timeout bounds each wait on the store rather than
+ * the whole transfer, so a slow client applying backpressure is not cut off.
+ */
+export async function openFileStream(
+  key: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<Readable> {
+  requireStorageConfig();
+  const controller = new AbortController();
+  const outer = options.signal;
+  const forward = () => controller.abort(outer?.reason);
+  if (outer?.aborted) forward();
+  else outer?.addEventListener("abort", forward, { once: true });
+  const release = () => {
+    controller.abort();
+    outer?.removeEventListener("abort", forward);
+  };
+
+  let iterator: AsyncIterator<Uint8Array>;
+  let first: IteratorResult<Uint8Array>;
+  try {
+    const body = await boundedStep(
+      adapter.openReadStream(key, { signal: controller.signal }),
+      controller,
+    );
+    if (!body) throw new StorageOperationError("download");
+    iterator = body[Symbol.asyncIterator]();
+    first = await boundedStep(iterator.next(), controller);
+  } catch (error) {
+    release();
+    // Thrown, not logged (see headFile).
+    throw asDownloadError(error);
+  }
+
+  let pending: IteratorResult<Uint8Array> | null = first;
+  return new Readable({
+    read() {
+      const step = pending
+        ? Promise.resolve(pending)
+        : boundedStep(iterator.next(), controller);
+      pending = null;
+      step.then(
+        (result) => {
+          if (this.destroyed) return;
+          this.push(result.done ? null : result.value);
+        },
+        (error) => {
+          if (!this.destroyed) this.destroy(asDownloadError(error));
+        },
+      );
+    },
+    destroy(error, callback) {
+      // Abort first: a store that is mid-read only lets go when its signal
+      // fires, and return() on an iterator with a pending next() would wait
+      // for that read to finish.
+      release();
+      iterator.return?.().catch(() => undefined);
+      callback(error);
+    },
+  });
 }
 
 export async function listFiles(prefix: string): Promise<string[]> {
@@ -248,7 +409,7 @@ export function deleteFilesBestEffort(
     },
   );
   return bestEffort(work, {
-    what: `storage-delete:${stage}`,
+    what: stage,
     tags: { component: "storage", stage, storage_operation: "delete" },
   });
 }
@@ -278,11 +439,11 @@ export async function getSignedUrl(
       downloadFilename,
     );
   } catch (error) {
-    console.error("[storage] getSignedUrl failed", {
-      key,
-      error: error,
-    });
-    return null;
+    throw new AppError(
+      "storage.signed_url_failed",
+      "Object storage signed URL failed",
+      { cause: error },
+    );
   }
 }
 

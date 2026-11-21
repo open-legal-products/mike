@@ -1,16 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
     getTabularReview,
+    getTabularReviewHistoryStatuses,
+    regenerateTabularCell,
     stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
 } from "@/app/lib/mikeApi";
 import type {
+    TabularCell,
     TabularReview,
     TabularReviewRow,
 } from "@/app/components/shared/types";
+import type { ReviewCellStore } from "./reviewCellStore";
 import { TRView } from "./TabularReviewView";
+import * as Sentry from "@sentry/react";
+import { clearToasts, privacyBoundaryIntegration } from "@mike/client";
+import { scrubEvent } from "@/app/lib/errorReporting";
 
 const { apiKeyState } = vi.hoisted(() => ({
     apiKeyState: {
@@ -32,7 +39,8 @@ vi.mock("next/navigation", () => ({
     useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
     useSearchParams: () => new URLSearchParams(),
 }));
-vi.mock("@/app/lib/mikeApi", () => ({
+vi.mock("@/app/lib/mikeApi", async () => ({
+    reportedUpstreamMessage: (await import("@mike/client")).reportedUpstreamMessage,
     MikeApiError: class MikeApiError extends Error {
         status: number;
         code: string | null;
@@ -50,6 +58,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
     clearTabularCells: vi.fn(),
     deleteTabularReview: vi.fn(),
     getTabularReview: vi.fn(),
+    getTabularReviewHistoryStatuses: vi.fn(),
     getProject: vi.fn(),
     getTabularReviewPeople: vi.fn(async () => ({ owner: null, members: [] })),
     getOllamaModels: vi.fn(async () => []),
@@ -83,8 +92,35 @@ vi.mock("../assistant/ModelToggle", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../assistant/ModelToggle")>()),
     ModelToggle: () => null,
 }));
-vi.mock("./TRTable", () => ({ TRTable: () => <div /> }));
-vi.mock("./TRSidePanel", () => ({ TRSidePanel: () => null }));
+// The grid as TRView hands it over: the published cell list (whose identity
+// changes only on a structural update) and the per-cell store.
+const table = vi.hoisted(() => ({
+    cells: null as TabularCell[] | null,
+    store: null as ReviewCellStore | null,
+}));
+vi.mock("./TRTable", () => ({
+    TRTable: (props: {
+        cells: TabularCell[];
+        cellStore: ReviewCellStore;
+        onExpand: (cell: TabularCell) => void;
+    }) => {
+        table.cells = props.cells;
+        table.store = props.cellStore;
+        return (
+            <button type="button" onClick={() => props.onExpand(props.cells[0])}>
+                Open first cell
+            </button>
+        );
+    },
+}));
+vi.mock("./TRSidePanel", () => ({
+    TRSidePanel: (props: { onRegenerate?: () => void }) =>
+        props.onRegenerate ? (
+            <button type="button" onClick={props.onRegenerate}>
+                Regenerate cell
+            </button>
+        ) : null,
+}));
 vi.mock("./TRChatPanel", () => ({ TRChatPanel: () => null }));
 vi.mock("./AddColumnModal", () => ({ AddColumnModal: () => null }));
 vi.mock("./TRWorkflowModal", () => ({ TRWorkflowModal: () => null }));
@@ -174,6 +210,37 @@ describe("TabularReviewView server-owned generation", () => {
             removeEventListener: vi.fn(),
             dispatchEvent: vi.fn(),
         }));
+    });
+
+    it.each(["backend", undefined, "proxy"])("reports run-start failures only without explicit backend ownership (%s)", async owner => {
+        const events: Sentry.Event[] = [];
+        clearToasts();
+        Sentry.init({
+            dsn: "https://test@sentry.invalid/1", defaultIntegrations: false,
+            integrations: [privacyBoundaryIntegration()], beforeSend: scrubEvent,
+            transport: () => ({ send: async envelope => {
+                for (const [header, payload] of envelope[1]) if (header.type === "event") events.push(payload as Sentry.Event);
+                return { statusCode: 200 };
+            }, flush: async () => true }),
+        });
+        try {
+            mockDetail({});
+            const requestId = "11111111-1111-4111-8111-111111111111";
+            vi.mocked(streamTabularGeneration).mockResolvedValueOnce(Response.json({
+                detail: "PRIVATE_BACKEND_DETAIL", code: "internal_error", request_id: requestId, reporting_owner: owner,
+            }, { status: 503 }));
+            render(<TRView reviewId="r1" />);
+            fireEvent.click(await screen.findByTitle("Run review"));
+            await waitFor(() => expect(streamTabularGeneration).toHaveBeenCalledOnce());
+            await screen.findByTitle("Run review");
+            expect(await Sentry.flush(2000)).toBe(true);
+            expect(events).toHaveLength(owner === "backend" ? 0 : 1);
+            if (owner !== "backend") expect(events[0]?.tags).toMatchObject({ operation: "tabular.run", http_status: 503, request_id: requestId });
+            expect(JSON.stringify(events)).not.toContain("PRIVATE_BACKEND_DETAIL");
+        } finally {
+            await Sentry.close();
+            clearToasts();
+        }
     });
 
     it("uses the new review timestamp when running again after completion", async () => {
@@ -366,5 +433,239 @@ describe("TabularReviewView server-owned generation", () => {
             ),
         );
         resumed.done();
+    });
+});
+
+describe("TabularReviewView single-cell regeneration", () => {
+    const CELL = {
+        id: "cell-1",
+        review_id: "r1",
+        row_id: "row-1",
+        document_id: "doc-1",
+        column_index: 0,
+        content: { summary: "Old" },
+        status: "done",
+        created_at: "2026-01-01T00:00:00Z",
+    } as TabularCell;
+
+    // A review whose run reports "running" for the next `requests` reads of
+    // either its full detail or its status snapshot.
+    function serverRunsFor(requests: number) {
+        let remaining = requests;
+        const running = () => remaining-- > 0;
+        vi.mocked(getTabularReview).mockImplementation(async () => ({
+            review: review({ is_running: running() } as Partial<TabularReview>),
+            cells: [CELL],
+            rows: [ROW],
+            documents: [],
+            active_generation: null,
+        }));
+        vi.mocked(getTabularReviewHistoryStatuses).mockImplementation(
+            async () =>
+                [{ id: "r1", is_running: running(), is_complete: false }] as never,
+        );
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+        }));
+        vi.mocked(getTabularReview).mockResolvedValue({
+            review: review(),
+            cells: [CELL],
+            rows: [ROW],
+            documents: [],
+            active_generation: null,
+        });
+    });
+
+    async function openCell() {
+        render(<TRView reviewId="r1" />);
+        fireEvent.click(await screen.findByRole("button", { name: "Open first cell" }));
+        return screen.findByRole("button", { name: "Regenerate cell" });
+    }
+
+    it("updates only that cell instead of republishing the grid", async () => {
+        const regenerate = await openCell();
+        const published = table.cells;
+        let finish!: (content: TabularCell["content"]) => void;
+        vi.mocked(regenerateTabularCell).mockReturnValue(
+            new Promise((resolve) => { finish = resolve as never; }),
+        );
+        fireEvent.click(regenerate);
+        await waitFor(() =>
+            expect(table.store?.get("row-1", 0)?.status).toBe("generating"),
+        );
+        expect(table.cells).toBe(published);
+        serverRunsFor(0);
+        finish({ summary: "New" });
+        await waitFor(() => expect(getTabularReview).toHaveBeenCalledTimes(2));
+    });
+
+    it.each(["delay", "status request"])("stops reconciliation reads when unmounted during the polling %s", async (stage) => {
+        const regenerate = await openCell();
+        vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
+        serverRunsFor(1);
+        let finishStatus!: (statuses: Awaited<ReturnType<typeof getTabularReviewHistoryStatuses>>) => void;
+        if (stage === "status request") {
+            vi.mocked(getTabularReviewHistoryStatuses).mockReturnValue(
+                new Promise(resolve => { finishStatus = resolve; }),
+            );
+        }
+        vi.useFakeTimers();
+        try {
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            expect(getTabularReview).toHaveBeenCalledTimes(2);
+            if (stage === "status request") {
+                await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+                expect(getTabularReviewHistoryStatuses).toHaveBeenCalledTimes(1);
+            }
+            cleanup();
+            await act(async () => {
+                if (finishStatus) finishStatus([]);
+                await vi.advanceTimersByTimeAsync(5000);
+            });
+            expect(getTabularReviewHistoryStatuses).toHaveBeenCalledTimes(stage === "delay" ? 0 : 1);
+            expect(getTabularReview).toHaveBeenCalledTimes(2);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("review regression: reconciles again after the foreground polling limit", async () => {
+        const regenerate = await openCell();
+        vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
+        serverRunsFor(45);
+        vi.useFakeTimers();
+        try {
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+            const foregroundReads = vi.mocked(getTabularReview).mock.calls.length;
+            await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+            expect(getTabularReview).toHaveBeenCalledTimes(foregroundReads + 2);
+            expect(table.store?.get("row-1", 0)?.content).toEqual(CELL.content);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("follow-up regression: Check again keeps reconciling a running review", async () => {
+        const regenerate = await openCell();
+        const { MikeApiError } = await import("@/app/lib/mikeApi");
+        vi.mocked(regenerateTabularCell).mockRejectedValue(new MikeApiError({ message: "running", status: 409, code: "review_running" }));
+        vi.useFakeTimers();
+        try {
+            serverRunsFor(100);
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            serverRunsFor(1);
+            fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            const reads = vi.mocked(getTabularReview).mock.calls.length;
+            serverRunsFor(0);
+            await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+            expect(getTabularReview).toHaveBeenCalledTimes(reads + 1);
+            expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
+        } finally { vi.useRealTimers(); }
+    });
+
+    it.each(["background", "reload"])("retry regression: %s failure reloads the current review after navigation", async failure => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        const { rerender } = render(<TRView reviewId="r1" />);
+        fireEvent.click(await screen.findByRole("button", { name: "Open first cell" }));
+        const regenerate = await screen.findByRole("button", { name: "Regenerate cell" });
+        const { MikeApiError } = await import("@/app/lib/mikeApi");
+        vi.mocked(regenerateTabularCell).mockRejectedValue(new MikeApiError({ message: "running", status: 409, code: "review_running" }));
+        vi.useFakeTimers();
+        try {
+            serverRunsFor(1);
+            if (failure === "reload") vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            fireEvent.click(regenerate);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            if (failure === "background") {
+                vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+                await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+            }
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            expect(retry).toBeTypeOf("function");
+            vi.mocked(getTabularReview).mockImplementation(async id => ({
+                review: review({ id }), cells: [CELL], rows: [ROW], documents: [], active_generation: null,
+            }));
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+            await act(async () => { retry?.(); await vi.advanceTimersByTimeAsync(0); });
+            expect(getTabularReview).toHaveBeenLastCalledWith("r2");
+        } finally { vi.useRealTimers(); notify.mockRestore(); }
+    });
+
+    it("initial-load regression: a late initial read cannot overwrite a newer retry", async () => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        try {
+            vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            const { rerender } = render(<TRView reviewId="r1" />);
+            await waitFor(() => expect(notify).toHaveBeenCalled());
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            expect(retry).toBeTypeOf("function");
+            type Detail = Awaited<ReturnType<typeof getTabularReview>>;
+            let finishInitial!: (detail: Detail) => void;
+            const fresh = { review: review({ id: "r2" }), cells: [{ ...CELL, content: { summary: "Fresh retry" } }],
+                rows: [ROW], documents: [], active_generation: null };
+            vi.mocked(getTabularReview).mockReturnValueOnce(new Promise(resolve => { finishInitial = resolve; }))
+                .mockResolvedValueOnce(fresh);
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await retry?.(); });
+            expect(table.cells?.[0].content).toEqual({ summary: "Fresh retry" });
+            await act(async () => { finishInitial({ ...fresh, cells: [CELL] }); });
+            expect(table.cells?.[0].content).toEqual({ summary: "Fresh retry" });
+        } finally { notify.mockRestore(); }
+    });
+
+    it("active-retry regression: the winning retry attaches to a stoppable generation", async () => {
+        const notices = await import("@/app/lib/userFacingError");
+        const notify = vi.spyOn(notices, "notifyError");
+        const stream = openStream();
+        try {
+            vi.mocked(getTabularReview).mockRejectedValueOnce(new Error("offline"));
+            const { rerender } = render(<TRView reviewId="r1" />);
+            await waitFor(() => expect(notify).toHaveBeenCalled());
+            const retry = notify.mock.calls.at(-1)?.[1]?.onRetry;
+            type Detail = Awaited<ReturnType<typeof getTabularReview>>;
+            let finishInitial!: (detail: Detail) => void;
+            const running = { review: review({ id: "r2", is_running: true }), cells: [CELL],
+                rows: [ROW], documents: [], active_generation: { id: "gen-2", seq: 4 } };
+            vi.mocked(getTabularReview).mockReturnValueOnce(new Promise(resolve => { finishInitial = resolve; }))
+                .mockResolvedValueOnce(running);
+            vi.mocked(streamTabularGenerationResume).mockResolvedValue(stream.response);
+            rerender(<TRView reviewId="r2" />);
+            await act(async () => { await retry?.(); });
+            expect(streamTabularGenerationResume).toHaveBeenCalledWith("r2", expect.any(AbortSignal), 1);
+            expect(screen.getByTitle("Stop generation")).toBeInTheDocument();
+            await act(async () => { finishInitial(running); });
+            expect(streamTabularGenerationResume).toHaveBeenCalledTimes(1);
+        } finally {
+            await act(async () => { stream.done(); });
+            notify.mockRestore();
+        }
+    });
+
+    it("polls the run's status, not the whole review, until the run ends", async () => {
+        const regenerate = await openCell();
+        vi.mocked(regenerateTabularCell).mockResolvedValue({ summary: "New" } as never);
+        serverRunsFor(3);
+        fireEvent.click(regenerate);
+        await waitFor(
+            () => expect(getTabularReviewHistoryStatuses).toHaveBeenCalledTimes(3),
+            { timeout: 3000 },
+        );
+        // The initial load, the first read after the cell, and the one after
+        // the run ended: never one full read per poll.
+        await waitFor(() => expect(getTabularReview).toHaveBeenCalledTimes(3));
     });
 });

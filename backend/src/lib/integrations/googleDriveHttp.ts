@@ -2,11 +2,30 @@ import { mkdtemp, open, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { googleDriveLimits } from "./googleDriveLimits";
+import { AppError, type ErrorKind } from "../appError";
 
 export const GOOGLE_DRIVE_REQUEST_TIMEOUT_MS = 30_000;
-export class GoogleDriveUserError extends Error {
+/**
+ * A Drive failure with a fixed, user-facing message. The message is for the
+ * user; the `kind` (default `google.user_error`: something the user can act
+ * on) is what Sentry gets, and `status` is Google's HTTP status when the
+ * failure was its response, so an outage groups by `dependency_status`.
+ */
+export class GoogleDriveUserError extends AppError {
     /** Stable machine-readable reason, when a subclass has one. */
     code?: string;
+    /** Google's HTTP status when the failure was its response. */
+    status?: number;
+
+    constructor(
+        message: string,
+        options: { kind?: ErrorKind; status?: number; cause?: unknown } = {},
+    ) {
+        super(options.kind ?? "google.user_error", message, {
+            cause: options.cause,
+        });
+        if (options.status !== undefined) this.status = options.status;
+    }
 }
 
 /** Fixed, intentional user messages; never expose Google's response body. */
@@ -14,17 +33,21 @@ export function googleDriveHttpError(status: number): GoogleDriveUserError {
     if (status === 401)
         return new GoogleDriveUserError(
             "Google Drive access was rejected. Reconnect Google Drive.",
+            { kind: "google.auth_failed", status },
         );
     if (status === 403 || status === 404)
         return new GoogleDriveUserError(
             "This Google Drive file is unavailable or access is not permitted.",
+            { status },
         );
     if (status === 429)
         return new GoogleDriveUserError(
             "Google Drive is busy. Please try again later.",
+            { kind: "google.api_failed", status },
         );
     return new GoogleDriveUserError(
         "Google Drive could not complete the request. Please try again.",
+        { kind: "google.api_failed", status },
     );
 }
 

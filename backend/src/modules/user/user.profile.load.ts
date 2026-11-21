@@ -1,5 +1,5 @@
 // user profile load — implementation behind the module facade.
-import { type ApiKeyStatus } from "./user.apiKeyStore";
+import { type ApiKeyStatus } from "../../lib/providerCredentials/index";
 import { getAllUserRouterModels } from "../../lib/routerModels";
 import { errorMessage, type Db } from "./user.shared";
 import { selectProfile, UserProfileRow } from "./user.profile.storage";

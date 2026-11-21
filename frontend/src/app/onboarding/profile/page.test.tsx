@@ -75,7 +75,7 @@ describe("OnboardingProfilePage", () => {
 
     it("keeps invitations off the profile step", () => {
         render(<OnboardingProfilePage />);
-        expect(screen.getByText("Step 1 of 3")).toBeVisible();
+        expect(screen.getByText("Step 1 of 4")).toBeVisible();
         expect(screen.queryByText("Organization invitations")).not.toBeInTheDocument();
         expect(listMyOrgInvitations).not.toHaveBeenCalled();
     });

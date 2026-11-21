@@ -5,7 +5,7 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { ImageCropModal } from "@/app/components/modals/ImageCropModal";
 import { UserAvatar } from "@/app/components/ui/user-avatar";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI } from "@mike/ui";
 import { ORG_LOGO_ACCEPT, OrgLogoImageError, validateOrgLogoFile } from "@/app/lib/orgLogoImage";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { SettingsRow } from "./SettingsRow";

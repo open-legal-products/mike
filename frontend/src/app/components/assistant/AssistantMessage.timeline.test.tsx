@@ -514,6 +514,95 @@ describe("AssistantMessage timeline", () => {
     });
 });
 
+describe("AssistantMessage stopped steps", () => {
+    beforeEach(() => {
+        vi.stubGlobal("ResizeObserver", class {
+            observe() {}
+            disconnect() {}
+            unobserve() {}
+        });
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("labels connector and CourtListener steps the turn stopped as stopped, without invented counts", () => {
+        render(<AssistantMessage isStreaming events={[
+            { type: "mcp_tool_call", connector_id: "", connector_name: "", tool_name: "crm_update_record",
+                openai_tool_name: "crm_update_record", status: "ok", interrupted: true },
+            { type: "courtlistener_search_case_law", query: "fair use", interrupted: true },
+            { type: "courtlistener_get_cases", cluster_ids: [1, 2], interrupted: true },
+            { type: "courtlistener_find_in_case", cluster_id: 1, query: "damages", interrupted: true },
+            { type: "courtlistener_read_case", cluster_id: 1, interrupted: true },
+            { type: "courtlistener_verify_citations", citation_count: 3, interrupted: true },
+        ]} />);
+        for (const label of [
+            "Connector call stopped",
+            "Case law search stopped",
+            "Fetch of 2 cases stopped",
+            "Case search stopped",
+            "Case read stopped case",
+            "Verification of 3 citations stopped",
+        ]) {
+            expect(screen.getByText(label)).toBeInTheDocument();
+        }
+        expect(screen.queryByText(/0 results|0 matches/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/^Searched case law|^Fetched|^Verified|^Read case/)).not.toBeInTheDocument();
+    });
+
+    it("says a subagent the turn stopped was stopped, not finished", () => {
+        // Rendered open, as the timeline is while its turn is on screen.
+        render(<AssistantMessage isStreaming events={[
+            { type: "delegation", delegation_id: "d1", title: "Research", task: "Find cases",
+                events: [], interrupted: true },
+        ]} />);
+        expect(screen.getByText("Subagent stopped")).toBeInTheDocument();
+        expect(screen.queryByText("Subagent finished")).not.toBeInTheDocument();
+    });
+
+    it("counts finished and stopped subagents apart in a mixed group", () => {
+        render(<AssistantMessage isStreaming events={[
+            { type: "delegation", delegation_id: "d1", title: "Research", task: "Find cases",
+                events: [], status: "completed" },
+            { type: "delegation", delegation_id: "d2", title: "Summary", task: "Summarize",
+                events: [], interrupted: true },
+        ]} />);
+        expect(screen.getByText("1 subagent finished, 1 stopped")).toBeInTheDocument();
+        expect(screen.queryByText("2 subagents finished")).not.toBeInTheDocument();
+    });
+
+    // After a reload the client-only `interrupted` flag is gone; the stored
+    // subagent carries the server's `status: "cancelled"` instead.
+    const reloaded = (events: AssistantEvent[]) => {
+        render(<AssistantMessage events={[
+            ...events,
+            { type: "content", text: "Cancelled by user." },
+        ]} />);
+        fireEvent.click(screen.getByRole("button", { name: /subagent/ }));
+    };
+
+    it("says a stored cancelled subagent was stopped, not finished", () => {
+        reloaded([
+            { type: "delegation", delegation_id: "d1", title: "Research", task: "Find cases",
+                events: [], status: "cancelled" },
+        ]);
+        expect(screen.getByText("Subagent stopped")).toBeInTheDocument();
+        expect(screen.queryByText("Subagent finished")).not.toBeInTheDocument();
+    });
+
+    it("counts a stored cancelled subagent as stopped beside a finished one", () => {
+        reloaded([
+            { type: "delegation", delegation_id: "d1", title: "Research", task: "Find cases",
+                events: [], status: "completed" },
+            { type: "delegation", delegation_id: "d2", title: "Summary", task: "Summarize",
+                events: [], status: "cancelled" },
+        ]);
+        expect(screen.getByText("1 subagent finished, 1 stopped")).toBeInTheDocument();
+        expect(screen.queryByText("2 subagents finished")).not.toBeInTheDocument();
+    });
+});
+
 describe("AssistantMessage response details", () => {
     const answer = (): AssistantEvent[] => [
         { type: "content", text: "Here is the answer." },

@@ -28,9 +28,7 @@ import {
 } from "@/app/lib/mikeApi";
 import { isOrgOwner } from "@/app/lib/permissions";
 import { notifyError } from "@/app/lib/userFacingError";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { GlassCardUI, PillButtonUI, ToggleSwitchUI } from "@mike/ui";
 import {
   organizationSettingsHref,
   useOrganizationSettings,

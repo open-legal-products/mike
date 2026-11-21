@@ -70,13 +70,20 @@ export type StreamCallbacks = {
     onReasoningDelta?: (text: string) => void;
     onReasoningBlockEnd?: () => void;
     onContentDelta?: (text: string) => void;
+    /** Server-authored terminal warning, outside any hidden model citation block. */
+    onStopNotice?: (text: string) => void;
     onToolCallStart?: (call: NormalizedToolCall) => void;
     onWebSearch?: (event: ProviderWebSearchEvent) => void;
     /** Skipped when the provider reports no usage. */
     onUsage?: (usage: TokenUsage, finishReason: string) => void;
 };
 
-export type TokenUsage = { inputTokens: number; outputTokens: number };
+export type TokenUsage = {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+};
 
 export type ProviderWebSearchEvent =
     | { kind: "search_started"; id: string; query?: string }
@@ -130,7 +137,26 @@ export type UserApiKeys = {
      * key, so a user's key is never sent to the operator's endpoint.
      */
     providerSettings?: ProviderSettings;
+    /**
+     * Whose key each provider above holds: the deployment's environment
+     * ("env"), the person's own ("user") or their organization's ("org").
+     * The credential store starts from the environment and lays saved keys
+     * over it, so a non-empty key alone does not say whose it is; a rejected
+     * deployment key is the operator's to fix; a rejected saved key is
+     * handled where the user is shown its remedy. Keys built
+     * anywhere else carry no entry and count as the user's.
+     */
+    keySources?: Partial<Record<ApiKeyName, ApiKeyOrigin>>;
 };
+
+/** Where a key in UserApiKeys came from (see UserApiKeys.keySources). */
+export type ApiKeyOrigin = "env" | "user" | "org";
+
+/** The UserApiKeys fields that hold a key. */
+export type ApiKeyName = Exclude<
+    keyof UserApiKeys,
+    "disabledProviders" | "unusableProviders" | "providerSettings" | "keySources"
+>;
 
 export type ProviderSettings = {
     bedrock?: { region: string } | null;
@@ -169,6 +195,8 @@ export type StreamChatParams = {
      * one-shot calls such as the memory curator.
      */
     conversationId?: string | null;
+    /** Length of the reusable source prefix in a single extraction message. */
+    sourcePrefixLength?: number;
     /**
      * Offer the provider's own web search tool, when the adapter has one, for
      * at most `maxSearches` searches in each request.
@@ -203,7 +231,7 @@ export type ConfiguredModel = {
     apiModel?: string;
     baseUrl: string;
     apiKeyEnv?: string;
-    apiKeyProvider?: keyof UserApiKeys;
+    apiKeyProvider?: ApiKeyName;
     apiKey?: string;
     /**
      * Local models frequently emit tool calls as prose rather than as

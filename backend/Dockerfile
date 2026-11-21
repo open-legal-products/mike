@@ -1,23 +1,55 @@
 # ponytail: single stage. LibreOffice dwarfs everything, multi-stage saves little.
-FROM node:22-slim
+FROM node:22-slim AS app
 
-# libreoffice-convert shells out to soffice for doc conversion (see src/lib/convert.ts)
+# libreoffice-convert shells out to soffice for doc conversion (see src/lib/convert.ts).
+# postgresql-client: docker-compose.yml runs db-init from this image so the
+# schema and migrations applied always belong to the same release as the code
+# (scripts/migrate.sh needs psql).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libreoffice \
+  && apt-get install -y --no-install-recommends libreoffice util-linux postgresql-client ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY backend/package*.json ./
-RUN npm ci
+# .npmrc sets engine-strict: on a stale cached node:22-slim older than the
+# engines floor, `npm ci` fails here with "notsup" instead of building an
+# image that crashes at boot (MIKE-BACKEND-3R). `docker compose build --pull`
+# refreshes the base.
+COPY backend/package*.json backend/.npmrc ./
+RUN npm ci && npm cache clean --force
 COPY backend/ ./
 COPY packages/contracts /packages/contracts
-RUN npm run build
+# The compose db-init step (schema.sql, migrations/, scripts/migrate.sh are
+# already here) also needs the ledger-adoption script for pre-ledger volumes.
+COPY docker/db-init/adopt-ledger.sh ./docker/db-init/adopt-ledger.sh
+# Compile, then drop the build and test tooling (TypeScript, Vitest, Stryker):
+# every entrypoint runs compiled dist/ with production dependencies only.
+RUN npm run build && npm prune --omit=dev && npm cache clean --force
 
 # --enable-source-maps: every entrypoint in this image (API, worker,
 # sync:workflows) reports stack frames as src/*.ts lines, not dist/*.js.
-# The commit this image was built from; Sentry's release tag when
-# SENTRY_RELEASE is not set (docs/observability.md).
+# Release identity: the product version and the commit this image was built
+# from (docs/observability.md); Sentry tags events mike@<version>+<sha12>
+# unless SENTRY_RELEASE is set. A build without them is mike@0.0.0.
+ARG MIKE_VERSION=
 ARG GIT_SHA=
-ENV NODE_ENV=production NODE_OPTIONS=--enable-source-maps GIT_SHA=$GIT_SHA
+# Reporting defaults a fork's published image can bake in (both stay
+# overridable at runtime): SENTRY_DISABLED=true for a fork without its own
+# Sentry, or the fork's own backend DSN. Keep these separate from runtime
+# variables so empty Compose env_file values cannot erase the baked defaults.
+ARG SENTRY_DISABLED=
+ARG SENTRY_DSN=
+ENV NODE_ENV=production NODE_OPTIONS=--enable-source-maps \
+    MIKE_VERSION=$MIKE_VERSION GIT_SHA=$GIT_SHA \
+    MIKE_BUILD_SENTRY_DISABLED=$SENTRY_DISABLED MIKE_BUILD_SENTRY_DSN=$SENTRY_DSN
 EXPOSE 3001
 CMD ["npm", "start"]
+
+# Vercel (docs/vercel.md): vercel.json builds `vercel-api` for the API
+# service, which runs scripts/vercel-start.sh (database bootstrap and
+# Supabase variable mapping) before the server. Vercel does not apply a
+# service's `command` to a container service, so the stage sets it.
+FROM app AS vercel-api
+CMD ["bash", "/app/scripts/vercel-start.sh", "api"]
+
+# The default target stays the plain image every other deployment uses.
+FROM app

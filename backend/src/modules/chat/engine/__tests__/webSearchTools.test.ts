@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { searchWeb, readWebPage } = vi.hoisted(() => ({
+const { searchWeb, readWebPage, reportError } = vi.hoisted(() => ({
   searchWeb: vi.fn(),
   readWebPage: vi.fn(),
+  reportError: vi.fn(),
 }));
+
+vi.mock("../../../../lib/observability/sentry", () => ({ reportError }));
 
 vi.mock("../../../../lib/webSearch", async () => ({
   ...(await vi.importActual<Record<string, unknown>>("../../../../lib/webSearch")),
@@ -43,6 +46,7 @@ const read = (url: string, offset?: number) => ({
 beforeEach(() => {
   searchWeb.mockReset();
   readWebPage.mockReset();
+  reportError.mockReset();
 });
 
 describe("runWebToolCall", () => {
@@ -84,6 +88,42 @@ describe("runWebToolCall", () => {
       error: webToolErrorMessage(code),
       error_code: code,
     });
+    // The model is answered; the provider failure is still reported, as a
+    // warning under its own kind, with the tool's operation.
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: `web_search.${code}` }),
+      expect.objectContaining({
+        level: "warning",
+        tags: { component: "chat-stream", operation: "chat.web_search" },
+      }),
+    );
+  });
+
+  it("reports an unclassified search failure under web_search.failed with the cause", async () => {
+    const cause = new Error("socket hang up");
+    searchWeb.mockRejectedValue(cause);
+
+    const { content } = await runWebToolCall(search("ai act"), context());
+
+    expect(JSON.parse(content)).toMatchObject({ retryable: true, error_code: "failed" });
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "web_search.failed", cause }),
+      expect.objectContaining({ level: "warning" }),
+    );
+  });
+
+  it("does not report a search the turn aborted", async () => {
+    const controller = new AbortController();
+    searchWeb.mockImplementation(async () => {
+      controller.abort();
+      throw new Error("aborted");
+    });
+
+    await expect(
+      runWebToolCall(search("ai act"), { ...context(), signal: controller.signal }),
+    ).rejects.toThrow("aborted");
+    expect(reportError).not.toHaveBeenCalled();
   });
 
   it("stops subagents' searches once they have used the answer's shared allowance", async () => {

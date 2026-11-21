@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import { MikeApiError, SCHEMA_OUT_OF_DATE_MESSAGE, UPSTREAM_UNAVAILABLE_MESSAGE } from "./mikeApi";
 
 // The Sentry SDK is not loaded in tests; what matters is which failures
@@ -168,7 +168,7 @@ describe("notifyError", () => {
         expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
         const support = screen.getByRole("link", { name: "Contact support" });
         expect(support.getAttribute("href")).toMatch(
-            /^mailto:will@mikeoss\.com\?/,
+            /^mailto:support@mikeoss\.com\?/,
         );
         expect(decodeURIComponent(support.getAttribute("href") ?? "")).toContain(
             "Request ID: req-9",
@@ -213,7 +213,7 @@ describe("notifyError", () => {
                         .getByRole("link", { name: "Contact support" })
                         .getAttribute("href") ?? "",
                 );
-                expect(href.startsWith("mailto:will@mikeoss.com?")).toBe(true);
+                expect(href.startsWith("mailto:support@mikeoss.com?")).toBe(true);
                 expect(href).toContain("Request ID: req-9");
                 expect(href).toContain("Error code: internal_error");
                 expect(href).toContain("HTTP status: 500");

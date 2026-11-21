@@ -35,8 +35,14 @@ on:
     # tab, they block nothing.
     - cron: "17 6 3 * *"
 
+permissions:
+  contents: read
+
+
 jobs:
   mutation:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Backend mutation testing (security libs)
     runs-on: ubuntu-latest
     defaults:

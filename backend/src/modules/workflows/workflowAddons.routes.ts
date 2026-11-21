@@ -9,6 +9,7 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendDocumentDisplay } from "../../lib/documentDisplay";
 import { sendInternalError } from "../../lib/httpError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
   getWorkflowAddon,
@@ -26,6 +27,10 @@ export const workflowAddonsRouter = Router();
 // failure goes through the shared status-code policy in lib/serviceResult.
 function sendImportFailure(res: Response, failure: WorkflowAddonImportFailure) {
   if (failure.kind === "assets_copy_failed") {
+    // Reported once (component http, failure_code from the cause chain) and
+    // logged; the response keeps its fixed detail.
+    reportError(failure.error);
+    console.error("[workflow-addons] import failed", failure.error);
     return void res.status(500).json({ detail: failure.detail });
   }
   return void sendServiceFailure(res, failure);
@@ -95,6 +100,7 @@ workflowAddonsRouter.post(
   "/:addonId/import",
   requireAuth,
   asyncRoute(async (req, res) => {
+    setOperation("workflows.import_addon");
     const userId = res.locals.userId as string;
     const db = createServerSupabase();
     const result = await importWorkflowAddon(db, {

@@ -20,9 +20,9 @@ export interface DocxSurface {
     activateRevision?: (ids: DocxRevisionIds) => boolean;
     /** Dismiss only the revision activated by this viewer. */
     clearRevisionHighlight?: () => void;
-    /** Select and reveal a citation using the editor's native selection. */
+    /** Highlight and reveal a citation without moving the reader's selection. */
     selectText?: (text: string) => boolean;
-    /** Clear the citation selection without removing document content. */
+    /** Clear the citation highlight without removing document content. */
     clearTextSelection?: () => void;
     exportDocx?: () => Promise<ArrayBuffer>;
 }

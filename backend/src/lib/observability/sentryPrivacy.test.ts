@@ -1,5 +1,6 @@
+import { eventBudget } from "./sentryVolume";
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { diagnosticEnvelope, diagnosticErrorTags, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration } from './sentryPrivacy';
+import { identifyApplicationError, diagnosticEnvelope, diagnosticErrorTags, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration } from './sentryPrivacy';
 
 const id = '8f1c2a3e-1234-4bcd-9e0f-1234567890ab';
 const eventId = '1234567890abcdef1234567890abcdef';
@@ -12,10 +13,10 @@ describe('outbound telemetry privacy boundary', () => {
       transaction: privateName, fingerprint: [privateName], logger: privateName,
       request: { url: '/documents?filename=' + privateName, headers: { 'X-Custom-Secret': privateName }, query_string: privateName, data: privateName },
       user: { id: privateName }, server_name: privateName,
-      breadcrumbs: [{ message: privateName, data: { filename: privateName } }],
+      breadcrumbs: [{ message: privateName, data: { filename: privateName } }, { category: 'mike.stage', message: privateName, data: { filename: privateName } }],
       extra: { detail: privateName, name: privateName, message: privateName, error_stack: privateName, document_id: privateName },
       contexts: { trace: { data: privateName }, os: { name: privateName } },
-      tags: { component: privateName, stage: privateName, document_id: privateName, error_code: privateName, http_route: '/documents/' + privateName + '?q=' + privateName },
+      tags: { component: privateName, stage: privateName, document_id: privateName, error_code: privateName, operation: privateName, error_kind: privateName, warning_name: privateName, warning_code: privateName, what: privateName, request_id: privateName, http_route: '/documents/' + privateName + '?q=' + privateName },
       exception: { values: [{ type: privateName, value: privateName, module: privateName, mechanism: { data: privateName }, stacktrace: { frames: [{ filename: privateName, function: privateName, vars: { name: privateName }, context_line: privateName }] } }] },
       debug_meta: { images: [{ type: 'sourcemap', code_file: privateName, debug_id: privateName }] },
       future_sdk_field: privateName,
@@ -32,11 +33,11 @@ describe('outbound telemetry privacy boundary', () => {
       event_id: eventId, timestamp: 123, level: 'error', platform: 'javascript', release: 'mike@abc123', environment: 'self-hosted',
       tags: { service: 'mike-backend', component: 'upload-worker', stage: 'conversion', http_method: 'POST', http_route: '/api/projects/' + id + '/documents', http_status: '500', request_id: id, network: true, project: 'false', error_code: 'internal_error' },
       extra: { document_id: id, filename: 'Private NDA.pdf' },
-      exception: { values: [{ type: 'TypeError', value: 'Private NDA.pdf', mechanism: { handled: true, data: 'secret' }, stacktrace: { frames: [{ filename: '/Users/private/work/mike/backend/src/convert.ts', abs_path: '/Users/private/work/mike/backend/src/convert.ts', lineno: 42, colno: 7, in_app: true, function: 'privateName', context_line: 'privateName', vars: { secret: true } }] } }] },
+      exception: { values: [{ type: 'TypeError', value: 'Private NDA.pdf', mechanism: { handled: true, data: 'secret' }, stacktrace: { frames: [{ filename: '/Users/private/work/mike/backend/src/convert.ts', abs_path: '/Users/private/work/mike/backend/src/convert.ts', lineno: 42, colno: 7, in_app: true, function: 'convertDocument', context_line: 'privateName', vars: { secret: true } }] } }] },
       debug_meta: { images: [{ type: 'sourcemap', code_file: '/Users/private/work/mike/backend/src/convert.ts', debug_id: id }] },
     });
     expect(out).toMatchObject({ event_id: eventId, timestamp: 123, level: 'error', release: 'mike@abc123', environment: 'self-hosted', extra: { document_id: id }, tags: { request_id: id, http_route: '/api/projects/:id/documents', http_status: 500 } });
-    expect(out.exception).toEqual({ values: [{ type: 'TypeError', value: 'Failure in upload-worker / conversion / POST / /api/projects/:id/documents / 500 / internal_error', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [{ filename: 'backend/src/convert.ts', abs_path: 'backend/src/convert.ts', lineno: 42, colno: 7, in_app: true }] } }] });
+    expect(out.exception).toEqual({ values: [{ type: 'TypeError', value: 'Failure in upload-worker / conversion / POST / /api/projects/:id/documents / 500 / internal_error', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [{ filename: 'backend/src/convert.ts', abs_path: 'backend/src/convert.ts', lineno: 42, colno: 7, in_app: true, function: 'convertDocument' }] } }] });
     expect(out.debug_meta).toEqual({ images: [{ type: 'sourcemap', code_file: 'backend/src/convert.ts', debug_id: id }] });
     expect(JSON.stringify(out)).not.toContain('private');
   });
@@ -57,12 +58,67 @@ describe('outbound telemetry privacy boundary', () => {
     expect(diagnosticEvent({ tags: { office_host: 'Word', office_platform: 'Mac', office_version: '16.0.123', job_kind: 'extraction.extract' } }).tags).toEqual({ office_host: 'Word', office_platform: 'Mac', office_version: '16.0.123', job_kind: 'extraction.extract' });
   });
 
+  it('keeps a whole-number outage_minutes tag and drops anything else', () => {
+    expect(diagnosticEvent({ tags: { outage_minutes: 15 } }).tags).toEqual({ outage_minutes: 15 });
+    expect(diagnosticEvent({ tags: { outage_minutes: '15' } }).tags).toEqual({ outage_minutes: 15 });
+    expect(diagnosticEvent({ tags: { outage_minutes: '15 min' } }).tags).toEqual({});
+    expect(diagnosticEvent({ tags: { outage_minutes: -1 } }).tags).toEqual({});
+  });
+
+  it('keeps a BullMQ queue name tag and drops one that is not a label', () => {
+    expect(diagnosticEvent({ tags: { component: 'queue', stage: 'connection', queue: 'tabular-extraction' } }).tags).toEqual({ component: 'queue', stage: 'connection', queue: 'tabular-extraction' });
+    expect(diagnosticEvent({ tags: { queue: 'Jane Doe NDA.pdf' } }).tags).toEqual({});
+  });
+
+  it('groups optional storage reads by code location and failure identity, not the raw best-effort fingerprint', () => {
+    const event = (code: string, file: string) => diagnosticEvent({
+      tags: { component: 'best-effort', what: 'optional-read', error_kind: 'storage.download_failed', failure_code: code },
+      fingerprint: ['best-effort', 'optional-read'],
+      exception: { values: [{ type: 'Error', stacktrace: { frames: [{ filename: file, lineno: 42, colno: 7 }] } }] },
+    });
+    const denied = event('AccessDenied', 'backend/src/modules/projects/projects.documents.ts');
+    const reset = event('ECONNRESET', 'backend/src/modules/documents/documents.trackedEdits.ts');
+    expect(denied.fingerprint).toContain('{{ default }}');
+    expect(denied.fingerprint).toContain('AccessDenied');
+    expect(reset.fingerprint).toContain('ECONNRESET');
+    expect(denied.fingerprint).not.toEqual(reset.fingerprint);
+    expect(denied.exception).not.toEqual(reset.exception);
+    expect(denied.fingerprint).not.toEqual(['best-effort', 'optional-read']);
+  });
+
   it('ignores tag names inherited from Object.prototype', () => {
     expect(diagnosticEvent({ tags: { constructor: 'constructor', toString: 'toString' } }).tags).toEqual({});
   });
 
   it.each(['session', 'sessions', 'client_report', 'transaction', 'attachment', 'replay_event', 'replay_recording', 'log', 'span', 'metric', 'profile', 'feedback', 'future_item'])('rejects %s items before network serialization', type => {
     expect(diagnosticEnvelope([{ trace: { transaction: 'Private.pdf' } }, [[{ type, filename: 'Private.pdf' }, { did: 'private-user' }]]])).toBeNull();
+  });
+
+  it('lets logs and metrics leave only with a budget, rebuilt from named attributes and identifier-shaped values', () => {
+    const trace = 'a'.repeat(32);
+    const log = { timestamp: 1, level: 'warn', body: '[dbq] poll failed', trace_id: trace, span_id: 'private', severity_number: 13, attributes: {
+      tool: { value: 'read_document', type: 'string' }, count: { value: 2, type: 'integer' }, ok: { value: true, type: 'boolean' }, api_key: { value: 'sk-private-token', type: 'string' }, matter: { value: 'Private.pdf', type: 'string' },
+      filename: { value: 'Private agreement.pdf', type: 'string' }, 'user.email': { value: 'a@example.com', type: 'string' },
+      'server.address': { value: 'host-1', type: 'string' }, 'sentry.environment': { value: 'production', type: 'string' },
+    } };
+    const envelope = (type: string, items: unknown[]): Parameters<typeof diagnosticEnvelope>[0] => [{ sdk: { name: 'private' } }, [[{ type, item_count: 9, length: 99 }, { version: 2, ingest_settings: { infer_ip: 'auto' }, items }]]];
+    expect(diagnosticEnvelope(envelope('log', [log]))).toBeNull();
+    expect(diagnosticEnvelope(envelope('log', [log]), undefined, () => 0)).toBeNull();
+    expect(diagnosticEnvelope(envelope('log', [log, { ...log, body: 'Private agreement.pdf failed' }, { ...log, level: 'loud' }]), undefined, (_type, count) => count)).toEqual([{}, [[
+      { type: 'log', item_count: 1, content_type: 'application/vnd.sentry.items.log+json' },
+      { version: 2, items: [{ timestamp: 1, trace_id: trace, level: 'warn', body: '[dbq] poll failed', severity_number: 13, attributes: {
+        tool: { value: 'read_document', type: 'string' }, count: { value: 2, type: 'integer' },
+        'sentry.environment': { value: 'production', type: 'string' },
+      } }] },
+    ]]]);
+    const metric = { timestamp: 1, trace_id: trace, name: 'tool_activity', type: 'counter', value: 2, attributes: { outcome: { value: 'refused', type: 'string' } } };
+    const kept = diagnosticEnvelope(envelope('trace_metric', [metric, { ...metric, name: 'Private agreement' }, { ...metric, trace_id: undefined }, { ...metric, value: 'two' }]), undefined, (_type, count) => count);
+    expect(kept).toEqual([{}, [[
+      { type: 'trace_metric', item_count: 1, content_type: 'application/vnd.sentry.items.trace-metric+json' },
+      { version: 2, items: [{ timestamp: 1, trace_id: trace, name: 'tool_activity', type: 'counter', value: 2, attributes: { outcome: { value: 'refused', type: 'string' } } }] },
+    ]]]);
+    expect(JSON.stringify(kept)).not.toContain('Private');
+    expect(JSON.stringify(diagnosticEnvelope(envelope('log', [log]), undefined, (_type, count) => count))).not.toMatch(/sk-private-token|Private\.pdf/);
   });
 
   it('rebuilds mixed envelopes and removes payload sizes and arbitrary envelope metadata', () => {
@@ -76,7 +132,7 @@ describe('outbound telemetry privacy boundary', () => {
     const transport = { send };
     privacyBoundaryIntegration().setup({ getTransport: () => transport, getDsn: () => ({ protocol: 'https', publicKey: 'public-key', host: 'sentry.example', port: '443', path: 'ingest', projectId: '123' }) });
     await transport.send([{ dsn: 'Private NDA.pdf' }, [[{ type: 'event' }, {}]]]);
-    expect(send).toHaveBeenCalledWith([{ dsn: 'https://public-key@sentry.example:443/ingest/123' }, [[{ type: 'event' }, { ...diagnosticEvent({}), tags: { occurrence: 1 } }]]]);
+    expect(send).toHaveBeenCalledWith([{ dsn: 'https://public-key@sentry.example:443/ingest/123' }, [[{ type: 'event' }, diagnosticEvent({})]]]);
   });
 
   it('preserves transport responses and flush ownership', async () => {
@@ -97,7 +153,7 @@ describe('quota budget', () => {
   const setup = () => {
     const send = vi.fn().mockResolvedValue({});
     const transport = { send };
-    privacyBoundaryIntegration().setup({ getTransport: () => transport });
+    privacyBoundaryIntegration({ acceptEvent: eventBudget() }).setup({ getTransport: () => transport });
     const sentOccurrences = () => send.mock.calls.map(([envelope]) => (envelope[1][0][1] as { tags: { occurrence: number } }).tags.occurrence);
     return { transport, send, sentOccurrences };
   };
@@ -137,10 +193,18 @@ describe('quota budget', () => {
     expect(sentOccurrences()).toEqual([1, 2, 1]);
   });
 
-  it('caps a runtime at 50 events a day across distinct issues, then resets', async () => {
+  it('reserves capacity for new/severe failures while enforcing the total daily ceiling', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
     const { transport, send } = setup();
-    for (let n = 0; n < 80; n++) await transport.send(failure('upload-worker', `backend/src/file${n}.ts`));
+    for (let n = 0; n < 5; n++) {
+      for (let attempt = 0; attempt < 64; attempt++) await transport.send(failure('upload-worker', `backend/src/file${n}.ts`));
+    }
+    expect(send).toHaveBeenCalledTimes(30); // five new issues plus 25 repeats
+    const fatal = failure('upload-worker', 'backend/src/file0.ts');
+    (fatal[1][0]![1] as Record<string, unknown>).level = 'fatal';
+    await transport.send(fatal);
+    expect(send).toHaveBeenCalledTimes(31);
+    for (let n = 5; n < 100; n++) await transport.send(failure('upload-worker', `backend/src/file${n}.ts`));
     expect(send).toHaveBeenCalledTimes(50);
     clock.mockReturnValue(24 * 60 * 60_000);
     await transport.send(failure('upload-worker', 'backend/src/next-day.ts'));
@@ -156,12 +220,12 @@ describe('quota budget', () => {
     expect(sentOccurrences().slice(-2)).toEqual([1, 2]);
   });
 
-  it('delivers every diagnostic test probe', async () => {
+  it('delivers diagnostic probes only within the total ceiling', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(0);
     const { transport, send } = setup();
     const probe: Parameters<typeof diagnosticEnvelope>[0] = [{}, [[{ type: 'event' }, { tags: { diagnostic_test: 'true' }, message: 'probe' }]]];
-    for (let n = 0; n < 5; n++) await transport.send(probe);
-    expect(send).toHaveBeenCalledTimes(5);
+    for (let n = 0; n < 60; n++) await transport.send(probe);
+    expect(send).toHaveBeenCalledTimes(50);
   });
 });
 
@@ -174,6 +238,34 @@ describe('bounded error diagnostics', () => {
     expect(tags).toEqual({ failure_code: 'ECONNREFUSED' });
     expect(diagnosticEvent({ tags }).tags).toEqual(tags);
     expect(JSON.stringify(diagnosticEvent({ tags }))).not.toContain('private');
+  });
+
+  it('reads the network code supabase-js folds into a plain result error, never its host or prose', () => {
+    // supabase-js answers a rejected fetch with { message, details, hint, code: '' }
+    // (details = "<name>: <message>\n\nCaused by: <name>: <message> (<code>)\n<stack>").
+    const result = {
+      message: 'TypeError: fetch failed',
+      details: 'TypeError: fetch failed\n\nCaused by: Error: connect ECONNREFUSED private.host:5432 (ECONNREFUSED)\n    at private (node:net:1)',
+      hint: '',
+      code: '',
+    };
+    const wrapped = new Error('Dependency failure (non-Error value)', { cause: result });
+    expect(diagnosticErrorTags(wrapped)).toEqual({ failure_code: 'ECONNREFUSED' });
+    expect(JSON.stringify(diagnosticEvent({ tags: diagnosticErrorTags(wrapped) }))).not.toContain('private');
+    // No usable cause code: the fixed fetch message alone, with the SDK's prefix.
+    expect(diagnosticErrorTags({ message: 'TypeError: fetch failed', details: 'TypeError: fetch failed\n    at private', code: '' })).toEqual({ failure_code: 'fetch_failed' });
+    expect(diagnosticErrorTags(new Error('wrapper', { cause: { message: 'TypeError: fetch failed', code: '' } }))).toEqual({ failure_code: 'fetch_failed' });
+    // Parenthesised words that are not fixed vocabulary never become a code.
+    expect(diagnosticErrorTags({ message: 'TypeError: private request failed', details: 'Caused by: Error: private (private_code)\n', code: '' })).toEqual({});
+  });
+
+  it('names the codes PostgREST and Postgres emit while the database restarts', () => {
+    // PGRST002/PGRST003: PostgREST cannot build its schema cache / get a pooled
+    // connection; 57P02: crash shutdown. Unlisted, MIKE-BACKEND-4C and 8N arrived blank.
+    for (const code of ['PGRST002', 'PGRST003', '57P02']) {
+      const wrapped = new Error('Dependency failure (non-Error value)', { cause: { code, message: 'x', details: '', hint: '' } });
+      expect(diagnosticErrorTags(wrapped)).toEqual({ failure_code: code });
+    }
   });
 
   it('keeps storage status and known database codes, drops arbitrary codes and metadata', () => {
@@ -253,11 +345,78 @@ it('retains provider categories and retry status without response bodies or cred
   const tags = diagnosticErrorTags(wrapped);
   expect(tags).toEqual({ provider_error: 'invalid_api_key', dependency_status: 401 });
   expect(diagnosticErrorTags(retry)).toEqual({ provider_error: 'retry_exhausted', dependency_status: 401 });
+  // Names are looked up as own keys only, so an inherited Object member is never a category.
+  for (const name of ['constructor', 'toString', '__proto__']) expect(diagnosticErrorTags({ name })).toEqual({});
   expect(diagnosticErrorTags(api)).toEqual({ provider_error: 'api_call', dependency_status: 401 });
   expect(JSON.stringify(diagnosticEvent({ tags, extra: api }))).not.toContain('PRIVATE_');
   const cyclic: { lastError?: unknown } = {};
   cyclic.lastError = cyclic;
   expect(diagnosticErrorTags(cyclic)).toEqual({});
+});
+
+it('names a provider refusal by its protocol type and a fixed reason, never its text', () => {
+  // MIK-89: every Anthropic/OpenAI 400 was "chat-stream / api_call / 400"
+  // (MIKE-BACKEND-G), whatever the provider said was wrong.
+  const refusal = (message: string, type = 'invalid_request_error') => ({
+    name: 'AI_APICallError', statusCode: 400, message,
+    data: { type: 'error', error: { type, message } },
+  });
+  expect(diagnosticErrorTags(refusal('prompt is too long: 215000 tokens > 200000 maximum PRIVATE_'))).toEqual({
+    provider_error: 'api_call', provider_error_type: 'invalid_request_error', provider_reason: 'prompt_too_long', dependency_status: 400,
+  });
+  expect(diagnosticErrorTags(refusal('messages.3.content.1.image.source.base64: image exceeds 5 MB maximum')).provider_reason).toBe('invalid_image');
+  expect(diagnosticErrorTags(refusal('tools.2.custom.input_schema: JSON schema is invalid')).provider_reason).toBe('invalid_tool_schema');
+  // An unknown reason or a type outside the protocol vocabulary says nothing.
+  expect(diagnosticErrorTags(refusal('PRIVATE_ something else', 'PRIVATE_type'))).toEqual({ provider_error: 'api_call', dependency_status: 400 });
+  // A stream error after the response started carries its type itself.
+  expect(diagnosticErrorTags({ name: 'AI_StreamProviderError', type: 'overloaded_error', statusCode: 503, message: 'Overloaded' }))
+    .toEqual({ provider_error: 'stream_provider', provider_error_type: 'overloaded_error', dependency_status: 503 });
+
+  const tags = { component: 'chat-stream', ...diagnosticErrorTags(refusal('prompt is too long PRIVATE_')) };
+  const event = diagnosticEvent({ tags, exception: { values: [{ type: 'Error', value: 'prompt is too long PRIVATE_' }] } });
+  expect((event.exception as { values: Array<{ value: string }> }).values[0]!.value)
+    .toBe('Failure in chat-stream / api_call / invalid_request_error / prompt_too_long / 400');
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_');
+  // Appended only when present: an event without them groups as before.
+  expect(diagnosticEvent({ tags: { component: 'chat-stream', provider_error: 'api_call' } }).fingerprint).toHaveLength(14);
+  expect(event.fingerprint).toEqual(expect.arrayContaining(['invalid_request_error', 'prompt_too_long']));
+});
+
+it('names a Vercel AI Gateway refusal by its type, preferring the upstream body over the class default', () => {
+  // @ai-sdk/gateway marks every error with this symbol and wraps the APICallError as its cause.
+  const gatewayError = (name: string, type: string, upstreamType: string) => ({
+    [Symbol.for('vercel.ai.gateway.error')]: true, name, type, statusCode: 403, message: 'PRIVATE_ gateway text',
+    cause: { name: 'AI_APICallError', statusCode: 403, message: 'PRIVATE_', data: { error: { type: upstreamType, message: 'PRIVATE_' } } },
+  });
+  const forbidden = { name: 'AssistantStreamError', cause: gatewayError('GatewayForbiddenError', 'forbidden', 'forbidden') };
+  expect(diagnosticErrorTags(forbidden)).toMatchObject({ provider_error_type: 'forbidden', dependency_status: 403 });
+  // The SDK maps an upstream type it does not know to its internal_server_error class, keeping the 403.
+  // That class default is not the gateway's verdict on a 4xx, so the refusal carries its status and no type.
+  const unknown = diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'PRIVATE_type'));
+  expect(unknown).toMatchObject({ dependency_status: 403 });
+  expect(unknown).not.toHaveProperty('provider_error_type');
+  expect(diagnosticErrorTags({ ...gatewayError('GatewayInternalServerError', 'internal_server_error', 'PRIVATE_type'), statusCode: 500 }).provider_error_type).toBe('internal_server_error');
+  expect(diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'internal_server_error')).provider_error_type).toBe('internal_server_error');
+  expect(diagnosticErrorTags(gatewayError('GatewayInternalServerError', 'internal_server_error', 'permission_error')).provider_error_type).toBe('permission_error');
+  const event = diagnosticEvent({ tags: { component: 'chat-stream', ...diagnosticErrorTags(forbidden) } });
+  expect(event.tags).toMatchObject({ provider_error_type: 'forbidden' });
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_');
+});
+
+it('names an OpenRouter mandatory-reasoning 400 and an Anthropic credit-balance 400 by a fixed reason', () => {
+  const refusal = (message: string) => ({ name: 'AppError', cause: { name: 'AI_APICallError', statusCode: 400, message } });
+  expect(diagnosticErrorTags(refusal('[Google] Reasoning is mandatory for this endpoint and cannot be disabled.')).provider_reason).toBe('reasoning_required');
+  expect(diagnosticErrorTags(refusal('Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.')).provider_reason).toBe('credit_balance');
+  expect(diagnosticErrorTags(refusal('reasoning effort must be one of low, medium, high')).provider_reason).toBeUndefined();
+  expect(diagnosticErrorTags(refusal('Your credit card was declined')).provider_reason).toBeUndefined();
+  const event = diagnosticEvent({ tags: diagnosticErrorTags(refusal('Your credit balance is too low PRIVATE_')) });
+  expect(event.tags).toMatchObject({ provider_reason: 'credit_balance' });
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_');
+});
+
+it('keeps only a registry adapter id as the provider tag', () => {
+  expect(diagnosticEvent({ tags: { provider: 'azure-foundry' } }).tags).toEqual({ provider: 'azure-foundry' });
+  expect(diagnosticEvent({ tags: { provider: 'https://llm.private.example/v1' } }).tags).toEqual({});
 });
 
 it('allows only bounded network context and known model endpoints', () => {
@@ -266,6 +425,27 @@ it('allows only bounded network context and known model endpoints', () => {
   for (const operation of ['configured', 'ollama', 'openrouter', 'vercel', 'opencode-go']) {
     expect(diagnosticRoute(`/api/models/${operation}?key=private`)).toBe(`/api/models/${operation}`);
   }
+});
+
+// MIK-128: a backend that went away mid-response is a different moment from
+// one that refused the connection. It is its own pinned issue per code, the
+// connect-time fingerprint is unchanged, and a body timeout (a hang, not an
+// outage) is never pinned at all.
+it('splits a mid-stream gateway failure from a connect-time one and keeps body timeouts at default grouping', () => {
+  const gateway = (stage: string, code: string, pinned = true) => diagnosticEvent({
+    ...(pinned ? { fingerprint: ['upstream-unavailable'], level: 'warning' } : {}),
+    tags: { component: 'api-gateway', stage, http_method: 'POST', http_route: '/chat', http_status: 200, failure_code: code },
+    exception: { values: [{ type: 'TypeError', value: 'terminated' }] },
+  });
+  expect(gateway('gateway-fetch', 'ECONNREFUSED').fingerprint).toEqual(['upstream-unavailable', 'api-gateway', 'ECONNREFUSED']);
+  expect(gateway('gateway-stream', 'UND_ERR_SOCKET').fingerprint).toEqual(['upstream-unavailable', 'api-gateway', 'UND_ERR_SOCKET', 'gateway-stream']);
+  expect(gateway('gateway-stream', 'ECONNRESET').fingerprint).not.toEqual(gateway('gateway-fetch', 'ECONNRESET').fingerprint);
+  const timeout = gateway('gateway-stream', 'UND_ERR_BODY_TIMEOUT', false);
+  expect(timeout.fingerprint).toEqual(expect.arrayContaining(['{{ default }}', 'gateway-stream', 'UND_ERR_BODY_TIMEOUT']));
+  expect(timeout.fingerprint).not.toContain('upstream-unavailable');
+  // Other pinned conditions keep their fingerprint whatever their stage.
+  expect(diagnosticEvent({ fingerprint: ['api-unreachable'], tags: { component: 'mike-api', stage: 'api-unreachable', failure_code: 'fetch_failed' } }).fingerprint)
+    .toEqual(['api-unreachable', 'mike-api', 'fetch_failed']);
 });
 
 // MIKE-FRONTEND-J/4: an unreachable backend is one condition, not one issue
@@ -308,4 +488,116 @@ it('keeps the BYOK provider model and api-key routes readable', () => {
   for (const provider of ['bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom']) {
     expect(diagnosticRoute(`/api/user/api-keys/${provider}`)).toBe(`/api/user/api-keys/${provider}`);
   }
+});
+
+// Node prints its own process warnings through console.error from node:*
+// frames only; before this the boundary reduced them to "Failure in
+// application" with four SDK frames and no identifying tag (MIKE-BACKEND-2).
+it('keeps a Node process warning diagnosable: name, code and builtin frames, never its text', () => {
+  const out = diagnosticEvent({
+    tags: { component: 'runtime-warning', warning_name: 'DeprecationWarning', warning_code: 'DEP0040', stage: 'PRIVATE_STAGE' },
+    exception: { values: [{ type: 'DeprecationWarning', value: 'The `punycode` module is deprecated: PRIVATE_TEXT', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [
+      { filename: 'node:internal/process/warning', lineno: 85, colno: 9 },
+      { filename: '/app/node_modules/tr46/index.js', abs_path: '/app/node_modules/tr46/index.js', lineno: 3, colno: 18, in_app: false },
+      { filename: 'node:punycode', lineno: 3, colno: 9 },
+    ] } }] },
+  });
+  expect(out.tags).toEqual({ component: 'runtime-warning', warning_name: 'DeprecationWarning', warning_code: 'DEP0040' });
+  expect(out.exception).toEqual({ values: [{ type: 'DeprecationWarning', value: 'Failure in runtime-warning / DeprecationWarning / DEP0040', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [
+    { filename: 'node:internal/process/warning', lineno: 85, colno: 9 },
+    { filename: 'node_modules/tr46/index.js', abs_path: 'node_modules/tr46/index.js', lineno: 3, colno: 18, in_app: false },
+    { filename: 'node:punycode', lineno: 3, colno: 9 },
+  ] } }] });
+  // One issue per warning name and code, whichever module triggered it:
+  // the stack says where, the fingerprint does not split on it.
+  expect(out.fingerprint).toEqual(['runtime-warning', 'DeprecationWarning', 'DEP0040']);
+  expect(JSON.stringify(out)).not.toContain('PRIVATE');
+  // Only Node's own vocabulary survives; builtin specifiers cannot smuggle a path.
+  expect(diagnosticEvent({ tags: { warning_name: 'PrivateWarning', warning_code: 'PRIVATE-1' } }).tags).toEqual({});
+  expect(diagnosticEvent({ stacktrace: { frames: [
+    { filename: 'node:fs/promises?file=PRIVATE.pdf', lineno: 1 },
+    { filename: 'node:/Users/private/PRIVATE.pdf', lineno: 2 },
+    { filename: 'node:internal/../../Users/private/PRIVATE.pdf', lineno: 3 },
+    { filename: 'node:Jane_Doe.pdf', lineno: 4 },
+    { filename: 'node:internal/process/task_queues', lineno: 5 },
+  ] } }).stacktrace).toEqual({ frames: [{ filename: 'node:fs/promises', lineno: 1 }, { filename: 'node:internal/process/task_queues', lineno: 5 }] });
+});
+
+// What makes an event name a bug: the operation the request belonged to and
+// the thrower's own kind, both static source labels; the function that threw;
+// the exception class; and the stages the request passed through.
+describe('operation, error kind and stage trail', () => {
+  it('leads the title and the fingerprint with operation and error_kind', () => {
+    const out = diagnosticEvent({
+      tags: { operation: 'documents.upload.complete', component: 'upload-worker', stage: 'process-file', error_kind: 'conversion.no_output', file_type: 'docx' },
+      exception: { values: [{ type: 'ConversionError', value: 'PRIVATE Jane Doe NDA.docx', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [
+        { filename: '/app/dist/lib/convert.js', lineno: 252, colno: 11, in_app: true, function: 'convertWithLibreOffice' },
+        { filename: '/app/node_modules/execa/index.js', lineno: 9, colno: 3, in_app: false, function: 'execa' },
+      ] } }] },
+    });
+    expect(out.exception).toEqual({ values: [{ type: 'ConversionError', value: 'Failure in documents.upload.complete / upload-worker / process-file / conversion.no_output', mechanism: { type: 'generic', handled: true }, stacktrace: { frames: [
+      { filename: 'dist/lib/convert.js', lineno: 252, colno: 11, in_app: true, function: 'convertWithLibreOffice' },
+      { filename: 'node_modules/execa/index.js', lineno: 9, colno: 3, in_app: false },
+    ] } }] });
+    expect(out.fingerprint).toEqual(['{{ default }}', 'documents.upload.complete', 'conversion.no_output', '', 'upload-worker', 'process-file', '', '', '', 'docx', '', '', '', '']);
+    expect(JSON.stringify(out)).not.toContain('PRIVATE');
+  });
+
+  it('reads authored AppError identity without trusting a dependency kind property', () => {
+    const inner = Object.assign(new Error('inner'), { code: 'AccessDenied' });
+    identifyApplicationError(inner, 'storage.upload_failed');
+    expect(diagnosticErrorTags(new Error('outer', { cause: inner }))).toEqual({ error_kind: 'storage.upload_failed', failure_code: 'AccessDenied' });
+    expect(diagnosticErrorTags(Object.assign(new Error('x'), { kind: 'private.client_identifier' }))).toEqual({});
+    expect(diagnosticEvent({ tags: { operation: 'PRIVATE.pdf', error_kind: 'PRIVATE kind' } }).tags).toEqual({});
+  });
+
+  it('keeps function names only on repository frames and only in identifier form', () => {
+    const frames = diagnosticEvent({ stacktrace: { frames: [
+      { filename: 'backend/src/lib/storage.ts', lineno: 1, function: 'async uploadFile' },
+      { filename: 'backend/src/lib/storage.ts', lineno: 2, function: 'Object.<anonymous>' },
+      { filename: 'backend/src/lib/storage.ts', lineno: 3, function: 'Jane Doe medical claim' },
+      { filename: 'backend/src/lib/storage.ts', lineno: 4, function: 'Private_NDA.pdf' },
+      { filename: 'backend/src/lib/storage.ts', lineno: 5, function: '秘密の依頼人契約' },
+      { filename: 'node_modules/pg/lib/client.js', lineno: 6, function: 'Client.query' },
+      { filename: 'node:internal/process/task_queues', lineno: 7, function: 'processTicksAndRejections' },
+    ] } }).stacktrace as { frames: Array<Record<string, unknown>> };
+    expect(frames.frames.map(f => f.function ?? null)).toEqual(['async uploadFile', 'Object.<anonymous>', null, null, null, null, null]);
+  });
+
+  it('keeps our own exception class names and nothing that is not shaped like one', () => {
+    const type = (t: string) => (diagnosticEvent({ exception: { values: [{ type: t }] } }).exception as { values: Array<{ type: string }> }).values[0]!.type;
+    expect(type('StorageOperationError')).toBe('StorageOperationError');
+    expect(type('PlaybookRequestError')).toBe('PlaybookRequestError');
+    expect(type('DeprecationWarning')).toBe('DeprecationWarning');
+    expect(type('Private NDA Error')).toBe('Error');
+    expect(type('privateError')).toBe('Error');
+    expect(type('Jane.pdf')).toBe('Error');
+  });
+
+  it('keeps the stage trail and no other breadcrumb', () => {
+    const out = diagnosticEvent({ breadcrumbs: [
+      { category: 'mike.stage', message: 'claim', timestamp: 1 },
+      { category: 'mike.stage', message: 'Private NDA.pdf', timestamp: 2 },
+      { category: 'http', message: 'GET /documents/Private.pdf', data: { url: 'x' }, timestamp: 3 },
+      { category: 'mike.stage', message: 'process-file', timestamp: 4, data: { filename: 'Private.pdf' } },
+    ] });
+    expect(out.breadcrumbs).toEqual([{ category: 'mike.stage', message: 'claim', timestamp: 1 }, { category: 'mike.stage', message: 'process-file', timestamp: 4 }]);
+    expect(JSON.stringify(out)).not.toContain('Private');
+    expect(diagnosticEvent({ breadcrumbs: [{ category: 'http', message: 'x' }] })).not.toHaveProperty('breadcrumbs');
+  });
+
+  it("maps bestEffort's static `what` onto the stage tag", () => {
+    expect(diagnosticEvent({ tags: { component: 'best-effort', what: 'copy-rollback' } }).tags).toEqual({ component: 'best-effort', stage: 'copy-rollback' });
+    expect(diagnosticEvent({ tags: { component: 'best-effort', what: 'Private.pdf' } }).tags).toEqual({ component: 'best-effort' });
+  });
+});
+
+// A nested node_modules path is still dependency code, even inside backend/.
+it('does not mistake dependencies under an application directory for our functions', () => {
+  const out = diagnosticEvent({ stacktrace: { frames: [
+    { filename: '/app/backend/node_modules/sdk/index.js', function: 'Object.JaneDoeClaim', in_app: false, lineno: 4 },
+    { filename: '/app/backend/src/job.ts', function: 'runJob', in_app: true, lineno: 9 },
+  ] } });
+  expect(JSON.stringify(out)).not.toContain('JaneDoeClaim');
+  expect(JSON.stringify(out)).toContain('runJob');
 });

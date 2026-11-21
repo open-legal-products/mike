@@ -140,6 +140,33 @@ export function documentUploadFolderSegments(
     return documentUploadPathSegments(entry).slice(0, -1);
 }
 
+/**
+ * An upload's files split by where they land: directly in the target
+ * folder, or under one of the dropped top-level folders. Each file's path is
+ * parsed once, so a folder row reads its own files instead of filtering
+ * every file of the upload.
+ */
+export function groupUploadFilesByTopFolder<
+    F extends { entry: Pick<DocumentUploadEntry, "relativePath" | "file"> },
+>(files: readonly F[]) {
+    const direct: F[] = [];
+    const byFolder = new Map<string, F[]>();
+    for (const file of files) {
+        const topFolder = documentUploadFolderSegments(file.entry)[0];
+        if (topFolder === undefined) {
+            direct.push(file);
+            continue;
+        }
+        let group = byFolder.get(topFolder);
+        if (!group) byFolder.set(topFolder, (group = []));
+        group.push(file);
+    }
+    return {
+        direct,
+        inFolder: (name: string): readonly F[] => byFolder.get(name) ?? [],
+    };
+}
+
 export function documentUploadProgressEntries(
     entries: readonly DocumentUploadEntry[],
 ): DocumentUploadProgressEntry[] {

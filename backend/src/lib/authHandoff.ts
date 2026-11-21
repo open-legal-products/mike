@@ -3,6 +3,9 @@ import type { Session } from "@supabase/supabase-js";
 import { createServerSupabase } from "./supabase";
 import { authHandoffEncryptionSecret } from "./runtimeConfig";
 import type { Db } from "./supabase";
+import { AppError } from "./appError";
+import { reportError } from "./observability/sentry";
+import { log } from "./log";
 
 const HANDOFF_TABLE = "auth_handoff_tickets";
 const DEFAULT_TTL_SECONDS = 120;
@@ -141,7 +144,15 @@ export async function issueAuthHandoff(input: {
     .delete()
     .lt("expires_at", new Date().toISOString());
   if (cleanup.error) {
-    console.warn("[auth/handoff] expired-ticket cleanup failed", {
+    // Issuing goes ahead; a cleanup that keeps failing leaves consumed and
+    // expired tickets accumulating, which is worth seeing.
+    reportError(
+      new AppError("auth.handoff_failed", "expired-ticket cleanup failed", {
+        cause: cleanup.error,
+      }),
+      { level: "warning" },
+    );
+    log.warn("auth/handoff", "expired-ticket cleanup failed", {
       code: cleanup.error.code,
     });
   }

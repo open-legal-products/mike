@@ -1,16 +1,18 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
+import { AppError } from "../appError";
 import { SearchApiError } from "./http";
 import { SEARCH_SERVICES } from "./services";
 import type { WebSearchAccount, WebSearchResult } from "./types";
 
-export class WebSearchUnavailableError extends Error {
+export class WebSearchUnavailableError extends AppError {
     constructor(
         readonly code: "not_configured" | "rejected" | "failed",
         options?: ErrorOptions,
     ) {
-        super(`Web search unavailable: ${code}`, options);
-        this.name = "WebSearchUnavailableError";
+        super(`web_search.${code}`, `Web search unavailable: ${code}`, {
+            cause: options?.cause,
+        });
     }
 }
 

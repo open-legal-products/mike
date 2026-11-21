@@ -26,9 +26,8 @@ import {
   type OrgApiKeySettings,
 } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import type { RouterSlug } from "@/shared/lib/modelCatalog";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import type { RouterSlug } from "@mike/client";
+import { PillButtonUI, ToggleSwitchUI } from "@mike/ui";
 
 // An organization's model providers: the keys its work runs on and the
 // models each may run. A member's own keys never stand in where it has none.

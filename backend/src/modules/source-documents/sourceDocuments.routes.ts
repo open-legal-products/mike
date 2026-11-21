@@ -1,13 +1,14 @@
 // HTTP layer for the source-documents module.
 //
 // Mounted at /documents (the `documents` module mounts at /single-documents);
-// serves the case-law source corpus. The handler parses the opaque document
-// id, calls sourceDocuments.service, and maps its typed result onto a status
-// code and JSON — an unresolvable id is a 404, a missing or rejected
-// CourtListener token a 400 with a fixed message, and an upstream provider
-// failure a 502 whose raw error never reaches the client. `?workspace=`
-// names the workspace the citation was opened from, whose CourtListener
-// token is used; its absence means Personal.
+// serves provider-backed source documents (CourtListener case law and Legal
+// Data Hunter documents today, read again rather than stored). The handler
+// parses the opaque document id, calls sourceDocuments.service, and maps its
+// typed result onto a status code and JSON — an unresolvable id is a 404, a
+// missing or rejected provider credential a 400 with a fixed, user-facing
+// message, and an upstream provider failure a 502 whose raw error never
+// reaches the client. `?workspace=` names the workspace the citation was
+// opened from, whose connections are used; its absence means Personal.
 
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";

@@ -33,13 +33,13 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { UserMessage } from "@/app/components/assistant/UserMessage";
 import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
-import { withDelegationEvents } from "@/app/components/assistant/message/eventUtils";
+import { createProjectMutationSignature } from "./projectMutationSignature";
 import {
     ChatInput,
     type ChatInputHandle,
 } from "@/app/components/assistant/ChatInput";
 import { ChatInputPrompt } from "@/app/components/assistant/ChatInputPrompt";
-import { ResponseSelectionMenuUI } from "@/shared/ui/ResponseSelectionMenuUI";
+import { ResponseSelectionMenuUI, MikeIcon } from "@mike/ui";
 import { ChatPanelHeader } from "@/app/components/shared/ChatPanelHeader";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
@@ -47,7 +47,6 @@ import {
     getModelProvider,
     providerLabel,
 } from "@/app/lib/modelAvailability";
-import { MikeIcon } from "@/shared/ui/MikeIconUI";
 import type {
     Chat,
     Citation,
@@ -59,7 +58,7 @@ import { can, roleFromLoaded } from "@/app/lib/permissions";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
+import type { MessageExcerpt } from "@mike/client";
 
 const ICON_SIZE = 28;
 const GAP = 14;
@@ -377,40 +376,8 @@ export function ProjectChatPanel({
     // tell the workspace so the explorer picks up the new/changed files
     // without a manual reload. Keyed by completed mutation events only, so
     // it refetches once the backend has finished persisting the change.
-    const projectMutationSignature = useMemo(() => {
-        const created: string[] = [];
-        const replicated: string[] = [];
-        const edited = new Set<string>();
-        for (const msg of messages) {
-            for (const ev of withDelegationEvents(msg.events ?? [])) {
-                if ("isStreaming" in ev && ev.isStreaming) continue;
-                if (ev.type === "doc_created" && ev.document_id) {
-                    created.push(
-                        `${ev.document_id}:${ev.version_id ?? ""}:${ev.filename}`,
-                    );
-                    continue;
-                }
-                if (ev.type === "doc_replicated") {
-                    for (const c of ev.copies ?? []) {
-                        replicated.push(
-                            `${c.document_id}:${c.version_id}:${c.new_filename}`,
-                        );
-                    }
-                    continue;
-                }
-                if (ev.type === "doc_edited") {
-                    edited.add(
-                        `${ev.document_id}:${ev.version_id ?? ""}:${ev.version_number ?? ""}`,
-                    );
-                }
-            }
-        }
-        return [
-            `created=${created.sort().join(",")}`,
-            `replicated=${replicated.sort().join(",")}`,
-            `edited=${Array.from(edited).sort().join(",")}`,
-        ].join("|");
-    }, [messages]);
+    const mutationSignature = useMemo(() => createProjectMutationSignature(), []);
+    const projectMutationSignature = mutationSignature(messages);
 
     const reportedMutationSignature = useRef(projectMutationSignature);
     useEffect(() => {
@@ -681,6 +648,10 @@ export function ProjectChatPanel({
         }
     }
 
+    const isEditReloading = useCallback((id: string) => !!resolvingEdits[id], [resolvingEdits]);
+    const resolvingDocumentIds = useMemo(() => new Set(Object.values(resolvingEdits)), [resolvingEdits]);
+    const isDocReloading = useCallback((id: string) => resolvingDocumentIds.has(id), [resolvingDocumentIds]);
+
     return (
         <>
             <div
@@ -930,14 +901,8 @@ export function ProjectChatPanel({
                                         }
                                         onEditViewClick={onEditViewClick}
                                         onEditResolveStart={onEditResolveStart}
-                                        isEditReloading={(editId) =>
-                                            !!resolvingEdits[editId]
-                                        }
-                                        isDocReloading={(documentId) =>
-                                            Object.values(
-                                                resolvingEdits,
-                                            ).includes(documentId)
-                                        }
+                                        isEditReloading={isEditReloading}
+                                        isDocReloading={isDocReloading}
                                         resolvedEditStatuses={
                                             resolvedEditStatuses
                                         }

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { AppError } from "../../../lib/appError";
+import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import {
   BLANK_RULE_CONCEPT,
   blankPlaybookContent,
@@ -9,6 +11,7 @@ import {
   playbookImportFailureMessage,
   normalizeFindings,
   playbookModelAvailability,
+  PlaybookImportError,
   PlaybookRequestError,
   runFailureMessage,
   validatePlaybookCompilationWithRetry,
@@ -79,6 +82,39 @@ const oneParagraph = {
   ],
   text: "[P1] Liability is capped at fees paid in the prior 12 months.",
 };
+
+describe("playbook failure classes", () => {
+  // Each names its failure with a closed-vocabulary kind so a report carries
+  // error_kind; what the router reads (status, code) and what tests match
+  // on (name, message) are unchanged.
+  it("a request error is an AppError under playbooks.request_invalid with its status", () => {
+    const error = new PlaybookRequestError("Select a model.", 409);
+    expect(error).toBeInstanceOf(AppError);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.kind).toBe("playbooks.request_invalid");
+    expect(error.status).toBe(409);
+    expect(error.name).toBe("PlaybookRequestError");
+    expect(error.message).toBe("Select a model.");
+    expect(new PlaybookRequestError("Bad").status).toBe(400);
+  });
+
+  it("an import error is an AppError under playbooks.import_failed with its code, stage and cause", () => {
+    const cause = Object.assign(new Error("refused"), { code: "57014" });
+    const error = new PlaybookImportError("Import failed", "import-1", "compiling", {
+      cause,
+    });
+    expect(error).toBeInstanceOf(AppError);
+    expect(error.kind).toBe("playbooks.import_failed");
+    expect(error.code).toBe("PLAYBOOK_IMPORT_FAILED");
+    expect(error.stage).toBe("compiling");
+    expect(error.name).toBe("PlaybookImportError");
+    expect(error.cause).toBe(cause);
+    expect(diagnosticErrorTags(error)).toEqual({
+      error_kind: "playbooks.import_failed",
+      failure_code: "57014",
+    });
+  });
+});
 
 describe("playbook content validation", () => {
   it("normalizes model-generated condition objects into readable strings", () => {

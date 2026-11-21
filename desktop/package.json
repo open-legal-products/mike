@@ -5,6 +5,9 @@
   "private": true,
   "description": "Mike for Mac — desktop shell around the Mike web app",
   "main": "src/main.js",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "start": "electron .",
     "dev": "MIKE_DESKTOP_DEV=1 electron .",

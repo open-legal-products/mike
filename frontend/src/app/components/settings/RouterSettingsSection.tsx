@@ -5,7 +5,7 @@ import { Check, ChevronDown, Loader2, X } from "lucide-react";
 import {
   DropdownButton,
   DropdownSurface,
-} from "@/shared/ui/dropdown";
+} from "@mike/ui";
 import { OptionPill } from "@/app/components/ui/option-pill";
 import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
@@ -23,7 +23,7 @@ import {
   routerSelections,
   type RouterSelections,
   type RouterSlug,
-} from "@/shared/lib/modelCatalog";
+} from "@mike/client";
 import {
   type AccountModelProvider,
   isSafeAccountModelId,
@@ -131,7 +131,7 @@ const ROUTER_MODEL_ID: Record<
  * longer id is a guaranteed 400 from the profile PATCH. Enforcing it here
  * turns that round trip into an immediate, specific message.
  */
-export const MAX_MODEL_ID_LENGTH = 200;
+const MAX_MODEL_ID_LENGTH = 200;
 
 /**
  * The id a typed string would become, before it is validated. The router slug

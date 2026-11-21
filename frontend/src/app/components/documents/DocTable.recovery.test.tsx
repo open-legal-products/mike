@@ -8,7 +8,7 @@ import {
     type DocTableFolder,
     type DocTableSelectionActions,
 } from "./DocTable";
-import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
+import { ToastViewportUI, clearToasts } from "@mike/ui";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { deleteDocument, downloadDocumentsZip } from "@/app/lib/mikeApi";
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({

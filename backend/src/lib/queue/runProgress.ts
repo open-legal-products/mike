@@ -1,3 +1,4 @@
+import type { AssistantErrorCode } from "@mike/contracts";
 import { getRedisProducerConnection, withRedisTimeout } from "./connection";
 import { redisEnabled } from "../dbq/driver";
 
@@ -29,7 +30,7 @@ export interface GenerationErrorUpdate {
     type: "error";
     message: string;
     safe_to_display?: true;
-    code?: "invalid_api_key";
+    code?: AssistantErrorCode;
 }
 
 export type RunProgressUpdate = CellUpdate | GenerationErrorUpdate;

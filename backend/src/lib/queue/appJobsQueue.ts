@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import type IORedis from "ioredis";
-import { getRedisProducerConnection, withRedisTimeout } from "./connection";
+import { getRedisProducerConnection, withRedisTimeout, watchQueueErrors } from "./connection";
 
 /**
  * BullMQ *delivery* queue for the DB-backed registry jobs (audit, deletion,
@@ -39,6 +39,7 @@ export function getAppJobsQueue(): Queue<AppJobDelivery> {
     }
     if (!queue) {
         queue = new Queue<AppJobDelivery>(APP_JOBS_QUEUE, { connection });
+        watchQueueErrors(queue, "producer", APP_JOBS_QUEUE);
         queueConnection = connection;
     }
     return queue;

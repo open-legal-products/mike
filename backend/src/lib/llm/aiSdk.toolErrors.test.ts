@@ -71,6 +71,16 @@ describe("success path is untouched", () => {
     expect(model.doStreamCalls.length).toBe(2);
   });
 
+  it("cache regression: preserves provider-reported cache reads and writes", async () => {
+    const end = finish("stop");
+    if (end.type !== "finish") throw Error("expected finish");
+    end.usage = { ...end.usage, inputTokens: { total: 10, noCache: 2, cacheRead: 5, cacheWrite: 3 } };
+    const model = await makeModel([step(...text("done"), end)]);
+    const onUsage = vi.fn();
+    await streamAiSdk({ ...base, callbacks: { onUsage } }, config(model));
+    expect(onUsage).toHaveBeenCalledWith({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 5, cacheWriteTokens: 3 }, "stop");
+  });
+
   it("reports each step's tokens and finish reason to onUsage", async () => {
     const model = await makeModel([
       callStep("c1", "read_document", { doc_id: "doc-0" }),
@@ -85,6 +95,51 @@ describe("success path is untouched", () => {
       [{ inputTokens: 10, outputTokens: 5 }, "tool-calls"],
       [{ inputTokens: 10, outputTokens: 5 }, "stop"],
     ]);
+  });
+
+  it.each([false, true])("sends a source breakpoint only when the adapter supports it (%s)", async (supported) => {
+    const model = await makeModel([textStep("done")]);
+    await streamAiSdk({ ...base, tools: [],
+      messages: [{ role: "user", content: "Source\nInstructions" }], sourcePrefixLength: 6,
+    }, { ...config(model), anthropicCachePoint: supported });
+    const user = model.doStreamCalls[0].prompt.find(message => message.role === "user");
+    expect(user?.content).toEqual(supported ? [
+      { type: "text", text: "Source", providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } },
+      { type: "text", text: "\nInstructions" },
+    ] : [{ type: "text", text: "Source\nInstructions" }]);
+  });
+
+  it("delivers a terminal notice separately from model text when the caller supports it", async () => {
+    const truncated = 'Answer [1].\n<CITATIONS>[{"ref":1,"quote":"cut';
+    const model = await makeModel([step(...text(truncated), finish("length"))]);
+    const callbacks = { onContentDelta: vi.fn(), onStopNotice: vi.fn() };
+
+    const result = await streamAiSdk({ ...base, callbacks }, config(model));
+
+    const notice = stopNotice(1, base.maxIterations, "length");
+    expect(callbacks.onContentDelta.mock.calls.map(([delta]) => delta).join("")).toBe(truncated);
+    expect(callbacks.onStopNotice).toHaveBeenCalledExactlyOnceWith(notice);
+    expect(result.fullText).toBe(truncated + notice);
+  });
+
+  it("still streams a length notice for callers without a separate notice callback", async () => {
+    const model = await makeModel([step(...text("Partial answer."), finish("length"))]);
+    const onContentDelta = vi.fn();
+
+    const result = await streamAiSdk({ ...base, callbacks: { onContentDelta } }, config(model));
+
+    expect(onContentDelta.mock.calls.map(([delta]) => delta).join("")).toBe(result.fullText);
+    expect(result.fullText).toContain("output limit");
+  });
+
+  it("does not report a stop notice for a normal completion", async () => {
+    const model = await makeModel([textStep("Finished answer.")]);
+    const callbacks = { onContentDelta: vi.fn(), onStopNotice: vi.fn() };
+
+    const result = await streamAiSdk({ ...base, callbacks }, config(model));
+
+    expect(result.fullText).toBe("Finished answer.");
+    expect(callbacks.onStopNotice).not.toHaveBeenCalled();
   });
 
   it("forbids tool calls on the last step when asked to finish without them", async () => {
@@ -165,10 +220,12 @@ describe("upstream provider guidance stays separate from tool failures", () => {
   const cases = [
     [401, "", "was rejected"],
     [402, "", "out of credits"],
-    [403, "", "isn't available"],
-    [404, "", "isn't available"],
+    // 403/404 and a zero quota are guidance only on the provider's own
+    // verdict (providerErrors.test.ts covers the recognized shapes).
+    [403, "Your organization does not have access to this model", "isn't available"],
+    [404, '{"error":{"code":"model_not_found"}}', "isn't available"],
     [429, "", "rate limit or quota reached"],
-    [429, "limit: 0", "plan doesn't include"],
+    [429, "Quota exceeded for metric: free_tier_requests, limit: 0", "plan doesn't include"],
   ] as const;
 
   for (const source of ["stream part", "before stream"] as const) {
@@ -190,6 +247,32 @@ describe("upstream provider guidance stays separate from tool failures", () => {
         }
         expect(caught).toBeInstanceOf(UserFacingError);
         expect((caught as Error).message).toContain(message);
+      },
+    );
+  }
+
+  // A bare 403/404 may be a WAF, a region block or a wrong endpoint: not
+  // something "select another model" fixes, so it must reach its reporter
+  // as the provider's own error rather than as guidance.
+  for (const source of ["stream part", "before stream"] as const) {
+    it.each([403, 404])(
+      `${source}: an unexplained provider %i stays the provider's error`,
+      async (statusCode) => {
+        const error = Object.assign(new Error("provider request failed"), {
+          statusCode,
+          responseBody: "",
+        });
+        const model = await makeModel(
+          source === "stream part" ? [step({ type: "error", error })] : [error],
+        );
+        let caught: unknown;
+        try {
+          await streamAiSdk({ ...base, runTools: okRunTools }, config(model));
+        } catch (thrown) {
+          caught = thrown;
+        }
+        expect(caught).toBe(error);
+        expect(caught).not.toBeInstanceOf(UserFacingError);
       },
     );
   }

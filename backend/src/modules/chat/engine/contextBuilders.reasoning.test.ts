@@ -325,3 +325,20 @@ describe("buildMessages reasoning passthrough", () => {
     ]);
   });
 });
+
+it("shares one lazy history read within a turn but starts fresh for the next turn", async () => {
+  const { createAssistantHistoryLoader } = await import("./contextBuilders.js");
+  let reads = 0;
+  const query = {
+    select() { return this; }, eq() { return this; }, not() { return this; },
+    order() { reads++; return Promise.resolve({ data: [{ content: [{ type: "content", text: `turn ${reads}` }] }], error: null }); },
+  };
+  const db = { from: () => query } as unknown as Parameters<typeof createAssistantHistoryLoader>[0];
+  const history = createAssistantHistoryLoader(db, "chat");
+  expect(reads).toBe(0);
+  const [documents, reasoning] = await Promise.all([history(), history()]);
+  expect(documents).toBe(reasoning);
+  expect(reads).toBe(1);
+  await createAssistantHistoryLoader(db, "chat")();
+  expect(reads).toBe(2);
+});

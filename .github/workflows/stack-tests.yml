@@ -22,6 +22,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+
 # Booting a Supabase stack is the slowest job in the repo, so cancel runs
 # that a newer push to the same PR has superseded. Pushes to main each get
 # their own group (keyed by sha) and are never cancelled.
@@ -31,6 +35,8 @@ concurrency:
 
 jobs:
   stack:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Supabase stack integration tests
     runs-on: ubuntu-latest
     timeout-minutes: 25

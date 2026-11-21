@@ -1,4 +1,5 @@
-import { checkProjectAccess, listAccessibleProjectIds } from "../access";
+import { listAccessibleProjectIds } from "../access";
+import { selectInBatches } from "../batchedQuery";
 import { chunkArray } from "../arrays";
 import type { Db } from "../dbq/types";
 import { getMemoryCurrent } from "./files";
@@ -83,15 +84,31 @@ export async function buildMemoryArchive(
   const projects = (await loadProjectLabels(db, projectIds)).filter(
     (project) => (project.org_id ?? null) === orgId,
   );
+  // listAccessibleProjectIds is this run's access verdict (it is computed
+  // when the queued export executes, not when it was requested), so each
+  // project is not re-checked one by one, and the memory bodies are read in
+  // batches rather than one ensure-or-create round trip per project. A
+  // project with no memory file yet exports an empty memory.md, as before,
+  // without an export creating rows.
+  type ProjectMemoryRow = { project_id: string; content: string | null };
+  const memoryByProject = new Map(
+    (
+      await selectInBatches<ProjectMemoryRow>(
+        "project memory export",
+        projects.map((project) => project.id),
+        (batch) =>
+          db
+            .from("memory_files")
+            .select("project_id, content")
+            .eq("scope", "project")
+            .in("project_id", batch),
+      )
+    ).map((row) => [row.project_id, row.content ?? ""]),
+  );
   for (const project of projects) {
-    // Access can change while an export waits in the durable queue. Re-check
-    // immediately before reading each shared file and omit revoked projects.
-    const access = await checkProjectAccess(project.id, userId, userEmail, db);
-    if (!access.ok) continue;
-    const memory = await getMemoryCurrent(db, "project", project.id);
     const safeId = project.id.replace(/[^a-zA-Z0-9-]/g, "") || "project";
     const directory = `${archiveSegment(project.name ?? "project")}--${safeId}`;
-    zip.file(`projects/${directory}/memory.md`, memory.current.content);
+    zip.file(`projects/${directory}/memory.md`, memoryByProject.get(project.id) ?? "");
   }
 
   return zip.generateAsync({

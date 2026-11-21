@@ -31,14 +31,14 @@ describe("SidebarPlaybookRunItem", () => {
         fireEvent.mouseEnter(link);
         expect(title.style.transform).toBe("translateX(-100px)");
         fireEvent.mouseLeave(link);
-        expect(title.style.transform).toBe("translateX(-0px)");
+        expect(title.style.transform).toBe("translateX(0px)");
     });
 
     it("leaves a title that fits where it is", () => {
         render(<SidebarPlaybookRunItem run={run} isActive={false} onOpen={vi.fn()} />);
         const title = measure(120, 160);
         fireEvent.mouseEnter(screen.getByRole("link"));
-        expect(title.style.transform).toBe("translateX(-0px)");
+        expect(title.style.transform).toBe("translateX(0px)");
     });
 
     it("shows a spinner while running and a tick once finished", () => {

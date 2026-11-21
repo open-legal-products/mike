@@ -1,4 +1,4 @@
-import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { LIQUID_GLASS_FLAT_CLASS } from "@mike/ui";
 
 /**
  * Card surface for assistant response blocks, citation quotes, and tracked

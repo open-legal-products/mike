@@ -44,7 +44,15 @@ and local email capture without requiring managed infrastructure.
 3. Add an Anthropic, Gemini, or OpenAI API key to `backend/.env`, unless you
    plan to use Ollama exclusively.
 
-4. Start the stack:
+4. Start the stack. Either run the published images (built once in CI, with
+   their Sentry source maps and release) by pinning a version in `.env`:
+
+   ```bash
+   echo "MIKE_IMAGE_TAG=$(cat VERSION)" >> .env
+   docker compose pull && docker compose up --no-build -d
+   ```
+
+   or build everything from this checkout:
 
    ```bash
    docker compose up --build
@@ -60,11 +68,25 @@ The bundled credentials and infrastructure are intended for local development
 only. See [Local development](docs/local-development.md) for service endpoints,
 authentication behavior, Ollama setup, and first-run guidance.
 
+### Deploy on Vercel
+
+To run Mike without Docker or servers of your own, deploy it to Vercel with a
+Marketplace Supabase project for the database, sign-in and files. See
+[Deploy on Vercel](docs/vercel.md) for the one-click button and its limits.
+Open your new deployment as soon as it is ready: its first visitor creates
+the first account.
+
 ### Telemetry
 
 Mike sends scrubbed error reports (no document content, user identities, or
-request data) to the project's Sentry by default. Set `SENTRY_DISABLED=true` to
-opt out, or set `SENTRY_DSN` to use your own. See the
+request data) to the project's Sentry by default. Development builds (`next dev`,
+the backend run from source, the add-in's dev server) send nothing unless you
+set a DSN yourself. Set `SENTRY_DISABLED=true` to
+opt out, or set `SENTRY_DSN` and `FRONTEND_SENTRY_DSN` to use your own. The
+backend's structured logs and counters are sent only if you set
+`SENTRY_LOGS=on`. Both
+take effect at runtime for the published images as well, because browser
+reports travel through the Next server. See the
 [observability guide](docs/observability.md) for the exact policy, per-runtime
 variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 
@@ -102,7 +124,7 @@ variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 
 Mike's system assistant and tabular-review workflows are maintained in the
 [`Open-Legal-Products/mike-workflows`](https://github.com/Open-Legal-Products/mike-workflows)
-repository. See [Contributing](CONTRIBUTING.md#system-workflows) for how they are
+repository. See [Contributing](CONTRIBUTING.md#mike-workflows) for how they are
 packaged and synchronized with this application.
 
 ## License

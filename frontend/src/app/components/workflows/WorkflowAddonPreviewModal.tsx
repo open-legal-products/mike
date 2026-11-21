@@ -9,7 +9,7 @@ import {
   LIQUID_GLASS_HOVER_CLASS,
   LIQUID_SUBTLE_PANEL_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { TabPillButtonUI } from "@mike/ui";
 import { Modal } from "../modals/Modal";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import { PdfView } from "../shared/views/PdfView";
@@ -217,8 +217,15 @@ function AddonAssetViewer({
   });
 
   if (viewType === "spreadsheet") {
+    // The modal offers no download or upload, so failure copy must not
+    // advise one.
     return (
-      <SpreadsheetView documentId={asset.id} displayUrl={displayUrl} rounded />
+      <SpreadsheetView
+        documentId={asset.id}
+        displayUrl={displayUrl}
+        rounded
+        fileActions={false}
+      />
     );
   }
   return (

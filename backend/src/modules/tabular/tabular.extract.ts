@@ -1,20 +1,15 @@
 // Extraction for the tabular-review module: the LLM cell-extraction helpers
 // and document (PDF/DOCX/Office) text extraction.
 
-import { docxToPdf, normalizeDocxZipPaths } from "../../lib/convert";
-import {
-    isPresentationDocumentType,
-    isSpreadsheetDocumentType,
-    isWordDocumentType,
-} from "../../lib/documentTypes";
-import { extractPresentationText } from "../../lib/officeText";
-import { spreadsheetToLLMText } from "../../lib/spreadsheet";
+import { cachedTextForModel } from "../../lib/documentTextCache";
+import { runIsolatedExtraction } from "../../lib/extraction/isolated";
 import {
     completeText,
     streamChatWithTools,
     type UserApiKeys,
 } from "../../lib/llm";
-import { loadPdfjs } from "../../lib/pdfjs";
+import { AppError } from "../../lib/appError";
+import { reportModelFailure } from "../../lib/llm/providerFailureReport";
 import { formatPromptSuffix } from "./tabular.prompt";
 import { type CellResult, type Column } from "./tabular.shared";
 
@@ -51,7 +46,19 @@ The "summary" field must contain only the extracted value with inline citations 
             apiKeys,
         });
     } catch (err) {
-        console.error("[queryTabularCell] completion failed", err);
+        // Reported once, here, under the kind that names the failure; the
+        // provider's own error is the cause, so its class and HTTP status
+        // reach Sentry as provider_error / dependency_status. The caller
+        // answers its existing 500 and must not report again. Logging the
+        // reported object (not the raw one) keeps the console bridge from
+        // filing a second event.
+        const failure = new AppError(
+            "tabular.generation_failed",
+            "Tabular cell completion failed",
+            { cause: err },
+        );
+        // This cell has no account-remedy UI; keep its failure visible.
+        reportModelFailure(failure, {}, "[queryTabularCell] completion failed");
         return null;
     }
     try {
@@ -125,6 +132,7 @@ export async function queryTabularAllColumns(
     apiKeys?: UserApiKeys,
     abortSignal?: AbortSignal,
     onActivity?: () => void,
+    reportFailure: boolean | ((error: unknown) => boolean) = true,
 ): Promise<void> {
     const columnsDesc = columns
         .map((col) => {
@@ -148,7 +156,8 @@ Rules:
 - The "summary" and "reasoning" string VALUES may use markdown (bullets, bold, italics, etc.) — escape newlines as \\n inside the JSON string. This markdown is rendered in the UI.
 - Output ONLY the JSON lines themselves. Do NOT wrap the response in markdown code fences (e.g. \`\`\`json), and do not add any preamble or summary.`;
 
-    const USER = `Document: ${filename}\n\n${documentText}\n\n---\nColumns to extract:\n${columnsDesc}`;
+    const sourcePrefix = `Document: ${filename}\n\n${documentText}`;
+    const USER = `${sourcePrefix}\n\n---\nColumns to extract:\n${columnsDesc}`;
 
     let contentBuffer = "";
     const pending: Promise<unknown>[] = [];
@@ -190,6 +199,7 @@ Rules:
             model,
             systemPrompt: SYSTEM,
             messages: [{ role: "user", content: USER }],
+            sourcePrefixLength: sourcePrefix.length,
             tools: [],
             apiKeys,
             abortSignal,
@@ -211,8 +221,26 @@ Rules:
         });
     } catch (err) {
         streamError = err;
-        if (!abortSignal?.aborted) {
-            console.error("[queryTabularAllColumns] stream failed", err);
+        if (
+            !abortSignal?.aborted &&
+            (typeof reportFailure === "function" ? reportFailure(err) : reportFailure)
+        ) {
+            // Inline callers report here (a run says whether the failure is
+            // new to it); queue callers let the runner own retries and severity. Reported once, here, under the kind that names the failure, with
+            // the provider's error as the cause (provider_error and
+            // dependency_status come from it). The raw error is still what is
+            // rethrown: the row orchestrator classifies it for the grid, and
+            // its own log of it is a warning, not a second event.
+            const failure = new AppError(
+                "tabular.generation_failed",
+                "Tabular row completion stream failed",
+                { cause: err },
+            );
+            reportModelFailure(
+                failure,
+                {},
+                "[queryTabularAllColumns] stream failed",
+            );
         }
     }
 
@@ -225,94 +253,25 @@ Rules:
 // Document text extraction
 // ---------------------------------------------------------------------------
 
+export {
+    extractDocxMarkdown,
+    extractPdfMarkdown,
+} from "../../lib/extraction/documentMarkdown";
+
 /**
- * Route a document buffer to the right text extractor for its file type:
- * PDFs and DOCX extract directly; spreadsheets go through SheetJS; PPTX has a
- * native XML extractor; remaining Office types take the LibreOffice → PDF
- * detour.
+ * Canonical accepted-view source text, matching the durable search index.
+ * Keep the historical name for callers; Markdown decoration must not depend
+ * on whether indexing finished. Parsing stays in the bounded worker.
  */
 export async function extractDocumentMarkdown(
-    buf: ArrayBuffer,
+    loadSource: () => Promise<ArrayBuffer | null>,
     fileType: string | null | undefined,
 ): Promise<string> {
-    const normalizedType = (fileType ?? "").toLowerCase();
-    if (normalizedType === "pdf") return extractPdfMarkdown(buf);
-    if (normalizedType === "docx") return extractDocxMarkdown(buf);
-    if (isSpreadsheetDocumentType(normalizedType)) {
-        // SheetJS handles .xlsx/.xlsm/.xls directly, no PDF detour.
-        return spreadsheetToLLMText(Buffer.from(buf));
-    }
-    if (normalizedType === "pptx") {
-        return extractPresentationText(Buffer.from(buf));
-    }
-    if (
-        isPresentationDocumentType(normalizedType) ||
-        isWordDocumentType(normalizedType)
-    ) {
-        const pdfBuf = await docxToPdf(Buffer.from(buf));
-        const pdfArrayBuffer = pdfBuf.buffer.slice(
-            pdfBuf.byteOffset,
-            pdfBuf.byteOffset + pdfBuf.byteLength,
-        ) as ArrayBuffer;
-        return extractPdfMarkdown(pdfArrayBuffer);
-    }
-    return extractDocxMarkdown(buf);
-}
-
-export async function extractPdfMarkdown(buf: ArrayBuffer): Promise<string> {
-    try {
-        const pdfjsLib = await loadPdfjs();
-        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) })
-            .promise;
-        const pages: string[] = [];
-        for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const tc = await page.getTextContent();
-            const text = tc.items
-                .filter((it): it is { str: string } => "str" in it)
-                .map((it) => it.str)
-                .join(" ")
-                .trim();
-            if (text) pages.push(`## Page ${i}\n\n${text}`);
-        }
-        return pages.join("\n\n");
-    } catch {
-        return "";
-    }
-}
-
-export async function extractDocxMarkdown(buf: ArrayBuffer): Promise<string> {
-    try {
-        const mammoth = await import("mammoth");
-        const normalized = await normalizeDocxZipPaths(Buffer.from(buf));
-        const { value: html } = await mammoth.convertToHtml({
-            buffer: normalized,
-        });
-        let text = html
-            .replace(
-                /<h([1-6])[^>]*>(.*?)<\/h\1>/gi,
-                (_, l, t) => "#".repeat(Number(l)) + " " + t + "\n\n",
-            )
-            .replace(/<strong[^>]*>(.*?)<\/strong>/gi, "**$1**")
-            .replace(/<li[^>]*>(.*?)<\/li>/gi, "- $1\n")
-            .replace(/<p[^>]*>(.*?)<\/p>/gi, "$1\n\n");
-        // Strip tags until stable: a single pass leaves a reassembled tag
-        // behind for adversarial nestings like "<scr<script>ipt>".
-        let previous: string;
-        do {
-            previous = text;
-            text = text.replace(/<[^>]+>/g, "");
-        } while (text !== previous);
-        return text
-            .replace(/&nbsp;/g, " ")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            // Decode &amp; last so "&amp;lt;" yields the literal "&lt;"
-            // instead of being double-unescaped into "<".
-            .replace(/&amp;/g, "&")
-            .replace(/\n{3,}/g, "\n\n")
-            .trim();
-    } catch {
-        return "";
-    }
+    const extracted = await runIsolatedExtraction("documentText", loadSource, {
+        fileType: fileType ?? "",
+    });
+    return cachedTextForModel({
+        revision: "", text: extracted.text,
+        textlessPageCount: extracted.textlessPageCount ?? 0,
+    });
 }

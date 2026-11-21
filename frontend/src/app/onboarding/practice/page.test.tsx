@@ -49,7 +49,7 @@ describe("OnboardingPracticePage", () => {
     const user = userEvent.setup();
     const { container } = render(<OnboardingPracticePage />);
 
-    expect(screen.getByText("Step 2 of 3")).toBeVisible();
+    expect(screen.getByText("Step 2 of 4")).toBeVisible();
     expect(
       container.querySelector('[data-slot="settings-row"]'),
     ).not.toBeInTheDocument();

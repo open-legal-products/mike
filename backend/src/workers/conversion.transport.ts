@@ -1,10 +1,12 @@
 // conversion transport — implementation behind the module facade.
 import { Worker, type Job } from "bullmq";
-import { getRedisConnection } from "../lib/queue/connection";
+import { runIsolated } from "../lib/dbq/jobScope";
+import { getRedisConnection, watchQueueErrors } from "../lib/queue/connection";
 import { reportError } from "../lib/observability/sentry";
 import { CONVERSION_QUEUE, type ConversionJobData } from "../lib/queue/conversionQueue";
 import { createServerSupabase } from "../lib/supabase";
 import { runConversionJob, setDocumentTerminalStatus } from "../modules/documents/documents.service";
+import { log } from "../lib/log";
 
 /** True once a job has exhausted its retries (BullMQ 'failed', no attempts left). */
 export function isPermanentFailure(job: Job<ConversionJobData>): boolean {
@@ -19,7 +21,9 @@ export function createConversionWorker(): Worker<ConversionJobData> {
     worker = new Worker<ConversionJobData>(
         CONVERSION_QUEUE,
         async (job: Job<ConversionJobData>) => {
-            await runConversionJob(job.data);
+            // Own isolation scope per job: runConversionJob names the
+            // operation, and concurrency is 2.
+            await runIsolated(() => runConversionJob(job.data));
         },
         {
             connection: getRedisConnection(),
@@ -31,18 +35,22 @@ export function createConversionWorker(): Worker<ConversionJobData> {
             maxStalledCount: 2,
         },
     );
+    watchQueueErrors(worker, "worker");
     worker.on("stalled", (jobId) => {
-        console.warn(
-            "[conversion-worker] job stalled; will be re-queued",
+        log.warn("conversion-worker", "job stalled; will be re-queued",
             { jobId },
         );
     });
     worker.on("failed", async (job, err) => {
         const permanent = !!job && isPermanentFailure(job);
+        // The 'failed' event fires outside the processor's isolation scope,
+        // so the operation is named here rather than inherited.
         reportError(err, {
             level: permanent ? "error" : "warning",
             tags: {
                 component: "conversion-worker",
+                operation: "documents.convert",
+                stage: "conversion",
                 terminal: permanent,
                 attempt: job?.attemptsMade,
             },
@@ -85,9 +93,19 @@ export function createConversionWorker(): Worker<ConversionJobData> {
                 "error",
             );
         } catch (updateErr) {
+            // The document stays "processing" forever if this write is lost:
+            // reported with the terminal stage, logged as the same object.
+            reportError(updateErr, {
+                tags: {
+                    component: "conversion-worker",
+                    operation: "documents.convert",
+                    stage: "job.terminal",
+                },
+                extra: { job_id: job.id, document_id: job.data.documentId },
+            });
             console.error(
                 "[conversion-worker] failed to mark document error",
-                { jobId: job.id, documentId: job.data.documentId, updateErr },
+                { jobId: job.id, documentId: job.data.documentId, error: updateErr },
             );
         }
     });

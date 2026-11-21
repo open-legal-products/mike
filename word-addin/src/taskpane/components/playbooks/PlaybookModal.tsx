@@ -3,7 +3,7 @@ import type { Playbook } from "../../types";
 import { listPlaybooks } from "../../api/mikeApi";
 import { Modal } from "../primitives/Modal";
 import { PickerList } from "../primitives/PickerList";
-import { userMessage } from "../../lib/notify";
+import { reportFault } from "../../lib/notify";
 
 /** What a playbook is called in the picker and on its pill. */
 export function playbookTitle(playbook: Pick<Playbook, "name">): string {
@@ -49,9 +49,10 @@ export function PlaybookModal({
         if (cancelled) return;
         setPlaybooks([]);
         setError(
-          userMessage(reason, {
+          reportFault(reason, {
             fallback: "Mike couldn't load your playbooks. Try again.",
-          }),
+            operation: "playbooks.review",
+          }).message,
         );
       })
       .finally(() => {

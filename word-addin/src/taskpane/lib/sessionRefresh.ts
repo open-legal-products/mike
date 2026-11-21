@@ -9,7 +9,7 @@
  *
  * Pure, so each rule can be asserted without a network.
  */
-import { isNetworkError, isOffline, isTimeoutError } from "@mike/user-error";
+import { isNetworkError, isOffline, isTimeoutError } from "@mike/client";
 
 export type SessionRefreshOutcome =
   /** The session came back. Re-run the request that got the 401. */

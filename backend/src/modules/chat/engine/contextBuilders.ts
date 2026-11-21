@@ -1,11 +1,15 @@
+import { AppError } from "../../../lib/appError";
+import { reportError } from "../../../lib/observability/sentry";
 import { responseLanguageName } from "../../../lib/responseLanguages";
+import { folderPathResolver } from "../../../lib/folderTree";
 import { deadlineMessage, type StreamStopReason } from "../../../lib/streamRuns";
 import crypto from "crypto";
 import type { Db } from "../../../lib/supabase";
 import { listWorkspaceWorkflows } from "../../../lib/workflowWorkspace";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
-import { ensureDocAccess } from "../../../lib/access";
+import { ensureDocAccess, sharedDocAccessKey } from "../../../lib/access";
 import { attachActiveVersionPaths } from "../../../lib/documentVersions";
+import { selectAllByKey, selectInBatches } from "../../../lib/batchedQuery";
 import {
   type DocStore,
   type DocIndex,
@@ -18,16 +22,22 @@ import {
   MAX_ASK_INPUT_TEXT_LENGTH,
   devLog,
 } from "./types";
-import { buildSystemPrompt } from "./prompts";
+import {
+  buildSystemPrompt,
+  EARLIER_TURNS_PROMPT,
+  PRIOR_TOOL_ACTIVITY_HEADER,
+  PRIOR_TOOL_ACTIVITY_RECORD_HEADER,
+} from "./prompts";
 import {
   MESSAGE_TIME_PROMPT,
   answerTimeStamp,
   userMessageTimeStamp,
 } from "../../../lib/userTime";
 import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
-import { parseCitations, createCitation } from "./citations";
-import type { AssistantEvent } from "./streaming";
-import { catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
+import { parseCitations, createCitation, limitCitationPayload } from "./citations";
+import type { AssistantEvent } from "@mike/contracts";
+import { queryFailureCause } from "../../../lib/batchedQuery";
+import { activeAssistantPrompts, catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
 
 // ---------------------------------------------------------------------------
 // Prompt-injection spotlighting helpers
@@ -276,6 +286,16 @@ export const MAX_REPLAYED_REASONING_TOTAL_CHARS = 36_000;
 
 const MAX_REPLAYED_BRIEF_CHARS = 4_000;
 
+/** One lazy history read shared by the context builders for a single turn. */
+export function createAssistantHistoryLoader(db: Db, chatId: string | null | undefined, messageTable = "chat_messages") {
+  let pending: Promise<{ data: { content?: unknown }[] | null; error: unknown }> | undefined;
+  return () => pending ??= chatId ? Promise.resolve(db.from(messageTable)
+    .select("content").eq("chat_id", chatId).eq("role", "assistant")
+    .not("content", "is", null).order("created_at", { ascending: true }))
+    : Promise.resolve({ data: [], error: null });
+}
+type AssistantHistoryLoader = ReturnType<typeof createAssistantHistoryLoader>;
+
 /**
  * Attaches each earlier assistant turn's stored reasoning to the matching
  * message in `messages`, for models that opt into reasoning replay
@@ -291,17 +311,18 @@ export async function attachPriorReasoning(
   chatId: string | null | undefined,
   db: Db,
   messageTable = "chat_messages",
+  history?: AssistantHistoryLoader,
 ): Promise<ChatMessage[]> {
   if (!chatId || !messages.some((m) => m.role === "assistant")) {
     return messages;
   }
-  const { data: rows, error } = await db
+  const { data: rows, error } = await (history ? history() : db
     .from(messageTable)
     .select("content")
     .eq("chat_id", chatId)
     .eq("role", "assistant")
     .not("content", "is", null)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true }));
   // Replay is an optimisation: a failed read degrades to text-only history.
   if (error || !rows?.length) return messages;
 
@@ -379,6 +400,58 @@ export function withDelegationEvents<T extends { type?: unknown; events?: unknow
   );
 }
 
+/** At most this many citations of the previous answer are replayed. */
+const MAX_REPLAYED_CITATIONS = 40;
+/** A replayed quote is cut at this length. */
+const MAX_REPLAYED_QUOTE_CHARS = 600;
+
+/**
+ * The <CITATIONS> block the previous answer ended with, rebuilt from what was
+ * stored. The block is stripped from the stored prose, which leaves the
+ * answer's [N] markers pointing at nothing: the model then reads its own
+ * earlier answer as unsupported and withdraws it. Only document citations
+ * whose document is still in this turn's index are replayed, under the
+ * handle that document has now.
+ */
+export function priorCitationsBlock(
+  stored: unknown,
+  slugByDocumentId: ReadonlyMap<string, string>,
+): string | null {
+  if (!Array.isArray(stored)) return null;
+  const entries: { ref: number; doc_id: string; quotes: unknown[] }[] = [];
+  for (const citation of stored as Record<string, unknown>[]) {
+    if (entries.length >= MAX_REPLAYED_CITATIONS) break;
+    if (!citation || typeof citation !== "object") continue;
+    if (typeof citation.ref !== "number") continue;
+    const slug =
+      typeof citation.document_id === "string"
+        ? slugByDocumentId.get(citation.document_id)
+        : undefined;
+    if (!slug || !Array.isArray(citation.quotes)) continue;
+    const quotes = (citation.quotes as Record<string, unknown>[]).flatMap(
+      (quote) => {
+        if (!quote || typeof quote.quote !== "string") return [];
+        const text = quote.quote.slice(0, MAX_REPLAYED_QUOTE_CHARS);
+        const page =
+          typeof quote.page === "number" || typeof quote.page === "string"
+            ? { page: quote.page }
+            : {};
+        const cell =
+          typeof quote.sheet === "string" && typeof quote.cell === "string"
+            ? { sheet: quote.sheet, cell: quote.cell }
+            : {};
+        return [{ ...page, ...cell, quote: text }];
+      },
+    );
+    if (quotes.length === 0) continue;
+    entries.push({ ref: citation.ref, doc_id: slug, quotes });
+  }
+  if (entries.length === 0) return null;
+  // A quote is document text: it must not be able to close the block.
+  const json = JSON.stringify(entries, null, 2).replace(/</g, "\\u003c");
+  return `<CITATIONS>\n${json}\n</CITATIONS>`;
+}
+
 export async function enrichWithPriorEvents(
   messages: ChatMessage[],
   chatId: string | null | undefined,
@@ -388,6 +461,13 @@ export async function enrichWithPriorEvents(
   messageTable = "chat_messages",
   /** When set, the user's answers are stamped with when they responded. */
   timeZone?: string,
+  /**
+   * For a model that disowns the record when it sits in its own message (see
+   * disownsReplayedToolRecord): the record opens the user's next message
+   * instead, and the answer gets its citations back. Pass the same value to
+   * buildMessages, which explains the record in the system prompt.
+   */
+  recordForUser = false,
 ): Promise<ChatMessage[]> {
   if (!chatId) return messages;
   // Skip streaming reservations: routeStreaming inserts the assistant row
@@ -396,14 +476,16 @@ export async function enrichWithPriorEvents(
   // otherwise shadow the previous turn's real events here.
   const { data: rows } = await db
     .from(messageTable)
-    .select("content, created_at")
+    .select("content, citations, created_at")
     .eq("chat_id", chatId)
     .eq("role", "assistant")
     .not("content", "is", null)
     .order("created_at", { ascending: false })
     .limit(1);
 
-  const lastRow = rows?.[0] as { content?: unknown } | undefined;
+  const lastRow = rows?.[0] as
+    | { content?: unknown; citations?: unknown }
+    | undefined;
   const content = lastRow?.content;
   if (!Array.isArray(content)) return messages;
 
@@ -467,10 +549,16 @@ export async function enrichWithPriorEvents(
         : `- ran ${label}`,
     ];
   };
+  // Documents a run_script script read. They are not replayed as the model's
+  // own reads: it was returned whatever the script returned, which may or may
+  // not have been their text. One line says the script ran and what it called.
+  let scriptReads = 0;
   for (const ev of content as Record<string, unknown>[]) {
     const docLines = documentLines(ev);
     if (docLines) {
       lines.push(...docLines);
+    } else if (ev?.type === "doc_read" && ev.by_script === true) {
+      scriptReads += 1;
     } else if (ev?.type === "doc_read") {
       // Live Word reads have no doc_id and belong to a different tool;
       // labeling them read_document would name a handle that doesn't exist.
@@ -597,6 +685,11 @@ export async function enrichWithPriorEvents(
       }
     }
   }
+  if (scriptReads > 0) {
+    lines.push(
+      `- run_script → your script ran and called read_document on ${scriptReads} document${scriptReads === 1 ? "" : "s"}; what the script returned came back to you`,
+    );
+  }
   for (const id of approvedIds) {
     if (approvalOutcomes.has(id)) continue;
     lines.push(
@@ -613,11 +706,11 @@ export async function enrichWithPriorEvents(
       "- Instruction: do not ask for any skipped input again. If drafting or editing a document, insert a descriptive placeholder in square brackets wherever a skipped value is required.",
     );
   }
-  if (lines.length === 0) return messages;
-  const summary = `\n\n[Tool activity in your previous turn]\n${lines.join("\n")}`;
+  const citations = recordForUser
+    ? priorCitationsBlock(lastRow?.citations, slugByDocumentId)
+    : null;
+  if (lines.length === 0 && !citations) return messages;
 
-  // Find the index of the last assistant message and attach the
-  // summary there only.
   let lastAssistantIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "assistant") {
@@ -628,10 +721,40 @@ export async function enrichWithPriorEvents(
   if (lastAssistantIdx < 0) return messages;
   const enriched = messages.slice();
   const target = enriched[lastAssistantIdx];
+  if (!recordForUser) {
+    // Attach the summary to the last assistant message only.
+    enriched[lastAssistantIdx] = {
+      ...target,
+      content: `${target.content ?? ""}\n\n${PRIOR_TOOL_ACTIVITY_HEADER}\n${lines.join("\n")}`,
+    };
+    return enriched;
+  }
+
+  const record =
+    lines.length > 0
+      ? `${PRIOR_TOOL_ACTIVITY_RECORD_HEADER}\n${lines.join("\n")}`
+      : "";
+  // The record goes at the start of the user's next message, not on the
+  // answer: this model takes anything inside its own message for words it
+  // wrote, and disowns a record of tool calls it cannot see as invented.
+  const nextUserIdx = enriched.findIndex(
+    (message, index) => index > lastAssistantIdx && message.role === "user",
+  );
   enriched[lastAssistantIdx] = {
     ...target,
-    content: (target.content ?? "") + summary,
+    content:
+      (target.content ?? "") +
+      (citations ? `\n\n${citations}` : "") +
+      // Nothing follows the answer (a continuation): keep the record with it.
+      (record && nextUserIdx < 0 ? `\n\n${record}` : ""),
   };
+  if (record && nextUserIdx >= 0) {
+    const next = enriched[nextUserIdx];
+    enriched[nextUserIdx] = {
+      ...next,
+      content: `${record}\n\n${next.content ?? ""}`,
+    };
+  }
   return enriched;
 }
 
@@ -718,6 +841,8 @@ export function buildMessages(
   nonce?: string,
   systemPromptMode: "append" | "replace" = "append",
   time?: MessageTimeContext,
+  /** The value enrichWithPriorEvents was given as `recordForUser`. */
+  recordForUser = false,
 ) {
   const formatted: unknown[] = [];
   let systemContent =
@@ -725,6 +850,9 @@ export function buildMessages(
       ? (systemPromptExtra?.trim() ?? "")
       : buildSystemPrompt(includeResearchTools);
 
+  if (recordForUser && systemContent) {
+    systemContent += `\n\n${EARLIER_TURNS_PROMPT}`;
+  }
   if (systemPromptMode === "append" && systemPromptExtra) {
     systemContent += `\n\n${systemPromptExtra.trim()}`;
   }
@@ -883,8 +1011,10 @@ export function extractCitations(
   docIndex: DocIndex,
   docStore?: DocStore,
 ): unknown[] {
-  return parseCitations(fullText).map((c) =>
-    createCitation(c, docIndex, undefined, docStore),
+  return limitCitationPayload(
+    parseCitations(fullText)
+      .map((c) => createCitation(c, docIndex, undefined, docStore))
+      .filter((citation) => citation !== null),
   );
 }
 
@@ -1063,9 +1193,18 @@ export async function loadAssistantMessage(
     .maybeSingle();
   if (selectError || !row) {
     if (selectError) {
+      const failure = new AppError(
+        "chat.context_failed",
+        "Failed to load the assistant message",
+        { cause: selectError },
+      );
+      reportError(failure, {
+        level: "warning",
+        tags: { component: "chat-stream" },
+      });
       console.error(
         "[assistant-events] failed to load assistant message",
-        selectError,
+        failure,
       );
     }
     return null;
@@ -1091,9 +1230,17 @@ export async function appendAssistantEventsToMessage(
     p_citations: citations ?? [],
   });
   if (error || data !== "appended") {
+    // The RPC's error (or its unexpected verdict) is the cause; the caller
+    // falls back, so the report is the only record that events were lost.
+    const failure = new AppError(
+      "chat.message_save_failed",
+      "Failed to append assistant events",
+      { cause: error ?? { result: data } },
+    );
+    reportError(failure, { tags: { component: "chat-stream" } });
     console.error(
       "[assistant-events] failed to update assistant message",
-      error ?? { result: data },
+      failure,
     );
     return false;
   }
@@ -1251,9 +1398,15 @@ export async function appendAskInputsResponseToAssistantMessage(
     p_response: storedResponse,
   });
   if (error) {
+    const failure = new AppError(
+      "chat.message_save_failed",
+      "Failed to append the ask-inputs response",
+      { cause: error },
+    );
+    reportError(failure, { tags: { component: "chat-stream" } });
     console.error(
       "[assistant-events] failed to append ask-input response",
-      error,
+      failure,
     );
     return "failed";
   }
@@ -1266,8 +1419,21 @@ export async function appendAskInputsResponseToAssistantMessage(
         : "failed";
 }
 
+/** The stored outcome of an explicit Stop or a stream deadline. */
+export function buildStoppedAssistantEvent(
+  stopReason?: StreamStopReason | null,
+): AssistantEvent {
+  return !stopReason || stopReason === "user"
+    ? { type: "content", text: "Cancelled by user." }
+    : {
+        type: "error",
+        message: deadlineMessage(stopReason),
+        safe_to_display: true,
+      };
+}
+
 export function appendCancelledAssistantEvent(events: AssistantEvent[]) {
-  return [...events, { type: "content" as const, text: "Cancelled by user." }];
+  return [...events, buildStoppedAssistantEvent("user")];
 }
 
 export function buildCancelledAssistantMessage(args: {
@@ -1290,15 +1456,9 @@ export function buildStoppedAssistantMessage(
     stopReason?: StreamStopReason | null;
   },
 ) {
-  if (!args.stopReason || args.stopReason === "user")
-    return buildCancelledAssistantMessage(args);
   const events: AssistantEvent[] = [
     ...stripTransientAssistantEvents(args.events),
-    {
-      type: "error",
-      message: deadlineMessage(args.stopReason),
-      safe_to_display: true,
-    },
+    buildStoppedAssistantEvent(args.stopReason),
   ];
   return { events, citations: args.buildCitations(args.fullText, events) };
 }
@@ -1314,6 +1474,7 @@ export async function buildDocContext(
   chatId?: string | null,
   messageTable = "chat_messages",
   userEmail?: string | null,
+  history?: AssistantHistoryLoader,
 ): Promise<{ docIndex: DocIndex; docStore: DocStore }> {
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
@@ -1332,11 +1493,11 @@ export async function buildDocContext(
   // the model loses access to generated docs after the turn that created
   // them, and can't call edit_document / read_document on them.
   if (chatId) {
-    const { data: rows } = await db
+    const { data: rows } = await (history ? history() : db
       .from(messageTable)
       .select("content")
       .eq("chat_id", chatId)
-      .eq("role", "assistant");
+      .eq("role", "assistant"));
     for (const row of rows ?? []) {
       const content = (row as { content?: unknown }).content;
       if (!Array.isArray(content)) continue;
@@ -1371,15 +1532,18 @@ export async function buildDocContext(
     // answered "I can't see that document" about a file the caller has full
     // access to. The verdict is per document, not per chat: being cited in a
     // readable chat never grants access to the cited file.
-    const { data: docs } = await db
-      .from("documents")
-      .select(
-        "id, current_version_id, status, library_kind, user_id, project_id, org_id, workflow_id",
-      )
-      .in("id", ids)
-      .eq("status", "ready");
+    // Batched: ids come from the whole conversation history, unbounded.
+    const docs = await selectInBatches("chat document context", ids, (batch) =>
+      db
+        .from("documents")
+        .select(
+          "id, current_version_id, status, library_kind, user_id, project_id, org_id, workflow_id",
+        )
+        .in("id", batch)
+        .eq("status", "ready"),
+    );
 
-    const candidates = (docs ?? []) as unknown as {
+    const candidates = docs as unknown as {
       id: string;
       filename?: string | null;
       file_type?: string | null;
@@ -1403,23 +1567,11 @@ export async function buildDocContext(
     // costs nothing (it is a `user_id === caller` comparison in memory).
     //
     // A document filed on its own under an organization has no container
-    // either: it is its uploader's alone, while they are a member. That
-    // verdict turns on the uploader as well as the organization, so the two
-    // together are the key — one answer per organization would hand a
-    // colleague's files to whoever's own file happened to be asked first.
-    const containerKey = (doc: {
-      user_id: string | null;
-      project_id: string | null;
-      workflow_id?: string | null;
-      org_id?: string | null;
-    }) =>
-      doc.project_id
-        ? `project:${doc.project_id}`
-        : doc.workflow_id
-          ? `workflow:${doc.workflow_id}`
-          : doc.org_id
-            ? `org:${doc.org_id}:${doc.user_id ?? ""}`
-            : null;
+    // either. The caller's own such files share one membership verdict;
+    // anyone else's is reached only through that file's own private-content
+    // grant, so it is asked about individually (sharedDocAccessKey).
+    const containerKey = (doc: (typeof candidates)[number]) =>
+      sharedDocAccessKey(doc, userId);
 
     const verdictByContainer = new Map<string, boolean>();
     for (const doc of candidates) {
@@ -1428,8 +1580,7 @@ export async function buildDocContext(
       // The representative carries the container this verdict is about. In
       // a project or a workflow its `user_id` only ever decides the ROLE,
       // never `ok`, so reusing one document's answer for its siblings cannot
-      // widen access; on its own in an organization the uploader is part of
-      // the key.
+      // widen access.
       const verdict = await ensureDocAccess(doc, userId, userEmail ?? null, db);
       verdictByContainer.set(key, verdict.ok);
     }
@@ -1490,19 +1641,29 @@ export async function buildProjectDocContext(
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
 
-  const [{ data: docs }, { data: folders }] = await Promise.all([
-    db
-      .from("documents")
-      .select("id, current_version_id, status, folder_id")
-      .eq("project_id", projectId)
-      .eq("status", "ready")
-      .order("created_at", { ascending: true }),
-    db
-      .from("project_subfolders")
-      .select("id, name, parent_folder_id")
-      .eq("project_id", projectId),
+  // Paged: past max_rows an unpaged read silently hid the rest of the
+  // project from the model. Labels (doc-N) follow created_at order as before.
+  type ProjectDocRow = { id: string; created_at?: string | null };
+  type ProjectFolderRow = { id: string; name: string; parent_folder_id: string | null };
+  const [docs, folders] = await Promise.all([
+    selectAllByKey<ProjectDocRow>("project chat documents", () =>
+      db
+        .from("documents")
+        .select("id, current_version_id, status, folder_id, created_at")
+        .eq("project_id", projectId)
+        .eq("status", "ready")),
+    selectAllByKey<ProjectFolderRow>("project chat folders", () =>
+      db
+        .from("project_subfolders")
+        .select("id, name, parent_folder_id")
+        .eq("project_id", projectId)),
   ]);
-  const docList = (docs ?? []) as unknown as {
+  docs.sort(
+    (a, b) =>
+      String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) ||
+      a.id.localeCompare(b.id),
+  );
+  const docList = docs as unknown as {
     id: string;
     filename?: string | null;
     file_type?: string | null;
@@ -1513,29 +1674,7 @@ export async function buildProjectDocContext(
   }[];
   await attachActiveVersionPaths(db, docList);
 
-  // Build folder id → full path map
-  const folderMap = new Map<
-    string,
-    { name: string; parent_folder_id: string | null }
-  >();
-  for (const f of folders ?? [])
-    folderMap.set(f.id, {
-      name: f.name,
-      parent_folder_id: f.parent_folder_id,
-    });
-
-  function resolvePath(folderId: string | null): string {
-    if (!folderId) return "";
-    const parts: string[] = [];
-    let cur: string | null = folderId;
-    while (cur) {
-      const f = folderMap.get(cur);
-      if (!f) break;
-      parts.unshift(f.name);
-      cur = f.parent_folder_id;
-    }
-    return parts.join(" / ");
-  }
+  const resolvePath = folderPathResolver(folders);
 
   const folderPaths = new Map<string, string>(); // doc label → folder path
 
@@ -1606,24 +1745,26 @@ export async function buildWorkflowStore(
   try {
     await ensureDefaultWorkflows(userId, db);
   } catch (err) {
-    console.error("[buildWorkflowStore] ensureDefaultWorkflows failed:", err);
+    const failure = new AppError(
+      "workflows.default_install_failed",
+      "Default workflow installation failed",
+      { cause: err },
+    );
+    reportError(failure, {
+      level: "warning",
+      tags: { component: "chat-stream" },
+    });
+    console.error("[buildWorkflowStore] ensureDefaultWorkflows failed:", failure);
   }
 
   // Keep catalog IDs readable for historical chat attachments, but do not
-  // expose them through list_workflows. Active versions sort first; inactive
-  // content-addressed versions remain available as a fallback.
-  const { data: catalogWorkflows, error: catalogError } = await db
-    .from("mike_workflows")
-    .select("workflow_key, title, prompt_md, active, updated_at")
-    .eq("type", "assistant")
-    .order("active", { ascending: false })
-    .order("updated_at", { ascending: false });
-  if (catalogError) {
-    console.error(
-      "[buildWorkflowStore] workflow catalog lookup failed",
-      catalogError,
-    );
-  } else {
+  // expose them through list_workflows. Only active versions are loaded per
+  // turn: replace_mike_workflows retires versions (active = false) without
+  // deleting them, so the full history — every prompt_md ever shipped —
+  // grows with each catalog sync. read_workflow resolves a retired id on
+  // demand (findCatalogWorkflow), the rare case that needs one.
+  try {
+    const catalogWorkflows = await activeAssistantPrompts(db);
     for (const workflow of catalogWorkflows ?? []) {
       const id = catalogWorkflowId(workflow.workflow_key);
       if (store.has(id) || !workflow.prompt_md) continue;
@@ -1633,6 +1774,20 @@ export async function buildWorkflowStore(
         listed: false,
       });
     }
+  } catch (catalogError) {
+    const failure = new AppError(
+      "chat.context_failed",
+      "Workflow catalog lookup failed",
+      { cause: queryFailureCause(catalogError) },
+    );
+    reportError(failure, {
+      level: "warning",
+      tags: { component: "chat-stream" },
+    });
+    console.error(
+      "[buildWorkflowStore] workflow catalog lookup failed",
+      failure,
+    );
   }
 
   // Only workflows currently authorized in the conversation's workspace.
@@ -1651,11 +1806,24 @@ export async function buildWorkflowStore(
     .filter(([, workflow]) => workflow.listed !== false)
     .map(([id]) => id);
   if (databaseWorkflowIds.length > 0) {
-    const { data: assetDocuments } = await db
-      .from("documents")
-      .select("id, workflow_id, current_version_id")
-      .in("workflow_id", databaseWorkflowIds);
-    const documents = (assetDocuments ?? []) as {
+    type AssetRow = { id: string; workflow_id: string; current_version_id: string | null; created_at?: string | null };
+    const assetDocuments = await selectInBatches<AssetRow>(
+      "workflow asset lookup",
+      databaseWorkflowIds,
+      (batch) =>
+        selectAllByKey<AssetRow>("workflow asset lookup", () =>
+          db
+            .from("documents")
+            .select("id, workflow_id, current_version_id, created_at")
+            .in("workflow_id", batch)),
+    );
+    // Asset handles are numbered by position; keep it upload order.
+    assetDocuments.sort(
+      (a, b) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) ||
+        a.id.localeCompare(b.id),
+    );
+    const documents = assetDocuments as {
       id: string;
       workflow_id: string;
       current_version_id: string | null;

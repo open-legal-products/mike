@@ -12,6 +12,7 @@
 // its ordering is delicate. Only the NON-streaming logic and the pre-stream
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
+import { selectInBatches } from "../../lib/batchedQuery";
 import { type Db } from "../../lib/supabase";
 import { withDelegationEvents, withoutEmptyAssistantReservations } from "./engine/index";
 
@@ -50,11 +51,12 @@ async function hydrateEditStatuses(
     // Edit status patch.
     const statusById = new Map<string, "pending" | "accepted" | "rejected">();
     if (editIds.size > 0) {
-        const { data: rows } = await db
-            .from("document_edits")
-            .select("id, status")
-            .in("id", Array.from(editIds));
-        for (const r of (rows ?? []) as { id: string; status: string }[]) {
+        const rows = await selectInBatches<{ id: string; status: string }>(
+            "edit status lookup",
+            editIds,
+            (batch) => db.from("document_edits").select("id, status").in("id", batch),
+        );
+        for (const r of rows) {
             if (
                 r.status === "pending" ||
                 r.status === "accepted" ||
@@ -70,14 +72,12 @@ async function hydrateEditStatuses(
     // document_versions so the UI can render "V3" chips + download filenames.
     const versionNumberById = new Map<string, number | null>();
     if (versionIds.size > 0) {
-        const { data: vrows } = await db
-            .from("document_versions")
-            .select("id, version_number")
-            .in("id", Array.from(versionIds));
-        for (const r of (vrows ?? []) as {
-            id: string;
-            version_number: number | null;
-        }[]) {
+        const vrows = await selectInBatches<{ id: string; version_number: number | null }>(
+            "edit version lookup",
+            versionIds,
+            (batch) => db.from("document_versions").select("id, version_number").in("id", batch),
+        );
+        for (const r of vrows) {
             versionNumberById.set(r.id, r.version_number ?? null);
         }
     }

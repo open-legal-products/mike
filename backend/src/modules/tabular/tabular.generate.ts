@@ -20,9 +20,11 @@
 import { type UserApiKeys } from "../../lib/llm";
 import { ensureReviewAccess } from "../../lib/access";
 import { can } from "../../lib/permissions";
+import { queryFailureCause } from "../../lib/batchedQuery";
 import { failure, internalFailure } from "../../lib/serviceResult";
 import {
     filterReadableReviewRows,
+    loadReviewCells,
     loadReviewRows,
     type ReviewRow,
 } from "./tabular.rows";
@@ -168,14 +170,14 @@ export async function loadTabularGenerateWork(
 
     let rows = await loadReviewRows(db, reviewId);
 
-    const { data: cells, error: cellsError } = await db
-        .from("tabular_cells")
-        .select("*")
-        .eq("review_id", reviewId);
-    if (cellsError)
-        return { ok: false, kind: "cells_error", error: cellsError };
+    let cells: Record<string, unknown>[];
+    try {
+        cells = await loadReviewCells(db, reviewId);
+    } catch (cellsError) {
+        return { ok: false, kind: "cells_error", error: queryFailureCause(cellsError) };
+    }
     const cellMap = new Map<string, Record<string, unknown>>();
-    for (const cell of cells ?? [])
+    for (const cell of cells)
         cellMap.set(`${cell.row_id}:${cell.column_index}`, cell);
 
     // A row is only extractable if the requester can access every source
@@ -294,5 +296,43 @@ export async function prepareTabularRunView(
     return {
         ok: true,
         data: { columns: prepared.data.columns, ...work.data },
+    };
+}
+
+/**
+ * Which of an in-process run's SSE chunks a viewer may receive, given the
+ * rows `prepareTabularRunView` returned for them.
+ *
+ * The run's frames were written for whoever STARTED it, from rows that user
+ * can read. A co-editor attaching later may read fewer documents, and the
+ * review read hides a row unless the caller can read every source document
+ * (filterReadableReviewRows). `rows` is that same verdict for this viewer, so
+ * a frame naming any other row is dropped; frames without a row (errors,
+ * `cancelled`, `[DONE]`, keep-alives) pass. The set is built once per
+ * connection: access is judged when the viewer attaches, as the DB-tailing
+ * view and the review read judge it, and a change takes effect on reconnect.
+ */
+export function runFrameFilterFor(
+    rows: ReviewRow[],
+): (chunk: string) => boolean {
+    const visible = new Set(rows.map((row) => row.id));
+    return (chunk) => {
+        const start = chunk.indexOf("data: {");
+        if (start === -1) return true;
+        // A JSON.stringify payload has no raw newline, so the first record's
+        // JSON ends at the next one (a chunk may hold `error` then `[DONE]`).
+        const end = chunk.indexOf("\n", start);
+        let rowId: unknown;
+        try {
+            rowId = (
+                JSON.parse(chunk.slice(start + 6, end === -1 ? undefined : end)) as {
+                    row_id?: unknown;
+                }
+            ).row_id;
+        } catch {
+            // Unreadable, so it could carry anything: withhold it.
+            return false;
+        }
+        return rowId === undefined || (typeof rowId === "string" && visible.has(rowId));
     };
 }

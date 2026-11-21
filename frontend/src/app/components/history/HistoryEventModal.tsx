@@ -7,7 +7,7 @@ import { UserAvatar } from "@/app/components/ui/user-avatar";
 import { HistorySubjectIcon } from "./HistorySubjectIcon";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { workflowDetailPath } from "@/app/components/workflows/workflowRoutes";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI, pillButtonUIClassName } from "@mike/ui";
 import { ChevronDown } from "lucide-react";
 import { Modal } from "@/app/components/modals/Modal";
 import { SkeletonLine } from "@/app/components/shared/TablePrimitive";
@@ -22,7 +22,6 @@ import {
   type AuditEvent,
 } from "@/app/lib/mikeApi";
 import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import {
   auditAction,
   auditActor,

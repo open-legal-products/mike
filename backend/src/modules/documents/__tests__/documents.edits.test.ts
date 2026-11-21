@@ -38,6 +38,7 @@ vi.mock("../../../lib/documentVersions", async (importOriginal) => ({
   })),
 }));
 
+import { loadActiveVersion } from "../../../lib/documentVersions";
 import { resolveEdit } from "../documents.edits";
 
 const PENDING_EDIT = {
@@ -99,16 +100,86 @@ describe("resolving a tracked edit", () => {
     fake.done();
   });
 
-  it("rejects an editor save or competing review that wins before publication", async () => {
+  it("redoes the resolution on the newer bytes when a concurrent review wins the swap", async () => {
+    arrange();
+    vi.mocked(loadActiveVersion)
+      .mockResolvedValueOnce({ id: "v1", storage_path: "docs/v1.docx", filename: "Clause.docx", version_number: 2, source: "assistant_edit" } as never)
+      .mockResolvedValueOnce({ id: "v1", storage_path: "docs/v1-other.docx", filename: "Clause.docx", version_number: 2, source: "assistant_edit" } as never);
+    storage.downloadFile.mockImplementation(async (key: string) =>
+      new Uint8Array(key === "docs/v1-other.docx" ? [7, 7] : [1, 2, 3]).buffer);
+    const fake = scriptedDb([
+      { table: "document_edits", data: PENDING_EDIT },
+      { table: "documents", data: DOC },
+      // Accepting another card on the same document swapped the path first.
+      { table: "document_versions", op: "update", data: null },
+      { table: "document_edits", data: PENDING_EDIT },
+      { table: "documents", data: DOC },
+      { table: "document_versions", op: "update", data: { id: "v1" } },
+      { table: "document_edits", op: "update" },
+      { table: "document_edits", data: [] },
+    ]);
+    expect((await run(fake.db)).ok).toBe(true);
+    expect(storage.downloadFile.mock.calls.map(([key]) => key)).toEqual(["docs/v1.docx", "docs/v1-other.docx"]);
+    expect([...docx.resolveTrackedChange.mock.calls[1][0]]).toEqual([7, 7]);
+    const writes = fake.calls.filter(call => call.table === "document_versions");
+    expect(writes[1].filters).toContainEqual(["eq", "storage_path", "docs/v1-other.docx"]);
+    expect(writes[1].payload).toMatchObject({ storage_path: storage.uploadFile.mock.calls[1][0] });
+    expect(storage.deleteFileBestEffort.mock.calls).toEqual([[storage.uploadFile.mock.calls[0][0], "edit-resolution-conflict"]]);
+    fake.done();
+  });
+
+  it.each(["accept", "reject"] as const)("keeps the winner's bytes and status when a competing %s removed the change", async (mode) => {
+    arrange();
+    vi.mocked(loadActiveVersion)
+      .mockResolvedValueOnce({ id: "v1", storage_path: "docs/v1.docx" } as never)
+      .mockResolvedValueOnce({ id: "v1", storage_path: "docs/winner.docx" } as never);
+    docx.resolveTrackedChange
+      .mockResolvedValueOnce({ bytes: new Uint8Array([9]), found: true })
+      .mockResolvedValueOnce({ bytes: new Uint8Array([1]), found: false });
+    const fake = scriptedDb([
+      { table: "document_edits", data: PENDING_EDIT },
+      { table: "documents", data: DOC },
+      { table: "document_versions", op: "update", data: null },
+      // The winner's byte swap is visible before its separate status write.
+      { table: "document_edits", data: PENDING_EDIT },
+      { table: "documents", data: DOC },
+    ]);
+    expect(await resolveEdit(mode, "doc-1", "edit-1", "user-1", undefined, fake.db))
+      .toMatchObject({ ok: false, status: 409 });
+    expect(storage.downloadFile.mock.calls.map(([key]) => key)).toEqual(["docs/v1.docx", "docs/winner.docx"]);
+    expect(storage.uploadFile).toHaveBeenCalledOnce();
+    expect(storage.deleteFileBestEffort).toHaveBeenCalledWith(storage.uploadFile.mock.calls[0][0], "edit-resolution-conflict");
+    expect(fake.calls.some(call => call.table === "document_edits" && call.op === "update")).toBe(false);
+    fake.done();
+  });
+
+  it("returns the winner's recorded decision when the retry sees it resolved", async () => {
     arrange();
     const fake = scriptedDb([
       { table: "document_edits", data: PENDING_EDIT },
       { table: "documents", data: DOC },
-      // Another writer changed storage_path while the resolved bytes uploaded.
       { table: "document_versions", op: "update", data: null },
+      { table: "document_edits", data: { ...PENDING_EDIT, status: "rejected" } },
+      { table: "documents", data: DOC },
     ]);
-    expect(await run(fake.db)).toMatchObject({ ok: false, status: 409 });
-    expect(storage.deleteFileBestEffort).toHaveBeenCalledWith(storage.uploadFile.mock.calls[0][0], "edit-resolution-conflict");
+    expect(await run(fake.db)).toMatchObject({ ok: true, body: { already_resolved: true, status: "rejected" } });
+    expect(docx.resolveTrackedChange).toHaveBeenCalledOnce();
+    expect(fake.calls.some(call => call.table === "document_edits" && call.op === "update")).toBe(false);
+    fake.done();
+  });
+
+  it("answers 409 when every attempt loses the swap", async () => {
+    arrange();
+    // Another writer changed storage_path while each attempt's bytes uploaded.
+    const lostAttempt = [
+      { table: "document_edits", data: PENDING_EDIT },
+      { table: "documents", data: DOC },
+      { table: "document_versions", op: "update", data: null },
+    ] as const;
+    const fake = scriptedDb(Array.from({ length: 5 }, () => lostAttempt).flat());
+    expect(await run(fake.db)).toEqual({ ok: false, status: 409, detail: "This document changed. Reopen the latest version and try again." });
+    expect(storage.uploadFile).toHaveBeenCalledTimes(5);
+    expect(storage.deleteFileBestEffort.mock.calls).toEqual(storage.uploadFile.mock.calls.map(([key]) => [key, "edit-resolution-conflict"]));
     expect(fake.calls.some(call => call.table === "document_edits" && call.op === "update")).toBe(false);
     fake.done();
   });

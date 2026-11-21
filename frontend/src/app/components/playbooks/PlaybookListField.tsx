@@ -8,8 +8,8 @@ import {
   DropdownCheckboxItem,
   DropdownContent,
   DropdownTrigger,
-} from "@/shared/ui/dropdown";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
+  TextButtonUI,
+} from "@mike/ui";
 import type { PlaybookListOption } from "./playbookJurisdictions";
 
 function parseList(text: string) {

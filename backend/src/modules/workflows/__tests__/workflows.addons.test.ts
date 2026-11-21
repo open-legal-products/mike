@@ -36,6 +36,7 @@ vi.mock("../../../lib/dbq/enqueue", () => ({
   enqueueStorageCleanup: (...args: unknown[]) => enqueueStorageCleanup(...args),
 }));
 
+import { AppError } from "../../../lib/appError";
 import type { Db } from "../../../lib/supabase";
 import {
   getWorkflowAddon,
@@ -536,11 +537,18 @@ describe("importWorkflowAddon", () => {
 
     const result = await importWorkflowAddon(db, { addonId: "a1", userId: "u1" });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       kind: "assets_copy_failed",
       detail: "Failed to copy add-on assets",
     });
+    // The failure that caused the rollback travels with the result under its
+    // kind, with the database's error as the cause, so the route can report
+    // it; the detail string alone said nothing.
+    const failure = (result as { error?: unknown }).error;
+    expect(failure).toBeInstanceOf(AppError);
+    expect((failure as AppError).kind).toBe("workflows.addon_failed");
+    expect((failure as AppError).cause).toEqual({ message: "insert failed" });
     // Row first, then the durable object deletes — nothing may point at the
     // half-made copies while the cleanup job drains.
     const rollback = calls.find((c) => c.table === "workflows" && c.op === "delete");

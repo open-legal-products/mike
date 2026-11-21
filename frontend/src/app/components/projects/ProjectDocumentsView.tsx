@@ -31,7 +31,7 @@ import {
     type DocTableSelectionActions,
     type DocTableFolder,
 } from "@/app/components/documents/DocTable";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { TabPillButtonUI } from "@mike/ui";
 import { ProjectSectionToolbar, useProjectWorkspace } from "./ProjectWorkspace";
 
 interface Props {

@@ -330,3 +330,67 @@ describe("extractTrackedChangeIds", () => {
         await expect(extractTrackedChangeIds(bytes)).resolves.toEqual([]);
     });
 });
+
+describe("pure-insertion anchoring work", () => {
+    it("finds the insertion point without comparing context at every character", async () => {
+        // Before: every position of every paragraph sliced and compared the
+        // context (two substring copies per character, per strategy). Count
+        // slices taken of the long paragraph's normalized text.
+        const filler = "lorem ipsum dolor sit amet ".repeat(800);
+        const body = `${filler}ANCHOR here.${filler}`;
+        const bytes = await makeDocx(para(body));
+        const original = String.prototype.slice;
+        let longSlices = 0;
+        String.prototype.slice = function (this: string, ...args: [number?, number?]) {
+            if (this.length >= filler.length) longSlices++;
+            return original.apply(this, args);
+        };
+        let result;
+        try {
+            result = await applyTrackedEdits(bytes, [
+                { find: "", replace: " NEW", context_before: "ANCHOR", context_after: " here." },
+            ]);
+        } finally {
+            String.prototype.slice = original;
+        }
+        expect(result.errors).toEqual([]);
+        expect(result.changes).toHaveLength(1);
+        expect(longSlices).toBeLessThan(50);
+
+        // The verdicts the per-position scan produced must not change.
+        const small = await makeDocx(para("a. b. a. c."));
+        const ambiguous = await applyTrackedEdits(small, [
+            { find: "", replace: "X", context_before: "a.", context_after: "" },
+        ]);
+        expect(ambiguous.errors[0]?.reason).toMatch(/^Ambiguous/);
+        const unique = await applyTrackedEdits(small, [
+            { find: "", replace: "X", context_before: "a.", context_after: " c." },
+        ]);
+        expect(unique.errors).toEqual([]);
+        expect(unique.changes).toHaveLength(1);
+    });
+});
+
+describe("paragraph flattening work", () => {
+    it("reads body text without building per-character run maps", async () => {
+        // extractDocxBodyText (every DOCX read, index and playbook source)
+        // needs only the text. Before, flattening pushed three boxed numbers
+        // per character into maps that only an edited paragraph uses.
+        const text = "x".repeat(40_000);
+        const bytes = await makeDocx(para(text) + para("short"));
+        const original = Array.prototype.push;
+        let pushes = 0;
+        Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
+            pushes++;
+            return original.apply(this, items);
+        };
+        let extracted;
+        try {
+            extracted = await extractDocxBodyText(bytes);
+        } finally {
+            Array.prototype.push = original;
+        }
+        expect(extracted).toBe(`${text}\nshort`);
+        expect(pushes).toBeLessThan(1_000);
+    });
+});

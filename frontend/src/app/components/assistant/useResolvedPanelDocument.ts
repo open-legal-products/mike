@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getPanelDocument } from "@/app/lib/mikeApi";
 import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
 import type { PanelDocument } from "../shared/types";
+import { documentCapabilities } from "../shared/documentCapabilities";
 
 function mergePanelDocuments(
     summary: PanelDocument,
@@ -21,13 +22,19 @@ function mergePanelDocuments(
     };
 }
 
-function friendlyDocumentError(message: string): string {
+function friendlyDocumentError(reason: unknown): string {
+    if (!(reason instanceof Error)) return "Could not load this document.";
+    let message = reason.message;
     try {
         const parsed = JSON.parse(message) as { detail?: unknown };
         if (typeof parsed.detail === "string") message = parsed.detail;
     } catch {
         // Keep the original message.
     }
+    // The source-documents endpoint answers 400 only with a fixed sentence
+    // written for the reader: a connection to set up or fix in Settings.
+    const status = (reason as { status?: unknown }).status;
+    if (status === 400 && message.trim()) return message;
     if (message.includes("429") || /rate limit|throttled/i.test(message)) {
         const wait = message.match(/available in\s+(\d+)\s+seconds/i)?.[1];
         return wait
@@ -45,11 +52,10 @@ export function useResolvedPanelDocument(document: PanelDocument): {
 } {
     const documentId = document.document_id;
     // The workspace of the chat, review or project the document is opened
-    // from (else the active one): a case is read with its CourtListener
-    // connection.
+    // from (else the active one): a provider-backed source is read with that
+    // workspace's connection to the provider.
     const workspace = useDocumentWorkspace();
-    const needsHydration =
-        document.type === "case" && !document.subdocuments?.length;
+    const needsHydration = documentCapabilities(document).hydrateOnOpen;
     const [request, setRequest] = useState<{
         documentId: string;
         loaded: PanelDocument | null;
@@ -83,10 +89,7 @@ export function useResolvedPanelDocument(document: PanelDocument): {
                         documentId,
                         loaded: null,
                         loading: false,
-                        error:
-                            reason instanceof Error
-                                ? friendlyDocumentError(reason.message)
-                                : "Could not load this document.",
+                        error: friendlyDocumentError(reason),
                     });
             });
         return () => {

@@ -154,7 +154,7 @@ describe("direct Mistral adapter", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(
       completeWithProvider({ model: "mistral-small-2603", user: "Title" }),
-    ).rejects.toThrow("MISTRAL_API_KEY");
+    ).rejects.toThrow("The Mistral API key is not configured.");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

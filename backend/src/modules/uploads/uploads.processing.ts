@@ -14,7 +14,7 @@ import {
 
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Transform } from "node:stream";
@@ -22,15 +22,21 @@ import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 
 import { resolveContentOrgId } from "../../lib/access";
+import { AppError } from "../../lib/appError";
 import { recordAudit } from "../../lib/audit";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
+import { runIsolated } from "../../lib/dbq/jobScope";
 import { convertedPdfKey, officeFileToPdf } from "../../lib/convert";
-import { reportError } from "../../lib/observability/sentry";
+import {
+  markStage,
+  reportError,
+  setOperation,
+} from "../../lib/observability/sentry";
 import {
   createPollFailureGate,
   type PollFailureGate,
 } from "../../lib/observability/pollFailureGate";
-import { asReportableError } from "../../lib/httpError";
+import { asReportableError, withResponseStatus } from "../../lib/httpError";
 import { shouldConvertToPdf } from "../../lib/documentTypes";
 import { countPagesWithoutText } from "../../lib/pdfText";
 import { uploadJobWallClockMs } from "../../lib/runtimeConfig";
@@ -45,7 +51,9 @@ import {
   versionStorageKey,
 } from "../../lib/storage";
 import { createServerSupabase, type Db } from "../../lib/supabase";
-import { UPLOAD_VERIFICATION_LEASE_SECONDS } from "./uploads.manifest";
+import { ExtractionBusyError, ExtractionLimitError, withBackgroundExtraction } from "../../lib/extraction/isolated";
+import { isAllocationFailure } from "../../lib/extraction/limits";
+import { MAX_UPLOAD_SIZE_BYTES, UPLOAD_VERIFICATION_LEASE_SECONDS } from "./uploads.manifest";
 
 type UploadSessionRow = {
   id: string;
@@ -92,6 +100,11 @@ type UploadJobRow = {
 
 export const UPLOAD_JOB_MAX_ATTEMPTS = 3;
 export const UPLOAD_JOB_LEASE_SECONDS = 30 * 60;
+// Same bounds as the background text jobs (documents.textJobs.ts): wait up
+// to a minute for the parser, then try again later without spending one of
+// the job's attempts.
+const PARSER_SLOT_WAIT_MS = 60_000;
+const PARSER_BUSY_RETRY_MS = 30_000;
 const UPLOAD_WORKER_POLL_MS = 1_000;
 /** Ceiling for the idle poll interval while every iteration keeps failing. */
 const UPLOAD_WORKER_MAX_BACKOFF_MS = 30_000;
@@ -102,6 +115,9 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "direct_upload_failed",
   "size_mismatch",
   "content_type_mismatch",
+  "invalid_pdf_file",
+  "invalid_docx_package",
+  "document_too_large",
   // The destination document no longer exists. Retrying cannot make it exist
   // again — it can only put it back, which is the bug this code prevents.
   "document_deleted",
@@ -116,24 +132,98 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
  * stop, mark the file failed, and clean up whatever bytes this job wrote —
  * never to recreate the row.
  */
-class DeletedDocumentError extends Error {
+class DeletedDocumentError extends AppError {
   /** Objects this job uploaded that nothing will reference now. */
   readonly orphanedKeys: string[];
 
   constructor(documentId: string, orphanedKeys: (string | null)[] = []) {
-    super(`document_deleted:${documentId}`);
-    this.name = "DeletedDocumentError";
+    super("upload.document_deleted", `document_deleted:${documentId}`);
     this.orphanedKeys = orphanedKeys.filter(
       (key): key is string => typeof key === "string" && key.length > 0,
     );
   }
 }
 
-class ChangedDocumentError extends Error {
+class ChangedDocumentError extends AppError {
   constructor(readonly orphanedKeys: string[] = []) {
-    super("document_changed");
-    this.name = "ChangedDocumentError";
+    super("upload.document_changed", "document_changed");
   }
+}
+
+class InvalidPdfFileError extends Error {
+  constructor() {
+    super("invalid_pdf_file");
+    this.name = "InvalidPdfFileError";
+  }
+}
+
+class DocxValidationError extends AppError {
+  constructor(
+    readonly code: "invalid_docx_package" | "document_too_large" | "processing_failed",
+    cause?: unknown,
+  ) {
+    super("upload.docx_validation_failed", code, { cause });
+  }
+}
+
+async function validateDocxFile(artifact: SealedFileArtifact): Promise<void> {
+  // Bound the compressed source before reading it. Reuse the parser's
+  // existing admission and OS budgets.
+  if (artifact.size > MAX_UPLOAD_SIZE_BYTES) throw new DocxValidationError("invalid_docx_package");
+  try {
+    // Wait for the parser as the background text jobs do; a validation queued
+    // behind another file's parse is not a failure. The background gate lets
+    // one upload at a time into the parser's own queue, so a batch of
+    // UPLOAD_PROCESSING_CONCURRENCY workers cannot fill it and turn away
+    // interactive parses. Only that one upload holds its (size-bounded)
+    // bytes while it waits; the rest wait outside the gate holding nothing.
+    await withBackgroundExtraction({ waitMs: PARSER_SLOT_WAIT_MS }, async (extract) => {
+      const bytes = await readFile(artifact.filePath);
+      const result = await extract("validateDocxPackage", bytes.buffer.slice(
+        bytes.byteOffset, bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer);
+      if (!result.valid) throw new DocxValidationError("invalid_docx_package");
+    });
+  } catch (error) {
+    // Still busy after the wait: processUploadJob requeues without charging
+    // an attempt, so it must arrive unwrapped.
+    if (error instanceof DocxValidationError || error instanceof ExtractionBusyError) throw error;
+    // Unexpected child/I/O failures remain retryable, not malformed.
+    throw new DocxValidationError(
+      error instanceof ExtractionLimitError || isAllocationFailure(error)
+        ? "document_too_large" : "processing_failed",
+      error,
+    );
+  }
+}
+
+const PDF_HEADER_SIGNATURE = Buffer.from("%PDF-");
+// ISO 32000 lets a reader accept the header anywhere in the first 1024 bytes
+// (Annex H, implementation note 13), and pdf.js — which renders and page-counts
+// these files downstream — scans exactly that window.
+const PDF_HEADER_SEARCH_WINDOW_BYTES = 1024;
+
+async function hasPdfSignature(filePath: string): Promise<boolean> {
+  const handle = await open(filePath, "r");
+  try {
+    const window = Buffer.alloc(PDF_HEADER_SEARCH_WINDOW_BYTES);
+    const { bytesRead } = await handle.read(window, 0, window.length, 0);
+    return window.subarray(0, bytesRead).indexOf(PDF_HEADER_SIGNATURE) !== -1;
+  } finally {
+    await handle.close();
+  }
+}
+
+// Refuse bytes that cannot be a PDF (a renamed .txt, a ZIP, a truncated or
+// empty file) before anything is written for them. The signature search is
+// the cheap path; when it misses, the decision is handed to the same parser
+// that renders the file downstream, because pdf.js keeps going without a
+// header and rebuilds the cross-reference table by scanning, so a file it
+// can open must never be refused here as "not a PDF".
+async function validatePdfFile(filePath: string): Promise<void> {
+  if (await hasPdfSignature(filePath)) return;
+  if ((await countPdfPages(filePath)) !== null) return;
+  throw new InvalidPdfFileError();
 }
 
 /**
@@ -212,6 +302,7 @@ async function buildPdfRendition(args: {
   if (args.fileType === "pdf") return args.sourceStoragePath;
   if (!shouldConvertToPdf(args.fileType)) return null;
   try {
+    markStage("conversion");
     const pdfPath = await officeFileToPdf(
       args.sourceFilePath,
       args.workingDirectory,
@@ -320,7 +411,9 @@ async function requireSealedFile(
   } catch (error) {
     await removeTemporaryArtifact(directory);
     if (error instanceof StorageOperationError) {
-      throw new Error("sealed_upload_not_found", { cause: error });
+      throw new AppError("upload.sealed_missing", "sealed_upload_not_found", {
+        cause: error,
+      });
     }
     throw error;
   }
@@ -703,6 +796,8 @@ export async function processUploadFile(
 ) {
   const artifact = await requireSealedFile(file);
   try {
+    if (file.file_type === "pdf") await validatePdfFile(artifact.filePath);
+    if (file.file_type === "docx") await validateDocxFile(artifact);
     switch (session.purpose) {
       case "document_create":
         return await processCreatedDocument(db, session, file, artifact);
@@ -765,7 +860,17 @@ async function heartbeatJob(db: Db, jobId: string, workerId: string) {
     .eq("locked_by", workerId)
     .select("id")
     .maybeSingle();
-  if (error || !data) throw error ?? new Error("upload_job_lease_lost");
+  if (error || !data) throw error ?? leaseLost();
+}
+
+/**
+ * The job row no longer says this worker holds it: another worker claimed
+ * it after the lease aged out, or a sweep retired it. Named, so Sentry files
+ * it under its own kind (MIKE-BACKEND-M grouped every code-less iteration
+ * failure as one anonymous "Failure in upload-worker / iteration").
+ */
+function leaseLost(): AppError {
+  return new AppError("upload.lease_lost", "upload_job_lease_lost");
 }
 
 async function refreshUploadSessionStatus(
@@ -799,6 +904,22 @@ async function removeFailedCreatedDocument(
   file: UploadFileRow,
 ): Promise<void> {
   if (session.purpose !== "document_create") return;
+  markStage("failed-document-remove");
+  // The row goes first, and the objects only if the row went. An earlier
+  // attempt of this job may have committed a version (which sets
+  // current_version_id) and then lost its worker; the row survives this
+  // delete, and its version still points at these same storage keys.
+  const { data: removed, error } = await db
+    .from("documents")
+    .delete()
+    .eq("id", file.resource_id)
+    .eq("user_id", session.user_id)
+    .eq("status", "error")
+    .is("current_version_id", null)
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  if (!removed) return;
   await deleteFilesBestEffort(
     [
       storageKey(session.user_id, file.resource_id, file.filename),
@@ -806,14 +927,44 @@ async function removeFailedCreatedDocument(
     ],
     "failed-document-remove",
   );
-  const { error } = await db
-    .from("documents")
-    .delete()
-    .eq("id", file.resource_id)
-    .eq("user_id", session.user_id)
-    .eq("status", "error")
-    .is("current_version_id", null);
-  if (error) throw error;
+}
+
+/**
+ * Put a claimed job back in the queue without spending an attempt: the claim
+ * RPC charged one, and a busy parser says nothing about the file. Mirrors
+ * DbJobDeferredError for db_jobs, which upload jobs (their own table) do not use.
+ */
+async function deferUploadJob(
+  db: Db,
+  job: UploadJobRow,
+  sessionId: string,
+  workerId: string,
+): Promise<void> {
+  const now = new Date();
+  const { data: deferred, error: deferError } = await db
+    .from("upload_processing_jobs")
+    .update({
+      status: "queued",
+      attempts: Math.max(0, job.attempts - 1),
+      available_at: new Date(now.getTime() + PARSER_BUSY_RETRY_MS).toISOString(),
+      locked_at: null,
+      locked_by: null,
+      error_code: "document_extraction_busy",
+      updated_at: now.toISOString(),
+    })
+    .eq("id", job.id)
+    .eq("locked_by", workerId)
+    .select("id")
+    .maybeSingle();
+  if (deferError || !deferred) throw deferError ?? leaseLost();
+  const { error: fileError } = await db
+    .from("upload_session_files")
+    .update({ status: "uploaded", error_code: null, updated_at: now.toISOString() })
+    .eq("id", job.file_id)
+    .eq("session_id", sessionId)
+    .eq("status", "processing");
+  if (fileError) throw fileError;
+  await refreshUploadSessionStatus(db, sessionId);
 }
 
 export async function processUploadJob(
@@ -821,22 +972,28 @@ export async function processUploadJob(
   jobId: string,
   workerId: string,
 ): Promise<void> {
+  setOperation("documents.upload.complete");
+  markStage("claim");
+  // maybeSingle(): zero rows is a missing row, named below, not a PostgREST
+  // PGRST116 error. Database failures still arrive on the error path.
   const { data: job, error: jobError } = await db
     .from("upload_processing_jobs")
     .select("id, session_id, file_id, attempts, locked_by")
     .eq("id", jobId)
     .eq("status", "running")
     .eq("locked_by", workerId)
-    .single();
-  if (jobError || !job) throw jobError ?? new Error("upload_job_not_found");
+    .maybeSingle();
+  if (jobError || !job)
+    throw jobError ?? new AppError("upload.job_missing", "upload_job_not_found");
   const typedJob = job as UploadJobRow;
   const { data: session, error: sessionError } = await db
     .from("upload_sessions")
     .select("id, user_id, user_email, purpose, destination, status")
     .eq("id", typedJob.session_id)
-    .single();
+    .maybeSingle();
   if (sessionError || !session) {
-    throw sessionError ?? new Error("upload_session_not_found");
+    throw sessionError
+      ?? new AppError("upload.session_missing", "upload_session_not_found");
   }
   const typedSession = session as UploadSessionRow;
   const { data: fileRow, error: filesError } = await db
@@ -844,9 +1001,10 @@ export async function processUploadJob(
     .select("*")
     .eq("session_id", typedSession.id)
     .eq("id", typedJob.file_id)
-    .single();
+    .maybeSingle();
   if (filesError || !fileRow) {
-    throw filesError ?? new Error("upload_session_file_not_found");
+    throw filesError
+      ?? new AppError("upload.file_missing", "upload_session_file_not_found");
   }
   const file = fileRow as UploadFileRow;
   const terminalUploadFailure =
@@ -893,15 +1051,31 @@ export async function processUploadJob(
 
       let result: unknown;
       try {
+        markStage("process-file");
         result = await processUploadFile(db, typedSession, file);
       } catch (error) {
         // A failed timer heartbeat makes ownership uncertain. Re-prove the
         // lease before recording even a failure result.
         await heartbeatJob(db, jobId, workerId);
+        if (error instanceof ExtractionBusyError) {
+          // Other files held the parser for the whole wait. Nothing is wrong
+          // with this one: requeue it, give back the attempt the claim
+          // charged, and report nothing.
+          await deferUploadJob(db, typedJob, typedSession.id, workerId);
+          return;
+        }
         failed = true;
         // These failures cannot be fixed by retrying the same upload.
-        terminalProcessingFailure = error instanceof DeletedDocumentError || error instanceof ChangedDocumentError;
-        if (!(error instanceof ChangedDocumentError)) {
+        terminalProcessingFailure =
+          error instanceof DeletedDocumentError ||
+          error instanceof ChangedDocumentError ||
+          error instanceof InvalidPdfFileError ||
+          (error instanceof DocxValidationError && error.code !== "processing_failed");
+        if (
+          !(error instanceof ChangedDocumentError) &&
+          !(error instanceof InvalidPdfFileError) &&
+          !(error instanceof DocxValidationError && error.code === "invalid_docx_package")
+        ) {
           reportError(error, {
             tags: {
               component: "upload-worker",
@@ -929,6 +1103,8 @@ export async function processUploadJob(
             error_code: error instanceof ChangedDocumentError
               ? "document_changed"
               : error instanceof DeletedDocumentError ? "document_deleted"
+              : error instanceof InvalidPdfFileError ? "invalid_pdf_file"
+              : error instanceof DocxValidationError ? error.code
               : "processing_failed",
             updated_at: new Date().toISOString(),
           })
@@ -959,6 +1135,7 @@ export async function processUploadJob(
           .eq("id", file.id)
           .eq("session_id", typedSession.id);
         if (error) throw error;
+        markStage("sealed-source-after-process");
         await deleteFileBestEffort(file.sealed_storage_path, "sealed-source-after-process");
         await heartbeatJob(db, jobId, workerId);
       }
@@ -968,7 +1145,7 @@ export async function processUploadJob(
   }
 
   const now = new Date().toISOString();
-  // Deleted destinations and stale editor saves cannot succeed on retry.
+  // Invalid files, deleted destinations, and stale saves cannot succeed on retry.
   if (
     failed &&
     !terminalProcessingFailure &&
@@ -992,7 +1169,7 @@ export async function processUploadJob(
       .select("id")
       .maybeSingle();
     if (retryError || !retried) {
-      throw retryError ?? new Error("upload_job_lease_lost");
+      throw retryError ?? leaseLost();
     }
     const { error: fileRetryError } = await db
       .from("upload_session_files")
@@ -1018,6 +1195,7 @@ export async function processUploadJob(
       .select("sealed_storage_path")
       .eq("session_id", typedSession.id)
       .eq("status", "error");
+    markStage("failed-file-sealed");
     for (const failedFile of failedFiles ?? []) {
       if (failedFile.sealed_storage_path) {
         await deleteFileBestEffort(failedFile.sealed_storage_path, "failed-file-sealed");
@@ -1038,7 +1216,7 @@ export async function processUploadJob(
     .select("id")
     .maybeSingle();
   if (finishError || !finished) {
-    throw finishError ?? new Error("upload_job_lease_lost");
+    throw finishError ?? leaseLost();
   }
   await refreshUploadSessionStatus(db, typedSession.id);
 }
@@ -1129,6 +1307,7 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
         continue;
       }
       // Null/empty paths are skipped inside; one warning per file at most.
+      markStage("session-expiry");
       await deleteFilesBestEffort(
         [file.staging_storage_path, file.sealed_storage_path],
         "session-expiry",
@@ -1168,7 +1347,7 @@ async function claimNextUploadJob(
   workerId: string,
   maxRunningPerUser: number,
 ) {
-  const { data, error } = await db.rpc("claim_upload_processing_job", {
+  const { data, error, status } = await db.rpc("claim_upload_processing_job", {
     target_worker_id: workerId,
     target_lease_seconds: UPLOAD_JOB_LEASE_SECONDS,
     target_max_running_per_user: maxRunningPerUser,
@@ -1176,7 +1355,7 @@ async function claimNextUploadJob(
   // A PostgREST error is a plain object: give it a stack here and keep its
   // `code` (PGRST202 = RPC missing, i.e. migrations not applied) on the
   // cause chain, where the Sentry boundary reads it into failure_code.
-  if (error) throw asReportableError(error, claimNextUploadJob);
+  if (error) throw asReportableError(withResponseStatus(error, status), claimNextUploadJob);
   return typeof data === "string" && data ? data : null;
 }
 
@@ -1202,8 +1381,9 @@ function startUploadProcessingWorker(options: {
     try {
       const db = createServerSupabase();
       if (options.runCleanup && Date.now() - lastCleanupAt >= 60_000) {
+        // Own scope: the stages cleanup marks must not land on a later job.
         await Promise.all([
-          cleanupUploadSessions(db),
+          runIsolated(() => cleanupUploadSessions(db)),
           cleanupUploadProcessingTempFiles(),
         ]);
         lastCleanupAt = Date.now();
@@ -1218,7 +1398,10 @@ function startUploadProcessingWorker(options: {
         schedule(UPLOAD_WORKER_POLL_MS);
         return;
       }
-      await processUploadJob(db, jobId, workerId);
+      // Each job in its own Sentry isolation scope: several of these loops
+      // share the process, and the operation/stages one job records must not
+      // land on another's failure.
+      await runIsolated(() => processUploadJob(db, jobId, workerId));
       failures.success();
       schedule(0);
     } catch (thrown) {

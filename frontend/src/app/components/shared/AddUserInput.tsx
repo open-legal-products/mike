@@ -6,10 +6,9 @@ import {
     lookupUserByEmail,
     type UserLookupResult,
 } from "@/app/lib/mikeApi";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI, LIQUID_GLASS_SUBTLE_CLASS } from "@mike/ui";
 import { cn } from "@/app/lib/utils";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

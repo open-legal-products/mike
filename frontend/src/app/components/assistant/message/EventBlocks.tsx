@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useReasoningDisclosure } from "@/shared/hooks/useReasoningDisclosure";
+import { useMarkdownCheckpoint } from "./markdownCheckpoint";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { useReasoningDisclosure, DocEditBlockUI, DocFindBlockUI, DocReadBlockUI } from "@mike/ui";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Download, Loader2 } from "lucide-react";
@@ -13,11 +14,6 @@ import { API_BASE } from "@/app/lib/mikeApi";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import type { AssistantEvent } from "../../shared/types";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
-import {
-    DocEditBlockUI,
-    DocFindBlockUI,
-    DocReadBlockUI,
-} from "@/shared/ui/DocumentEventBlocksUI";
 import { RESPONSE_GLASS_SURFACE, withoutMarkdownNode } from "./messageStyles";
 
 const THINKING_PHRASES = [
@@ -81,10 +77,13 @@ export function EventBlock({
 export function ReasoningContent({
     text,
     label = "Thought process",
+    streaming = false,
 }: {
     text: string;
     label?: string;
+    streaming?: boolean;
 }) {
+    const {richText, plainTail} = useMarkdownCheckpoint(text, streaming);
     const viewportRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const [hasMoreBelow, setHasMoreBelow] = useState(false);
@@ -140,19 +139,8 @@ export function ReasoningContent({
                     ref={contentRef}
                     className="text-sm font-serif text-gray-400 prose prose-sm max-w-none [&>*]:text-gray-400 [&>*]:text-sm"
                 >
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                            code: (props) => (
-                                <code
-                                    className="font-serif text-gray-600"
-                                    {...withoutMarkdownNode(props)}
-                                />
-                            ),
-                        }}
-                    >
-                        {text}
-                    </ReactMarkdown>
+                    <ReasoningMarkdown text={richText} />
+                    {plainTail && <span className="whitespace-pre-wrap">{plainTail}</span>}
                 </div>
             </div>
             {hasMoreBelow && (
@@ -165,6 +153,22 @@ export function ReasoningContent({
         </div>
     );
 }
+
+const ReasoningMarkdown = memo(function ReasoningMarkdown({text}: {text: string}) {
+    return (<ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                            code: (props) => (
+                                <code
+                                    className="font-serif text-gray-600"
+                                    {...withoutMarkdownNode(props)}
+                                />
+                            ),
+                        }}
+                    >
+                        {text}
+                    </ReactMarkdown>);
+});
 
 export function ReasoningBlock({
     text,
@@ -201,7 +205,7 @@ export function ReasoningBlock({
                         : "Thought process"
                 }
             />
-            {isContentOpen && <ReasoningContent text={text} />}
+            {isContentOpen && <ReasoningContent text={text} streaming={isStreaming} />}
         </EventBlock>
     );
 }
@@ -211,12 +215,15 @@ export function DocReadBlock({
     onClick,
     showConnector,
     isStreaming,
+    interrupted,
     showFileIcon = true,
 }: {
     filename: string;
     onClick?: () => void;
     showConnector?: boolean;
     isStreaming?: boolean;
+    /** The turn ended before the read reported its result. */
+    interrupted?: boolean;
     showFileIcon?: boolean;
 }) {
     return (
@@ -230,6 +237,7 @@ export function DocReadBlock({
             onClick={onClick}
             showConnector={showConnector}
             isStreaming={isStreaming}
+            interrupted={interrupted}
         />
     );
 }
@@ -239,6 +247,7 @@ export function DocFindBlock({
     query,
     totalMatches,
     isStreaming,
+    interrupted,
     showConnector,
     onClick,
 }: {
@@ -246,6 +255,8 @@ export function DocFindBlock({
     query: string;
     totalMatches: number;
     isStreaming?: boolean;
+    /** The turn ended before the find reported its matches. */
+    interrupted?: boolean;
     showConnector?: boolean;
     onClick?: () => void;
 }) {
@@ -255,6 +266,7 @@ export function DocFindBlock({
             query={query}
             totalMatches={totalMatches}
             isStreaming={isStreaming}
+            interrupted={interrupted}
             showConnector={showConnector}
             onClick={onClick}
         />
@@ -265,22 +277,29 @@ export function DocCreatedBlock({
     filename,
     showConnector,
     isStreaming,
+    interrupted,
     onClick,
 }: {
     filename: string;
     showConnector?: boolean;
     isStreaming?: boolean;
+    /** The turn ended before the document was reported as created. */
+    interrupted?: boolean;
     onClick?: () => void;
 }) {
     return (
         <EventBlock
             showConnector={showConnector}
             isStreaming={isStreaming}
-            dotColor="green"
+            dotColor={interrupted ? "gray" : "green"}
         >
             <div className="flex min-w-0 items-center gap-1.5">
                 <EventLabel className="shrink-0">
-                    {isStreaming ? "Creating" : "Created"}
+                    {isStreaming
+                        ? "Creating"
+                        : interrupted
+                          ? "Creation stopped"
+                          : "Created"}
                 </EventLabel>
                 {isStreaming || !onClick ? (
                     <span className="flex min-w-0 items-center gap-1.5">
@@ -317,6 +336,7 @@ export function DocReplicatedBlock({
     showConnector,
     isStreaming,
     hasError,
+    interrupted,
     onOpenCopy,
 }: {
     filename: string;
@@ -333,15 +353,23 @@ export function DocReplicatedBlock({
     showConnector?: boolean;
     isStreaming?: boolean;
     hasError?: boolean;
+    /** The turn ended before the replication reported its result. */
+    interrupted?: boolean;
     onOpenCopy?: (copy: {
         new_filename: string;
         document_id: string;
         version_id: string;
     }) => void;
 }) {
-    const label = isStreaming ? "Replicating" : "Replicated";
+    const label = isStreaming
+        ? "Replicating"
+        : hasError
+          ? "Replication failed"
+          : interrupted
+            ? "Replication stopped"
+            : "Replicated";
     const suffix =
-        !isStreaming && count > 1
+        !isStreaming && !hasError && !interrupted && count > 1
             ? ` ${count} times`
             : isStreaming
               ? "..."
@@ -350,7 +378,7 @@ export function DocReplicatedBlock({
         <EventBlock
             showConnector={showConnector}
             isStreaming={isStreaming}
-            dotColor={hasError ? "red" : "green"}
+            dotColor={hasError ? "red" : interrupted ? "gray" : "green"}
         >
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                 <EventLabel className="shrink-0">{label}</EventLabel>
@@ -665,6 +693,7 @@ export function CourtListenerBlock({
     detail,
     isStreaming,
     hasError,
+    interrupted,
     showConnector,
     items,
 }: {
@@ -672,6 +701,8 @@ export function CourtListenerBlock({
     detail?: string;
     isStreaming?: boolean;
     hasError?: boolean;
+    /** The turn ended before the call reported its result. */
+    interrupted?: boolean;
     showConnector?: boolean;
     items?: CourtListenerBlockItem[];
 }) {
@@ -681,7 +712,7 @@ export function CourtListenerBlock({
         <EventBlock
             showConnector={showConnector}
             isStreaming={isStreaming}
-            dotColor={hasError ? "red" : "green"}
+            dotColor={hasError ? "red" : interrupted ? "gray" : "green"}
         >
             {hasItems ? (
                 <EventDisclosureButton
@@ -705,8 +736,10 @@ export function CourtListenerBlock({
                             .filter(Boolean)
                             .join(", ");
                         const primary = label || item.url || "Unknown case";
+                        // A stopped call never reported these searches, so
+                        // they are named, not claimed as done.
                         const searchText = item.query
-                            ? `Searched for "${item.query}" in ${primary}${
+                            ? `${interrupted ? "Search for" : "Searched for"} "${item.query}" in ${primary}${
                                   typeof item.totalMatches === "number"
                                       ? ` (${item.totalMatches} ${
                                             item.totalMatches === 1
@@ -752,15 +785,24 @@ export function DocEditBlock({
     showConnector,
     isStreaming,
     hasError,
+    interrupted,
     onClick,
 }: {
     filename: string;
     showConnector?: boolean;
     isStreaming?: boolean;
     hasError?: boolean;
+    /** The turn ended before the edit reported its result. */
+    interrupted?: boolean;
     onClick?: () => void;
 }) {
-    const label = isStreaming ? "Editing" : hasError ? "Edit failed" : "Edited";
+    const label = isStreaming
+        ? "Editing"
+        : hasError
+          ? "Edit failed"
+          : interrupted
+            ? "Edit stopped"
+            : "Edited";
 
     return (
         <DocEditBlockUI
@@ -772,7 +814,7 @@ export function DocEditBlock({
             onClick={onClick}
             showConnector={showConnector}
             isStreaming={isStreaming}
-            dotColor={hasError ? "red" : "green"}
+            dotColor={hasError ? "red" : interrupted ? "gray" : "green"}
         />
     );
 }

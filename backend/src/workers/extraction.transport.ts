@@ -1,14 +1,19 @@
 // extraction transport — implementation behind the module facade.
-import { Worker, type Job } from "bullmq";
-import { getRedisConnection } from "../lib/queue/connection";
-import { reportError } from "../lib/observability/sentry";
+import { Worker, UnrecoverableError, type Job } from "bullmq";
+import { ExtractionParseError } from "../lib/extraction/failure";
+import { ExtractionLimitError } from "../lib/extraction/limits";
+import { runIsolated } from "../lib/dbq/jobScope";
+import { getRedisConnection, watchQueueErrors } from "../lib/queue/connection";
+import { isDeterministicProviderRefusal, providerFailureLevel } from "../lib/llm/providerErrors";
+import { markErrorHandled, reportError } from "../lib/observability/sentry";
 import { EXTRACTION_QUEUE, type ExtractionJobData } from "../lib/queue/extractionQueue";
-import { runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
+import { extractionJobOperation, isRefusalShownToUser, runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
+import { log } from "../lib/log";
 
-/** True once a job has exhausted its retries (BullMQ 'failed', no attempts left). */
-export function isPermanentFailure(job: Job<ExtractionJobData>): boolean {
+/** Terminal resource refusals and exhausted retries both need cell cleanup. */
+export function isPermanentFailure(job: Job<ExtractionJobData>, error?: Error): boolean {
     const maxAttempts = job.opts.attempts ?? 1;
-    return job.attemptsMade >= maxAttempts;
+    return error instanceof UnrecoverableError || job.attemptsMade >= maxAttempts;
 }
 
 let worker: Worker<ExtractionJobData> | null = null;
@@ -18,7 +23,21 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
     worker = new Worker<ExtractionJobData>(
         EXTRACTION_QUEUE,
         async (job: Job<ExtractionJobData>) => {
-            await runExtractionJob(job.data);
+            // Own isolation scope per job (concurrency is 3); the job body
+            // names its operation (tabular.cell or tabular.row).
+            await runIsolated(async () => {
+                try {
+                    await runExtractionJob(job.data);
+                } catch (error) {
+                    if (error instanceof ExtractionLimitError || error instanceof ExtractionParseError) {
+                        throw Object.assign(new UnrecoverableError(error instanceof ExtractionParseError ? "document_text_unreadable" : "document_too_large"), { cause: error });
+                    }
+                    if (isDeterministicProviderRefusal(error)) {
+                        throw Object.assign(new UnrecoverableError("provider_refused"), { cause: error });
+                    }
+                    throw error;
+                }
+            });
         },
         {
             connection: getRedisConnection(),
@@ -30,18 +49,26 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
             maxStalledCount: 2,
         },
     );
+    watchQueueErrors(worker, "worker");
     worker.on("stalled", (jobId) => {
-        console.warn(
-            "[extraction-worker] job stalled; will be re-queued",
+        log.warn("extraction-worker", "job stalled; will be re-queued",
             { jobId },
         );
     });
     worker.on("failed", async (job, err) => {
-        const permanent = !!job && isPermanentFailure(job);
-        reportError(err, {
-            level: permanent ? "error" : "warning",
+        const permanent = !!job && isPermanentFailure(job, err);
+        // The 'failed' event fires outside the processor's isolation scope,
+        // so the operation is named here rather than inherited. The grid was
+        // already told the user's key was rejected: only the log below stays.
+        if (isRefusalShownToUser(err)) markErrorHandled(err);
+        else reportError(err, {
+            // A refusal ends on its first attempt, at the chat engine's level.
+            level: err.cause instanceof ExtractionParseError ? "warning"
+                : isDeterministicProviderRefusal(err) ? providerFailureLevel(err)
+                : permanent ? "error" : "warning",
             tags: {
                 component: "extraction-worker",
+                operation: extractionJobOperation(job?.data ?? {}),
                 terminal: permanent,
                 attempt: job?.attemptsMade,
             },
@@ -74,9 +101,19 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
         try {
             await markExtractionFailed(job.data);
         } catch (updateErr) {
+            // Cells stay "generating" forever if this write is lost: reported
+            // with the terminal stage, logged as the same object.
+            reportError(updateErr, {
+                tags: {
+                    component: "extraction-worker",
+                    operation: extractionJobOperation(job.data),
+                    stage: "job.terminal",
+                },
+                extra: { job_id: job.id, review_id: job.data.reviewId },
+            });
             console.error(
                 "[extraction-worker] failed to mark cells error",
-                { jobId: job.id, updateErr },
+                { jobId: job.id, error: updateErr },
             );
         }
     });

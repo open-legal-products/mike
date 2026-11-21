@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(() => null) }));
+vi.mock("../../../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  reportError,
+}));
 vi.mock("../../../../lib/access", () => ({
   filterAccessibleDocumentIds: vi.fn(async () => ["doc-a"]),
 }));
@@ -148,5 +153,88 @@ describe("subagent run store", () => {
       { document_id: "doc-b", version_id: null },
     ]);
     expect(toolRecord(call(["doc-0", "unknown.pdf"]), "", docStore, docIndex).documents).toEqual([]);
+  });
+
+  it("keeps only a reference, never the text, of a provider-backed source", () => {
+    const uncited = "This distinctive uncited sentence must never reach the database.";
+    const text = `Held, the appeal is allowed. ${uncited}`;
+    const external = {
+      document_id: "mcp:c1:2:uk:3:abc", title: "R v X", type: "case" as const, metadata: [], quotes: [],
+      subdocuments: [{ document_id: "mcp:c1:2:uk:3:abc:text", title: "R v X", type: "html" as const }],
+    };
+    const docStore = new Map([
+      ["doc-0", { storage_path: "", file_type: "pdf", filename: "lease.pdf" }],
+      ["doc-2", { storage_path: "", file_type: "text/plain", filename: "R v X", inline_text: text, external_source: external }],
+    ]);
+    const docIndex = {
+      "doc-0": { document_id: "doc-a", filename: "lease.pdf", version_id: "v1" },
+      "doc-2": { document_id: external.document_id, filename: "R v X" },
+    };
+    const connectorResult = `{"result":{"text":${JSON.stringify(text)}}}`;
+    const records = [
+      // The dispatcher reports the handle a connector result registered.
+      toolRecord({ id: "1", name: "mcp_c1_get_document", input: { source: "uk", source_id: "abc" } }, connectorResult, docStore, docIndex, "doc-2"),
+      toolRecord({ id: "2", name: "read_document", input: { doc_id: "doc-2" } }, `Document filename: R v X\n\n${text}`, docStore, docIndex),
+      toolRecord({ id: "3", name: "find_in_document", input: { doc_id: "R v X", query: "appeal" } }, JSON.stringify({ matches: [{ snippet: uncited }] }), docStore, docIndex),
+    ];
+    for (const entry of records) {
+      expect(entry.result).not.toContain(uncited);
+      expect(entry.documents).toEqual([]);
+      expect(JSON.parse(entry.result)).toMatchObject({ ok: true, external_source: { document_id: external.document_id, title: "R v X", doc_id: "doc-2" } });
+    }
+    // A fetch that mixes an upload with the source keeps the upload's reference for access rechecks.
+    const mixed = toolRecord({ id: "4", name: "fetch_documents", input: { doc_ids: ["doc-0", "mcp:c1:2:uk:3:abc"] } }, `--- doc-0 ---\nlease\n--- doc-2 ---\n${text}`, docStore, docIndex);
+    expect(mixed.result).not.toContain(uncited);
+    expect(mixed.documents).toEqual([{ document_id: "doc-a", version_id: "v1" }]);
+    const secondSource = { ...external, document_id: "mcp:c1:2:uk:3:def", title: "R v Y" };
+    docStore.set("doc-3", { storage_path: "", file_type: "text/plain", filename: secondSource.title, inline_text: text, external_source: secondSource });
+    const multipleSources = toolRecord(
+      { id: "multi", name: "fetch_documents", input: { doc_ids: ["doc-2", "doc-0", "doc-3"] } },
+      `${text}\nlease\n${text}`, docStore,
+      { ...docIndex, "doc-3": { document_id: secondSource.document_id, filename: secondSource.title } },
+    );
+    expect(multipleSources.result).not.toContain(uncited);
+    expect(multipleSources.documents).toEqual([{ document_id: "doc-a", version_id: "v1" }]);
+    // An ordinary document, and a connector result that registered nothing, are recorded as before.
+    expect(toolRecord({ id: "5", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex)).toMatchObject({ result: "lease text", documents: [{ document_id: "doc-a", version_id: "v1" }] });
+    expect(toolRecord({ id: "6", name: "mcp_slack_search", input: {} }, "{\"result\":[]}", docStore, docIndex).result).toBe("{\"result\":[]}");
+    // A handle the store does not hold as a source redacts nothing and keeps the upload's reference.
+    expect(toolRecord({ id: "7", name: "mcp_c1_get_document", input: {} }, connectorResult, docStore, docIndex, "doc-0").result).toBe(connectorResult);
+    expect(toolRecord({ id: "8", name: "read_document", input: { doc_id: "doc-0" } }, "lease text", docStore, docIndex, "doc-0")).toMatchObject({
+      result: "lease text",
+      documents: [{ document_id: "doc-a", version_id: "v1" }],
+    });
+  });
+});
+
+describe("subagent run store failures", () => {
+  it("reports a failed run save under chat.subagent_failed with the database's error as cause", async () => {
+    reportError.mockClear();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dbError = { code: "23505", message: "duplicate key value" };
+    const client = {
+      from: () => ({ insert: vi.fn(async () => ({ error: dbError })) }),
+    } as never;
+    const store = createSubagentRunStore({
+      db: client,
+      userId: "user-1",
+      chatId: "chat-1",
+      messageId: "message-1",
+    });
+
+    await store.save("delegation-1", "completed", transcript);
+    await expect(store.flush()).resolves.toBeUndefined();
+
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "chat.subagent_failed", cause: dbError }),
+      { tags: { component: "chat-stream", operation: "chat.subagent" } },
+    );
+    // The report is the Sentry event; the log line stays a redacted category.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });

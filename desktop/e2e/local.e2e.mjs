@@ -2,9 +2,19 @@
 // and a FRESH userData dir, let the supervisor initdb + boot the whole stack
 // (postgres, gotrue, postgrest, gateway, backend, frontend — no Docker, no
 // network beyond loopback), then drive the real product over CDP: sign up and
-// onboard, create a project, upload a document into the library, download it back
-// — which round-trips the filesystem storage driver AND the blob-token
-// signed-URL route.
+// onboard, create a project, upload a document into the library, download it
+// back, and wait for the background job to extract its text — which
+// round-trips the filesystem storage driver, the blob-token signed-URL route,
+// AND the isolated parser child.
+//
+// The extraction step reads document_version_texts straight from the local
+// postgres because no HTTP route exposes it: the versions endpoint's
+// page_count / textless_page_count are measured in-process at upload and stay
+// correct even when every background extraction fails. That is how the bug
+// #799 fixed went unnoticed: the parser child's env allowlist dropped
+// ELECTRON_RUN_AS_NODE, so in the packaged app the child relaunched Mike
+// instead of parsing, and this suite stayed green because it only checked the
+// stored bytes.
 //
 // Two launch modes:
 //   node e2e/local.e2e.mjs                  # packaged Mike.app (dist:local)
@@ -19,6 +29,7 @@
 // src/local/upgrade.test.js against the same runner.
 
 import { chromium } from "playwright-core";
+import pg from "pg";
 import { spawn } from "node:child_process";
 import { mkdirSync, rmSync, readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -44,6 +55,9 @@ const USER_DATA_DIR = path.join(ARTIFACTS, "local-userdata");
 const DOWNLOAD_LOG = path.join(ARTIFACTS, "local-download-log.jsonl");
 const PDF_FIXTURE = path.join(here, "..", "..", "e2e", "fixtures", "test.pdf");
 const CDP_PORT = 9224;
+// desktop/src/local/config.js PORTS.postgres; secrets.json holds its password.
+const LOCAL_PG_PORT = 42810;
+const EXTRACTION_TIMEOUT_MS = 120_000;
 const RUN_ID = Date.now().toString(36);
 const EMAIL = `local-e2e-${RUN_ID}@example.com`;
 const PASSWORD = `E2e!${RUN_ID}aA1`;
@@ -87,6 +101,58 @@ async function waitForCdp(timeoutMs = 30_000) {
     await sleep(250);
   }
   throw new Error("CDP endpoint never came up — did the app launch?");
+}
+
+// One row for the uploaded document's active version: its text row (written
+// only by the extraction job) and the latest extraction job, for diagnostics.
+const EXTRACTION_SQL = `
+  select d.id as document_id, v.id as version_id, v.page_count,
+         t.status, t.textless_page_count, t.error_code, left(t.text_content, 200) as text_head,
+         j.status as job_status, j.attempts as job_attempts, j.last_error as job_error
+  from public.documents d
+  join public.document_versions v on v.id = d.current_version_id
+  left join public.document_version_texts t
+    on t.version_id = v.id and t.source_revision = v.text_revision and t.extractor_version = 1
+  left join lateral (
+    select status, attempts, last_error from public.db_jobs
+    where kind = 'document.extract_text' and payload->>'versionId' = v.id::text
+    order by created_at desc limit 1
+  ) j on true
+  where v.filename = $1
+  order by d.created_at desc limit 1`;
+
+const describeExtraction = (row) =>
+  row
+    ? `text status=${row.status ?? "none"}, error_code=${row.error_code ?? "none"}, ` +
+      `job=${row.job_status ?? "none"} after ${row.job_attempts ?? 0} attempt(s), last_error=${row.job_error ?? "none"}`
+    : "no document row with that filename";
+
+async function waitForExtraction(filename) {
+  const { dbPassword } = JSON.parse(
+    readFileSync(path.join(USER_DATA_DIR, "local", "secrets.json"), "utf8"),
+  );
+  const client = new pg.Client({
+    host: "127.0.0.1",
+    port: LOCAL_PG_PORT,
+    user: "postgres",
+    password: dbPassword,
+    database: "postgres",
+  });
+  await client.connect();
+  try {
+    const deadline = Date.now() + EXTRACTION_TIMEOUT_MS;
+    let last = null;
+    while (Date.now() < deadline) {
+      last = (await client.query(EXTRACTION_SQL, [filename])).rows[0] ?? null;
+      if (last?.status === "ready") return { ok: true, last };
+      // The job gave up for good: waiting longer cannot change the outcome.
+      if (last?.job_status === "failed") break;
+      await sleep(2_000);
+    }
+    return { ok: false, last };
+  } finally {
+    await client.end();
+  }
 }
 
 const shot = async (page, name) => {
@@ -267,6 +333,28 @@ try {
   );
   console.log(`✓ downloaded back via blob-token URL: ${path.basename(entry.savePath)}`);
   await shot(page, "local-04-download");
+
+  // 5b. Text extraction: the upload queued a document.extract_text job, which
+  //     the backend runs in an isolated parser child (backend/src/lib/
+  //     extraction/isolated.ts). Only that child writes document_version_texts
+  //     (publish_document_text sets status 'ready' + textless_page_count), so a
+  //     ready row proves the child started in Node mode and parsed the PDF.
+  //     Generous budget: the first extraction cold-starts the parser.
+  const extraction = await waitForExtraction(DOC_NAME);
+  await shot(page, "local-04b-extracted");
+  assert(
+    extraction.ok,
+    `text extraction never completed for document ${extraction.last?.document_id ?? "(not found)"} ` +
+      `(last seen: ${describeExtraction(extraction.last)}): in the packaged app this usually means ` +
+      "the isolated parser child did not start in Node mode (see #799)",
+  );
+  const { last: extracted } = extraction;
+  assert(extracted.textless_page_count === 0,
+    `test.pdf has a text layer on every page, got textless_page_count=${extracted.textless_page_count}`);
+  assert(extracted.page_count >= 1, `expected page_count >= 1, got ${extracted.page_count}`);
+  assert(/Test PDF Document/.test(extracted.text_head ?? ""),
+    `extracted text does not contain the fixture's heading: ${JSON.stringify(extracted.text_head)}`);
+  console.log(`✓ background extraction produced text in the parser child (document ${extracted.document_id}, ${extracted.page_count} page[s], 0 textless)`);
 
   // 6. Guest mode: from a signed-out /login, "Continue as guest" must land
   //    in the product with zero typing. Run it twice — the first click hits

@@ -1,3 +1,4 @@
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 /**
  * Error reporting for the Word add-in. Same policy as the web app (see
  * frontend/src/app/lib/errorReporting.ts and the shared scrubber it uses):
@@ -10,8 +11,10 @@
  * reports them.
  */
 import * as Sentry from "@sentry/react";
-import { privacyBoundaryIntegration } from "@mike/sentry-event";
 import {
+  privacyBoundaryIntegration,
+  eventBudget,
+  eventBudgetLimits,
   MIKE_SENTRY_DSN,
   createEventScrubber,
   installKind,
@@ -19,9 +22,13 @@ import {
   parseSampleRate,
   releaseName,
   resolveDsn,
-} from "@mike/sentry-event";
+  sentryEnvironment,
+} from "@mike/client";
 
 export type ReportLevel = "fatal" | "error" | "warning";
+
+/** Static operation label authored at the call site; no registration required. */
+export type AddinOperation = string;
 
 export type ReportContext = {
   tags?: Record<string, string | number | boolean | null | undefined>;
@@ -36,6 +43,12 @@ const scrubber = createEventScrubber({
 
 export const scrubEvent = scrubber.scrubEvent;
 
+// Reporting callers and automatic-capture deduplication share one registry.
+const markReported = scrubber.markReported;
+export const isReported = scrubber.isReported;
+export const markErrorHandled = scrubber.markReported;
+
+
 /** `service`/`surface` distinguish the pane from its ribbon and OAuth pages. */
 export type AddinSurface = "taskpane" | "commands" | "oauth-dialog";
 
@@ -47,17 +60,23 @@ export function addinSentryOptions(
     install?: string;
     environment?: string;
     release?: string;
+    version?: string;
     gitSha?: string;
     tracesSampleRate?: string;
     nodeEnv?: string;
+    maxRepeatEventsPerDay?: string;
   },
 ): Sentry.BrowserOptions {
   // ON BY DEFAULT: the Mike project's own DSN unless REACT_APP_SENTRY_DISABLED
   // or a DSN of your own is baked in at build time (README, "Telemetry").
+  // webpack sets NODE_ENV from --mode: the dev server is "development",
+  // `npm run build` (every image) is "production".
+  const development = env.nodeEnv === "development";
   const { dsn } = resolveDsn({
     disabled: env.disabled,
     dsn: env.dsn,
     fallback: MIKE_SENTRY_DSN.wordAddin,
+    development,
   });
   const dataCollection = {
             userInfo: false,
@@ -75,13 +94,13 @@ export function addinSentryOptions(
   return {
     dsn: dsn || undefined,
     enabled: dsn.length > 0,
-    environment: env.environment?.trim() || "self-hosted",
-    release: releaseName(env.release, env.gitSha),
+    environment: sentryEnvironment(env.environment, development),
+    release: releaseName(env.release, env.version, env.gitSha),
     tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
     // No session replay: the pane sits next to a privileged document.
     dataCollection,
     attachStacktrace: true,
-    integrations: [privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
+    integrations: [privacyBoundaryIntegration({ acceptEvent: eventBudget(eventBudgetLimits(env.maxRepeatEventsPerDay, dsn, Object.values(MIKE_SENTRY_DSN))) }), Sentry.captureConsoleIntegration({ levels: ["error"] })],
     initialScope: {
       tags: {
         service: "mike-word-addin",
@@ -103,9 +122,11 @@ export function initAddinErrorReporting(surface: AddinSurface): boolean {
     install: process.env.REACT_APP_SENTRY_INSTALL,
     environment: process.env.REACT_APP_SENTRY_ENVIRONMENT,
     release: process.env.REACT_APP_SENTRY_RELEASE,
+    version: process.env.REACT_APP_MIKE_VERSION,
     gitSha: process.env.REACT_APP_GIT_SHA,
     tracesSampleRate: process.env.REACT_APP_SENTRY_TRACES_SAMPLE_RATE,
     nodeEnv: process.env.NODE_ENV,
+    maxRepeatEventsPerDay: process.env.REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY,
   });
   if (!options.enabled) return false;
   Sentry.init(options);
@@ -119,15 +140,7 @@ export function initAddinErrorReporting(surface: AddinSurface): boolean {
  */
 export function tagOfficeHost(): void {
   if (!Sentry.isEnabled()) return;
-  const diagnostics = (
-    globalThis as {
-      Office?: {
-        context?: {
-          diagnostics?: { host?: unknown; platform?: unknown; version?: unknown };
-        };
-      };
-    }
-  ).Office?.context?.diagnostics;
+  const diagnostics = officeDiagnostics();
   if (!diagnostics) return;
   const scope = Sentry.getCurrentScope();
   if (diagnostics.host != null) scope.setTag("office_host", String(diagnostics.host));
@@ -137,6 +150,40 @@ export function tagOfficeHost(): void {
   if (diagnostics.version != null) {
     scope.setTag("office_version", String(diagnostics.version));
   }
+}
+
+/** What an Office client says about itself; absent outside one. */
+function officeDiagnostics():
+  | { host?: unknown; platform?: unknown; version?: unknown }
+  | undefined {
+  return (
+    globalThis as {
+      Office?: {
+        context?: {
+          diagnostics?: { host?: unknown; platform?: unknown; version?: unknown };
+        };
+      };
+    }
+  ).Office?.context?.diagnostics;
+}
+
+/**
+ * Office.onReady resolved with no host, so the pane shows the "open Mike in
+ * Word" notice instead of the app. A plain browser tab (a crawler, a link
+ * preview, a pasted URL) has no Office diagnostics either, and stays silent.
+ * Diagnostics WITH a null host is a contradiction only a real Office client
+ * can produce: if a Word build is ever misdetected as hostless, its users
+ * are locked out of the pane, so that case sends one warning, titled
+ * "Failure in office.on_ready" with error_kind=office_host_null (the
+ * office_* tags set by tagOfficeHost say which build).
+ */
+export function reportHostlessOfficeClient(): void {
+  if (!officeDiagnostics()) return;
+  // The privacy boundary drops message text, so the tags are what name it.
+  Sentry.captureMessage("office host null inside an Office client", {
+    level: "warning",
+    tags: { operation: "office.on_ready", error_kind: "office_host_null" },
+  });
 }
 
 function applyContext(scope: Sentry.Scope, context: ReportContext): void {
@@ -155,7 +202,7 @@ export function reportError(
   error: unknown,
   context: ReportContext = {},
 ): string | null {
-  scrubber.markReported(error);
+  markReported(error);
   if (!Sentry.isEnabled()) return null;
   return Sentry.withScope((scope) => {
     applyContext(scope, context);
@@ -175,8 +222,13 @@ export function reportError(
 export function reportWordFailure(
   error: unknown,
   context: {
-    /** Low-cardinality step name: "resolve", "restore", "reveal", ... */
-    stage: string;
+    /**
+     * Static step name: "resolve", "restore", "reveal", ... New stages
+     * need no registration; omit when the operation alone is sufficient.
+     */
+    stage?: string;
+    /** The user-level flow: reading the document, applying or resolving an edit. */
+    operation?: AddinOperation;
     level?: ReportLevel;
     extra?: Record<string, unknown>;
   },
@@ -189,45 +241,60 @@ export function reportWordFailure(
     error instanceof Error ? error.name : officeCode ?? "UnknownWordError";
   return reportError(error, {
     level: context.level ?? "error",
-    tags: { component: "word-office", stage: context.stage, office_code: officeCode },
+    tags: {
+      component: "word-office",
+      operation: context.operation,
+      stage: context.stage,
+      office_code: officeCode,
+    },
     extra: context.extra,
-    fingerprint: ["word-office", context.stage, officeCode ?? name],
+    fingerprint: [
+      "word-office",
+      context.stage ?? context.operation ?? "",
+      officeCode ?? name,
+    ],
   });
 }
 
-/** A backend 5xx seen from the pane, correlated by the backend's request id. */
+/** Report an API failure immediately with the operation known by its caller. */
 export function reportApiFailure(failure: {
-  path: string;
-  status: number;
-  code?: string | null;
-  requestId?: string | null;
-  method?: string;
-  /** The error about to be thrown; its later console.error copy is dropped. */
-  error?: unknown;
+    path: string;
+    status: number;
+    code?: string | null;
+    requestId?: string | null;
+    method?: string;
+    operation?: AddinOperation;
+    error?: unknown;
+    reportingOwner?: typeof BACKEND_REPORTING_OWNER;
 }): string | null {
-  scrubber.markReported(failure.error);
-  if (!Sentry.isEnabled()) return null;
-  const route = normalizeApiPath(failure.path);
-  const method = failure.method ?? "GET";
-  return Sentry.withScope((scope) => {
-    applyContext(scope, {
-      level: "error",
-      tags: {
-        component: "mike-api",
-        http_status: failure.status,
-        http_method: method,
-        http_route: route,
-        request_id: failure.requestId,
-        error_code: failure.code,
-      },
-      extra: { path: failure.path },
-      fingerprint: ["api-5xx", method, route, String(failure.status)],
+    if (isReported(failure.error)) return null;
+    // Marked even when not sent, so a later reportFault of the same error
+    // (a sign-in screen, a session re-check) does not send it either.
+    markReported(failure.error);
+    // Only an explicit protocol owner proves this failure was handled upstream.
+    if (failure.reportingOwner === BACKEND_REPORTING_OWNER) return null;
+    if (!Sentry.isEnabled()) return null;
+    const route = normalizeApiPath(failure.path);
+    const method = failure.method ?? "GET";
+    return Sentry.withScope(scope => {
+        applyContext(scope, {
+            level: "error",
+            tags: {
+                component: "mike-api",
+                operation: failure.operation,
+                http_status: failure.status,
+                http_method: method,
+                http_route: route,
+                request_id: failure.requestId,
+                error_code: failure.code,
+                ...(route === "/observability/sentry-test" ? { diagnostic_test: "true" } : {}),
+            },
+            fingerprint: ["api-5xx", method, route, String(failure.status)],
+        });
+        return failure.error instanceof Error
+            ? Sentry.captureException(failure.error)
+            : Sentry.captureMessage(`API ${failure.status} on ${method} ${route}`, "error");
     });
-    return Sentry.captureMessage(
-      `API ${failure.status} on ${method} ${route}`,
-      "error",
-    );
-  });
 }
 
 /**
@@ -237,15 +304,21 @@ export function reportApiFailure(failure: {
  */
 export function reportNetworkFailure(
   error: unknown,
-  request: { method: string; url: string },
+  request: { method: string; url: string; operation?: AddinOperation },
 ): string | null {
-  scrubber.markReported(error);
+  markReported(error);
   if (!Sentry.isEnabled()) return null;
   const route = normalizeApiPath(request.url);
   return Sentry.withScope((scope) => {
     applyContext(scope, {
       level: "warning",
-      tags: { component: "mike-api", network: true, http_method: request.method, http_route: route },
+      tags: {
+        component: "mike-api",
+        operation: request.operation,
+        network: true,
+        http_method: request.method,
+        http_route: route,
+      },
       extra: { url: route },
       fingerprint: ["api-network", request.method, route],
     });

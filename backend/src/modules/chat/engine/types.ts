@@ -1,3 +1,5 @@
+import type { SourceDocument } from "@mike/contracts";
+
 // Re-exported so the chat modules that already import it from here keep
 // working; the definition lives in lib/log.ts.
 export { devLog } from "../../../lib/log";
@@ -22,6 +24,13 @@ export type DocStore = Map<
     inline_text?: string;
     /** Search handles pin the source revision and reauthorize every subsequent read. */
     search_source?: { revision: string; userId: string; userEmail?: string | null };
+    /**
+     * A provider-backed source read during this request (see
+     * tools/externalSources.ts): the panel document without its body, which
+     * `inline_text` holds. Quotes cited from it must occur in that text
+     * verbatim; it has no stored version, permissions or file.
+     */
+    external_source?: SourceDocument;
   }
 >;
 
@@ -53,6 +62,7 @@ export type DocIndex = Record<
 export type TabularCellStore = {
   columns: { index: number; name: string }[];
   documents: { id: string; filename: string }[];
+  loadCells?: (rowIds: string[], columns: number[]) => Promise<void>;
   /** key: `${colIndex}:${docId}` */
   cells: Map<
     string,
@@ -108,16 +118,37 @@ export function resolveDocLabel(
   docStore: DocStore,
   docIndex?: DocIndex,
 ): string | null {
-  if (docStore.has(rawId)) return rawId;
-  for (const [label, info] of docStore.entries()) {
-    if (info.filename === rawId) return label;
-  }
-  if (docIndex) {
-    for (const [label, info] of Object.entries(docIndex)) {
-      if (info.document_id === rawId) return label;
+  return createDocLabelResolver(docStore, docIndex)(rawId);
+}
+
+/**
+ * resolveDocLabel for a batch of ids. The filename and document-id indexes
+ * are built once, on the first id that is not already a label, so resolving
+ * k ids against N documents is O(N + k) instead of O(N·k). Use it only while
+ * the store is not being mutated (one tool call's id list, end-of-turn
+ * citation checks): it snapshots the store when it first needs an index.
+ * First match in insertion order wins, as in a linear scan.
+ */
+export function createDocLabelResolver(
+  docStore: DocStore,
+  docIndex?: DocIndex,
+): (rawId: string) => string | null {
+  let byFilename: Map<string, string> | null = null;
+  let byDocumentId: Map<string, string> | null = null;
+  return (rawId) => {
+    if (docStore.has(rawId)) return rawId;
+    if (!byFilename) {
+      byFilename = new Map();
+      for (const [label, info] of docStore) {
+        if (!byFilename.has(info.filename)) byFilename.set(info.filename, label);
+      }
+      byDocumentId = new Map();
+      for (const [label, info] of Object.entries(docIndex ?? {})) {
+        if (!byDocumentId.has(info.document_id)) byDocumentId.set(info.document_id, label);
+      }
     }
-  }
-  return null;
+    return byFilename.get(rawId) ?? byDocumentId!.get(rawId) ?? null;
+  };
 }
 
 // ---------------------------------------------------------------------------

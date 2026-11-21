@@ -1,5 +1,7 @@
 import type { WebToolErrorCode, WebToolEvent } from "@mike/contracts";
 import type { NormalizedToolCall } from "../../../../lib/llm";
+import { AppError } from "../../../../lib/appError";
+import { reportError } from "../../../../lib/observability/sentry";
 import {
     MAX_SEARCH_RESULTS,
     WebPageUnreadableError,
@@ -279,6 +281,21 @@ async function runSearch(
         });
     } catch (error) {
         if (ctx.signal?.aborted) throw error;
+        // The model is told to stop or retry; the failure itself is reported
+        // under its kind (not configured, rejected key, API status as
+        // dependency_status, or a plain failure) so a dead search provider
+        // is visible without the query leaving the process.
+        reportError(
+            error instanceof AppError
+                ? error
+                : new AppError("web_search.failed", "Web search failed", {
+                      cause: error,
+                  }),
+            {
+                level: "warning",
+                tags: { component: "chat-stream", operation: "chat.web_search" },
+            },
+        );
         if (error instanceof WebSearchUnavailableError && error.code !== "failed") {
             return failure(
                 search,

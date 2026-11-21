@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { LIQUID_GLASS_FLOAT_CLASS } from "@mike/ui";
 
 export function TRExpandedCellSurface({ children }: { children: ReactNode }) {
     return (

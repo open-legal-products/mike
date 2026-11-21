@@ -32,7 +32,7 @@ export class InvalidApiKeyError extends UserFacingError {
  *   OpenAI    401 "Incorrect API key provided" (code "invalid_api_key")
  */
 const INVALID_KEY_TEXT =
-  /(api[ _-]?key[^."]*\b(?:not valid|invalid|incorrect|expired)|invalid[ _-]?(?:x-)?api[ _-]?key|api_key_invalid|incorrect api key|authentication_error|invalid_authentication|unauthorized)/i;
+  /(api[ _-]?key[^."]*\b(?:not valid|invalid|incorrect|expired)|invalid[ _-]?(?:x-)?api[ _-]?key|api_key_invalid|incorrect api key)/i;
 
 function statusCodeOf(error: unknown): number | undefined {
   if (!error || typeof error !== "object") return undefined;

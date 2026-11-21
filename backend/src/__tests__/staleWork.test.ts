@@ -48,7 +48,15 @@ function makeDb(responses: Record<string, Responder>) {
         const resolve = () => {
             const call = { ...state, filters: { ...state.filters } };
             calls.push(call);
-            if (state.op !== "select") return { data: null, error: null };
+            if (state.op !== "select") {
+                // A guarded batch update returns the ids it touched (all of
+                // them, in this stateless double).
+                const ids = state.filters["in:id"];
+                return {
+                    data: Array.isArray(ids) ? ids.map((id) => ({ id })) : null,
+                    error: null,
+                };
+            }
             const responder = responses[table];
             const rows =
                 typeof responder === "function"
@@ -60,7 +68,8 @@ function makeDb(responses: Record<string, Responder>) {
         };
         const b: Record<string, unknown> = {
             select() {
-                state.op = "select";
+                // `.update(…).select("id")` stays an update that returns rows.
+                if (state.op !== "update") state.op = "select";
                 return b;
             },
             update(payload: Record<string, unknown>) {
@@ -76,8 +85,15 @@ function makeDb(responses: Record<string, Responder>) {
                 state.filters[`in:${col}`] = val;
                 return b;
             },
+            order() {
+                return b;
+            },
             lt(col: string, val: unknown) {
                 state.filters[`lt:${col}`] = val;
+                return b;
+            },
+            gt(col: string, val: unknown) {
+                state.filters[`gt:${col}`] = val;
                 return b;
             },
             limit(n: number) {
@@ -104,11 +120,12 @@ function makeDb(responses: Record<string, Responder>) {
 
 /** A review row whose generation lease is gone — the reaper's precondition. */
 const NO_LEASE = [
-    { active_generation_id: null, generation_lease_expires_at: null },
+    { id: "rev-1", active_generation_id: null, generation_lease_expires_at: null },
 ];
 /** A review row still holding a live lease: a running owner. */
 const LIVE_LEASE = [
     {
+        id: "rev-1",
         active_generation_id: "gen-live",
         generation_lease_expires_at: new Date(
             Date.now() + 60_000,
@@ -153,7 +170,8 @@ describe("sweepStaleProcessingDocuments", () => {
         expect(flipped).toBe(2);
         expect(conversionGetJob).not.toHaveBeenCalled();
         const updates = db.calls.filter((c) => c.op === "update");
-        expect(updates).toHaveLength(2);
+        expect(updates).toHaveLength(1);
+        expect(updates[0].filters["in:id"]).toEqual(["doc-1", "doc-2"]);
         // Guarded flip: only rows still "processing" are touched.
         expect(updates[0].filters.status).toBe("processing");
         expect(updates[0].payload?.status).toBe("error");
@@ -180,7 +198,24 @@ describe("sweepStaleProcessingDocuments", () => {
         expect(flipped).toBe(1);
         const updates = db.calls.filter((c) => c.op === "update");
         expect(updates).toHaveLength(1);
-        expect(updates[0].filters.id).toBe("doc-dead");
+        expect(updates[0].filters["in:id"]).toEqual(["doc-dead"]);
+    });
+
+    it("judges a bounded page and flips it in batched updates, not one write per document", async () => {
+        const db = makeDb({
+            documents: (call) =>
+                Array.from({ length: Number(call.filters.limit ?? 600) }, (_, i) => ({
+                    id: `doc-${i}`,
+                    current_version_id: null,
+                })),
+        });
+
+        const flipped = await sweepStaleProcessingDocuments(db as never);
+
+        const read = db.calls.find((c) => c.table === "documents" && c.op === "select");
+        expect(read?.filters.limit).toBe(500);
+        expect(db.calls.filter((c) => c.op === "update")).toHaveLength(10);
+        expect(flipped).toBe(500);
     });
 
     // A conversion job's identity now includes the storage key it converts,
@@ -253,12 +288,10 @@ describe("sweepStaleGeneratingCells", () => {
         expect(flipped).toBe(1);
         const updates = db.calls.filter((c) => c.op === "update");
         expect(updates).toHaveLength(1);
-        // finalizeCell addresses the cell by (review, row, column) and guards
-        // on the stamp it was read with; the write clears that stamp.
+        // The batched terminal write addresses the cells it read by id and
+        // guards on the stamp they were read with; the write clears that stamp.
         expect(updates[0].filters).toMatchObject({
-            review_id: "rev-1",
-            row_id: "row-dead",
-            column_index: 1,
+            "in:id": ["c-dead"],
             generation_id: "gen-dead",
         });
         expect(updates[0].payload).toMatchObject({
@@ -276,6 +309,30 @@ describe("sweepStaleGeneratingCells", () => {
                 },
             },
         ]);
+    });
+
+    it("flips a page of orphaned cells with one write per generation, not one per cell", async () => {
+        process.env.ASYNC_TABULAR_EXTRACTION = "true";
+        extractionGetJob.mockResolvedValue(null);
+        const db = makeDb({
+            tabular_reviews: NO_LEASE,
+            tabular_cells: (call) =>
+                call.filters.generation_id !== undefined
+                    ? []
+                    : Array.from({ length: 40 }, (_, i) => ({
+                          id: `c-${i}`,
+                          review_id: "rev-1",
+                          row_id: `row-${i % 4}`,
+                          column_index: i,
+                          generation_id: "gen-dead",
+                      })),
+        });
+
+        const flipped = await sweepStaleGeneratingCells(db as never);
+
+        expect(flipped).toBe(40);
+        expect(db.calls.filter((c) => c.op === "update")).toHaveLength(1);
+        expect(db.calls.filter((c) => c.table === "tabular_reviews")).toHaveLength(1);
     });
 
     it("spares a cell whose single-cell (regenerate) job is live", async () => {

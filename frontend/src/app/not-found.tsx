@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
+import { pillButtonUIClassName } from "@mike/ui";
 
 export default function NotFound() {
     return (

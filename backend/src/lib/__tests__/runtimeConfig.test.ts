@@ -1,12 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   diagnosticErrorTags,
   diagnosticEvent,
 } from "../observability/sentryPrivacy";
 import {
+  extractionLauncherWarnings,
   uploadConversionTimeoutMs,
   uploadJobWallClockMs,
   uploadProcessingConfiguration,
+  storagePublicEndpointWarnings,
   uploadSessionRateLimitConfiguration,
   validateRuntimeConfiguration,
 } from "../runtimeConfig";
@@ -18,7 +23,17 @@ const validProduction = {
   SUPABASE_SECRET_KEY: "service-role-key",
   FRONTEND_URL: "https://app.example.test",
   API_PUBLIC_URL: "https://app.example.test/api",
+  DOWNLOAD_SIGNING_SECRET: "d".repeat(64),
+  USER_API_KEYS_ENCRYPTION_SECRET: "u".repeat(64),
 } as NodeJS.ProcessEnv;
+
+// The anon and service_role JWTs that docker-compose.yml and `supabase start`
+// ship: signed with Supabase's published demo JWT secret, so anyone can mint
+// an equivalent service_role token for a server that accepts them.
+const SUPABASE_DEMO_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+const SUPABASE_DEMO_SERVICE_ROLE_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 
 describe("runtime authentication configuration", () => {
   it("accepts a complete production configuration", () => {
@@ -86,7 +101,107 @@ describe("runtime authentication configuration", () => {
         ...validProduction,
         WORD_ADDIN_URL: "https://word.example.test",
       }),
-    ).toThrow(/AUTH_HANDOFF_ENCRYPTION_SECRET is required/);
+    ).toThrow(/AUTH_HANDOFF_ENCRYPTION_SECRET/);
+  });
+
+  it("rejects the .env.example placeholder download and key-encryption secrets", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        DOWNLOAD_SIGNING_SECRET: "replace-with-a-random-32-byte-hex-string",
+        USER_API_KEYS_ENCRYPTION_SECRET: "your-long-random-secret",
+      }),
+    ).toThrow(/DOWNLOAD_SIGNING_SECRET[\s\S]*USER_API_KEYS_ENCRYPTION_SECRET/s);
+  });
+
+  it("rejects real secrets that are too short to be meaningful", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        DOWNLOAD_SIGNING_SECRET: "too-short",
+        USER_API_KEYS_ENCRYPTION_SECRET: "also-short",
+      }),
+    ).toThrow(/DOWNLOAD_SIGNING_SECRET[\s\S]*USER_API_KEYS_ENCRYPTION_SECRET/s);
+  });
+
+  describe.each([
+    "DOWNLOAD_SIGNING_SECRET",
+    "USER_API_KEYS_ENCRYPTION_SECRET",
+  ])("%s", (name) => {
+    it.each([" ", "\t\r\n", " ".repeat(32)])(
+      "rejects a whitespace-only value %j",
+      (value) => {
+        expect(() =>
+          validateRuntimeConfiguration({ ...validProduction, [name]: value }),
+        ).toThrow(`${name} must contain at least 32 characters`);
+      },
+    );
+
+    // Unset, the consumer fails closed on first use (no fallback key, no
+    // plaintext), so a hosted deployment boots and then breaks downloads or
+    // stored credentials. Production refuses that at boot instead.
+    it.each([undefined, ""])("is required in production (%j)", (value) => {
+      expect(() =>
+        validateRuntimeConfiguration({ ...validProduction, [name]: value }),
+      ).toThrow(`${name} is required in production`);
+    });
+
+    it.each([undefined, ""])(
+      "may be absent outside production (%j)",
+      (value) => {
+        expect(() =>
+          validateRuntimeConfiguration({
+            ...validProduction,
+            NODE_ENV: "development",
+            [name]: value,
+          }),
+        ).not.toThrow();
+      },
+    );
+
+    it("accepts a value at the minimum length", () => {
+      expect(() =>
+        validateRuntimeConfiguration({
+          ...validProduction,
+          [name]: "a".repeat(32),
+        }),
+      ).not.toThrow();
+    });
+  });
+
+  it.each([
+    ["SUPABASE_SECRET_KEY", { SUPABASE_SECRET_KEY: SUPABASE_DEMO_SERVICE_ROLE_KEY }],
+    ["SUPABASE_PUBLISHABLE_KEY", { SUPABASE_PUBLISHABLE_KEY: SUPABASE_DEMO_ANON_KEY }],
+    [
+      "SUPABASE_ANON_KEY",
+      { SUPABASE_PUBLISHABLE_KEY: undefined, SUPABASE_ANON_KEY: SUPABASE_DEMO_ANON_KEY },
+    ],
+  ])("rejects the published Supabase demo key in %s in production", (name, keys) => {
+    let message = "";
+    try {
+      validateRuntimeConfiguration({ ...validProduction, ...keys });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(`${name} is a published Supabase demo key`);
+    // Name the variable, never echo the credential.
+    expect(message).not.toContain("eyJ");
+  });
+
+  // docker-compose.yml's backend service: NODE_ENV defaults to development,
+  // the bundled Supabase uses the demo keys, and the two app secrets are
+  // optional. That local stack must keep booting.
+  it("still boots the default local docker compose configuration", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        NODE_ENV: "development",
+        FRONTEND_URL: "http://localhost:3000",
+        API_PUBLIC_URL: "http://localhost:3000/api",
+        SUPABASE_URL: "http://gateway:8000",
+        SUPABASE_PUBLISHABLE_KEY: SUPABASE_DEMO_ANON_KEY,
+        SUPABASE_SECRET_KEY: SUPABASE_DEMO_SERVICE_ROLE_KEY,
+      }),
+    ).not.toThrow();
   });
 
   it("accepts the legacy anon key name for the user-session client", () => {
@@ -97,6 +212,26 @@ describe("runtime authentication configuration", () => {
         SUPABASE_ANON_KEY: "legacy-anon-key",
       }),
     ).not.toThrow();
+  });
+});
+
+describe("LLM_PROVIDER_DATA_RETENTION", () => {
+  it.each(["deny", "allow", "ALLOW", ""])("accepts %j", (value) => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        LLM_PROVIDER_DATA_RETENTION: value,
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a value that is neither deny nor allow", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        LLM_PROVIDER_DATA_RETENTION: "off",
+      }),
+    ).toThrow(/LLM_PROVIDER_DATA_RETENTION must be "deny" \(the default\) or "allow"/);
   });
 });
 
@@ -230,7 +365,71 @@ it("identifies invalid configuration fields without sending their values", () =>
   expect(event.tags).toEqual({
     failure_code: "configuration_invalid",
     configuration_fields:
-      "API_PUBLIC_URL,FRONTEND_URL,SUPABASE_PUBLISHABLE_KEY,SUPABASE_URL",
+      "API_PUBLIC_URL,DOWNLOAD_SIGNING_SECRET,FRONTEND_URL,SUPABASE_PUBLISHABLE_KEY,SUPABASE_URL,USER_API_KEYS_ENCRYPTION_SECRET",
   });
   expect(JSON.stringify(event)).not.toContain("PRIVATE");
+});
+
+// MIKE-FRONTEND-28/3D/2Z: the compose default R2_PUBLIC_ENDPOINT_URL
+// (http://localhost:9000) on an install opened from a real host made every
+// browser upload fail with "Failed to fetch" and nothing at boot said why.
+describe("storagePublicEndpointWarnings", () => {
+  const at = (frontend: string, publicEndpoint: string, internal = "http://storage:9000") =>
+    storagePublicEndpointWarnings({
+      FRONTEND_URL: frontend,
+      R2_PUBLIC_ENDPOINT_URL: publicEndpoint,
+      R2_ENDPOINT_URL: internal,
+    } as NodeJS.ProcessEnv);
+
+  it.each([
+    ["https://mike.firm.example", "http://localhost:9000", /loopback/],
+    ["http://192.168.1.20:3000", "http://127.0.0.1:9000", /loopback/],
+    ["https://mike.firm.example", "", /internal service name/],
+    ["https://mike.firm.example", "http://storage.firm.example:9000", /mixed content/],
+  ])("warns for FRONTEND_URL %s with public storage %s", (frontend, endpoint, reason) => {
+    const warnings = at(frontend, endpoint);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(reason);
+  });
+
+  it.each([
+    ["http://localhost:3000", "http://localhost:9000"],
+    ["https://mike.firm.example", "https://storage.firm.example"],
+    ["https://mike.firm.example", "https://mike.firm.example"],
+  ])("is quiet for FRONTEND_URL %s with public storage %s", (frontend, endpoint) => {
+    expect(at(frontend, endpoint)).toEqual([]);
+  });
+});
+
+// MIKE-BACKEND-EC/EE: an image without util-linux booted cleanly, then every
+// text extraction and DOCX upload failed with a bare spawn ENOENT.
+describe("extractionLauncherWarnings", () => {
+  const empty = mkdtempSync(path.join(tmpdir(), "mike-path-empty-"));
+  const withLauncher = mkdtempSync(path.join(tmpdir(), "mike-path-prlimit-"));
+  writeFileSync(path.join(withLauncher, "prlimit"), "#!/bin/sh\n");
+  chmodSync(path.join(withLauncher, "prlimit"), 0o755);
+  afterAll(() => {
+    rmSync(empty, { recursive: true, force: true });
+    rmSync(withLauncher, { recursive: true, force: true });
+  });
+  const env = (PATH: string, isolation = "on") =>
+    ({ PATH, EXTRACTION_ISOLATION: isolation }) as NodeJS.ProcessEnv;
+
+  it("warns once on Linux when prlimit is not on PATH", () => {
+    const warnings = extractionLauncherWarnings(env(empty), "linux");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/prlimit.*util-linux/s);
+  });
+
+  it("is quiet when an executable prlimit is on PATH", () => {
+    expect(extractionLauncherWarnings(env(`${empty}${path.delimiter}${withLauncher}`), "linux")).toEqual([]);
+  });
+
+  it("is quiet off Linux, where the parser is not launched through prlimit", () => {
+    expect(extractionLauncherWarnings(env(empty), "darwin")).toEqual([]);
+  });
+
+  it("is quiet when parser isolation is off", () => {
+    expect(extractionLauncherWarnings(env(empty, "off"), "linux")).toEqual([]);
+  });
 });

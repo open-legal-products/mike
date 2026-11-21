@@ -21,7 +21,6 @@ function view(saveState: DocxSaveState) {
         <DocumentTitleRow
             document={document}
             isReloading={false}
-            compactActions
             saveState={saveState}
         />
     );

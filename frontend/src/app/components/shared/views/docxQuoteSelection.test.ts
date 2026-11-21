@@ -149,6 +149,7 @@ describe("findDocxQuote", () => {
         expect(findDocxQuote(editor, "January 2026")).toEqual({
             start: exact,
             end: exact,
+            ranges: [exact],
         });
         expect(editor.query).not.toHaveBeenCalled();
     });
@@ -175,6 +176,17 @@ describe("findDocxQuote", () => {
         expect(findDocxQuote(editor, row.join("\n"))?.start.blockId).toBe(
             "paragraph-0",
         );
+    });
+
+    it("returns one highlight range per covered paragraph, skipping blank ones", () => {
+        const match = findDocxQuote(
+            documentSearch(["Intro P1 — Critical", "", "  4\t hours remaining"]),
+            "Critical 4 hou",
+        );
+        expect(match?.ranges).toEqual([
+            { blockId: "paragraph-0", start: 11, length: 8, scope: undefined },
+            { blockId: "paragraph-2", start: 2, length: 6, scope: undefined },
+        ]);
     });
 
     it("rejects empty quotes", () => {

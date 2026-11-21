@@ -9,7 +9,14 @@ const { guardedFetch, validateRemoteMcpUrl, extractPdfTextForModel } = vi.hoiste
 vi.mock("../../mcp/client", () => ({ guardedFetch, validateRemoteMcpUrl }));
 vi.mock("../../pdfText", () => ({ extractPdfTextForModel }));
 
+const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(() => null) }));
+vi.mock("../../observability/sentry", async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    reportError,
+}));
+
 import { BlockedDestinationError } from "../../blockedDestination";
+import { scrubEvent } from "../../observability/sentry";
 import { WebPageUnreadableError, readWebPage } from "../pageReader";
 
 const ARTICLE = `<!doctype html>
@@ -38,6 +45,7 @@ async function unreadable(promise: Promise<unknown>): Promise<string> {
 }
 
 beforeEach(() => {
+    reportError.mockReset();
     guardedFetch.mockReset();
     validateRemoteMcpUrl.mockReset();
     validateRemoteMcpUrl.mockImplementation(async (url: string) => url);
@@ -91,6 +99,32 @@ describe("readWebPage", () => {
         const result = await readWebPage("https://example.test/cafe.txt");
 
         expect(result.text).toBe("caf\u00e9");
+    });
+
+    it("reads a page whose JSON-LD is malformed without filing a Sentry error", async () => {
+        const html = ARTICLE.replace(
+            "</head>",
+            '<script type="application/ld+json">{"@type": "Article",}</script></head>',
+        );
+        guardedFetch.mockResolvedValue(page(html, "text/html"));
+        const calls: unknown[][] = [];
+        const logged = vi
+            .spyOn(console, "error")
+            .mockImplementation((...args: unknown[]) => void calls.push(args));
+
+        const result = await readWebPage("https://example.test/s172").finally(() =>
+            logged.mockRestore(),
+        );
+
+        expect(result.text).toContain("promote the success of the company");
+        // What the console bridge would make of each line the read logged.
+        const filed = calls.map((args) =>
+            scrubEvent(
+                { logger: "console", message: String(args[0]) } as never,
+                { captureContext: { extra: { arguments: args } } },
+            ),
+        );
+        expect(filed.filter(Boolean)).toEqual([]);
     });
 
     it("reads a PDF served as a generic binary file", async () => {
@@ -147,6 +181,45 @@ describe("readWebPage", () => {
         });
 
         expect(result.text).toBe("The order.");
+        // The fallback answered the model; the service's failure is still
+        // reported, as a warning, under its kind, with its status.
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "web_search.api_error", status: 404 }),
+            { level: "warning", tags: { component: "chat-stream", operation: "chat.web_search" } },
+        );
+    });
+
+    it("reports a search service that fails outright as an unreadable page, then falls back", async () => {
+        const cause = new TypeError("fetch failed");
+        vi.stubGlobal("fetch", vi.fn(async () => { throw cause; }));
+        guardedFetch.mockResolvedValue(page("The order.", "text/plain"));
+
+        const result = await readWebPage("https://law.test/order.txt", {
+            account: { backend: "deepseek", apiKey: "key" },
+        });
+
+        expect(result.text).toBe("The order.");
+        expect(reportError).toHaveBeenCalledWith(
+            expect.objectContaining({ kind: "web_search.page_unreadable", cause }),
+            expect.objectContaining({ level: "warning" }),
+        );
+    });
+
+    it("does not report a page read the turn aborted", async () => {
+        const controller = new AbortController();
+        vi.stubGlobal("fetch", vi.fn(async () => {
+            controller.abort();
+            throw new Error("aborted");
+        }));
+
+        await expect(
+            readWebPage("https://law.test/order.txt", {
+                account: { backend: "deepseek", apiKey: "key" },
+                signal: controller.signal,
+            }),
+        ).rejects.toThrow("aborted");
+        expect(reportError).not.toHaveBeenCalled();
     });
 
     it("does not send a private address to the search service", async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import {
@@ -19,6 +19,7 @@ import {
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SELECTED_CLASS,
 } from "@/app/components/ui/liquid-surface";
+import { sortByNewest } from "@/app/lib/sortByNewest";
 
 /** How many more of a project's chats and reviews each "See more" shows. */
 export const PROJECT_RECENT_ITEM_PAGE_SIZE = 5;
@@ -44,7 +45,7 @@ export function mergeProjectRecentItems(
     chats: Chat[],
     reviews: TabularReview[],
 ): ProjectRecentItem[] {
-    return [
+    const items = [
         ...chats.map(
             (chat): ProjectRecentItem => ({
                 kind: "chat",
@@ -63,9 +64,8 @@ export function mergeProjectRecentItems(
                 activityAt: review.updated_at ?? review.created_at,
             }),
         ),
-    ].sort(
-        (a, b) => Date.parse(b.activityAt) - Date.parse(a.activityAt),
-    );
+    ];
+    return sortByNewest(items, (item) => Date.parse(item.activityAt));
 }
 
 type ProjectItemsData = {
@@ -170,9 +170,15 @@ export function SidebarProjectItem({
         return () => controller.abort();
     }, [expanded, project.id, refreshKey, reloadKey]);
 
-    const items = data
-        ? mergeProjectRecentItems(project.id, data.chats, data.reviews)
-        : null;
+    // Re-sorted only when the loaded lists change, not on every render
+    // (a pathname change re-renders every project in the sidebar).
+    const items = useMemo(
+        () =>
+            data
+                ? mergeProjectRecentItems(project.id, data.chats, data.reviews)
+                : null,
+        [data, project.id],
+    );
     const visibleItems = items?.slice(0, visibleCount) ?? [];
     const canSeeMore =
         !!items && (items.length > visibleCount || !!data?.hasMoreReviews);

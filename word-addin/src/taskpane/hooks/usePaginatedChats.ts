@@ -4,7 +4,7 @@ import { listCloudWordChats } from "../api/mikeApi";
 import { listLocalWordChats } from "../lib/localWordChats";
 import type { WordChatStorageMode } from "../lib/wordChatSettings";
 import { WORD_CHAT_HISTORY_CHANGED } from "../lib/wordChatHistoryEvents";
-import { userMessage } from "../lib/notify";
+import { reportFault } from "../lib/notify";
 import { onSessionRecovered } from "../lib/sessionRefresh";
 
 export interface PaginatedChatsState {
@@ -108,9 +108,10 @@ export function usePaginatedChats(
         setError(
           timedOut
             ? "Chat history took too long to load."
-            : userMessage(reason, {
+            : reportFault(reason, {
                 fallback: "Mike couldn't load your chat history. Try again.",
-              }),
+                operation: "word_chat.turn",
+              }).message,
         );
       })
       .finally(() => {

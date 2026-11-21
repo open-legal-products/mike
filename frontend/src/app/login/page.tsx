@@ -4,24 +4,25 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AuthApiError, login, signup } from "@/app/lib/authApi";
 import { completeUserOnboarding, getUserProfile } from "@/app/lib/mikeApi";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import {
+    InputUI,
+    PillButtonUI,
+    authGlassCardUIClassName,
+    authInputUIClassName,
+    AuthDividerUI,
+    noticeActionClassName,
+} from "@mike/ui";
 import Link from "next/link";
 import { SiteLogo } from "@/app/components/site-logo";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { cn } from "@/app/lib/utils";
-import {
-    authGlassCardUIClassName,
-    authInputUIClassName,
-} from "@/shared/ui/AuthStylesUI";
-import { AuthDividerUI } from "@/shared/ui/AuthDividerUI";
 import { SsoAuthButton } from "@/app/components/auth/SsoAuthButton";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
+import { useSignInOptions } from "@/app/hooks/useSignInOptions";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
-import { noticeActionClassName } from "@/shared/ui/NoticeCardUI";
 import {
-    describeError,
+    reportFault,
     supportMailtoFor,
     type UserFacingError,
 } from "@/app/lib/userFacingError";
@@ -54,10 +55,11 @@ const SESSION_WARNING_TITLE = "Couldn't check your session";
 
 /** Classify a login failure into text a person can act on. */
 function describeLoginError(error: unknown): UserFacingError {
-    const described = describeError(error, {
+    const described = reportFault(error, {
         action: "log in",
         codeMessages: LOGIN_ERROR_MESSAGES,
         fallback: "Unable to log in right now. Try again.",
+        operation: "auth.signin",
     });
     // A 429 without a GoTrue code still means "you tried too often".
     return described.kind === "rate_limited"
@@ -106,12 +108,25 @@ export default function LoginPage() {
     }
     const [loginMode, setLoginMode] = useState<"account" | "guest" | null>(null);
     const [guest, setGuest] = useState<GuestCredentials | null>(null);
+    const { options: signInOptions, providersKnown } = useSignInOptions();
 
     useEffect(() => {
         if (!authLoading && isAuthenticated) {
             router.replace("/onboarding/profile");
         }
     }, [authLoading, isAuthenticated, router]);
+
+    // A new deployment has no accounts yet: its first visitor creates one.
+    useEffect(() => {
+        if (signInOptions.setupRequired) router.replace("/setup");
+    }, [router, signInOptions.setupRequired]);
+
+    // Offer only the providers this deployment has configured, and none
+    // until it has said which, so a button never appears and then vanishes.
+    // The server's hint (login/layout.tsx) normally says so before the first
+    // paint, which keeps the card from growing once the browser has asked.
+    const showGoogle = providersKnown && signInOptions.google;
+    const showSso = providersKnown && signInOptions.sso;
 
     useEffect(() => {
         let cancelled = false;
@@ -157,9 +172,10 @@ export default function LoginPage() {
             // The Retry button failing silently is what made the original
             // session error look permanent; say so instead.
             setSessionError(
-                describeError(caught, {
+                reportFault(caught, {
                     action: "restore your session",
                     fallback: "Unable to restore your session. Try again.",
+                    operation: "auth.session",
                 }),
             );
             setSessionWarningDismissed(false);
@@ -210,10 +226,11 @@ export default function LoginPage() {
             router.push("/assistant");
         } catch (error: unknown) {
             setError(
-                describeError(error, {
+                reportFault(error, {
                     action: "open your local workspace",
                     codeMessages: LOGIN_ERROR_MESSAGES,
                     fallback: "Unable to continue as guest right now. Please try again.",
+                    operation: "auth.signin",
                 }),
             );
         } finally {
@@ -331,18 +348,22 @@ export default function LoginPage() {
                                     {loading ? "Logging in..." : "Log in"}
                                 </PillButtonUI>
                             </div>
-                            {!guest && (
+                            {!guest && (showGoogle || showSso) && (
                                 <>
                                     <AuthDividerUI />
-                                    <GoogleAuthButton
-                                        onError={(nextError) => {
-                                            setLoginMode(null);
-                                            setError(nextError);
-                                        }}
-                                        disabled={loading}
-                                        onLoadingChange={setLoading}
-                                    />
-                                    <SsoAuthButton disabled={loading} />
+                                    {showGoogle && (
+                                        <GoogleAuthButton
+                                            onError={(nextError) => {
+                                                setLoginMode(null);
+                                                setError(nextError);
+                                            }}
+                                            disabled={loading}
+                                            onLoadingChange={setLoading}
+                                        />
+                                    )}
+                                    {showSso && (
+                                        <SsoAuthButton disabled={loading} />
+                                    )}
                                 </>
                             )}
                         </form>

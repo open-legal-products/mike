@@ -2,10 +2,10 @@
  * Add-in base layer for the Mike design system.
  *
  * The design tokens themselves are NOT declared here: they live in
- * frontend/src/shared/ui/DesignTokensUI.css, which taskpane/styles.css
+ * packages/ui/styles/DesignTokensUI.css, which taskpane/styles.css
  * imports right before this file, so the pane and the web app read the same
  * values from one source. Do not redeclare a shared token here (it would
- * shadow the web's value); frontend/src/shared/ui/DesignTokensUI.test.ts
+ * shadow the web's value); packages/ui/src/DesignTokensUI.test.ts
  * fails if this file does. Import AFTER `@import "tailwindcss";` so the base
  * layer applies.
  */

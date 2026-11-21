@@ -1,9 +1,14 @@
 "use client";
+import { BACKEND_REPORTING_OWNER } from "@mike/client";
 
 import { RowActionMenuItems } from "@/app/components/shared/RowActions";
 import { rowActionSelectionIds } from "@/app/components/shared/TablePrimitive";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useReviewCells } from "./reviewCellStore";
+import { indexReviewCells } from "./reviewCellIndex";
+import { reviewRowRemoval } from "./reviewRowRemoval";
+import { reviewColumnRemoval } from "./reviewColumnRemoval";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
     Plus,
@@ -25,6 +30,7 @@ import {
     deleteTabularReview,
     getTabularReviewAccess,
     getTabularReview,
+    getTabularReviewHistoryStatuses,
     getProject,
     getTabularReviewPeople,
     listProjects,
@@ -79,6 +85,7 @@ import {
     type ModelProvider,
 } from "@/app/lib/modelAvailability";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
+import { missingById } from "@/app/lib/idCollections";
 import { TRSidePanel } from "./TRSidePanel";
 import { TRTable } from "./TRTable";
 import type { TRTableHandle } from "./TRTable";
@@ -89,6 +96,7 @@ import { readSseFrames } from "@/app/lib/sse";
 import {
     UserVisibleError,
     notifyError,
+    reportFlowFailure,
 } from "@/app/lib/userFacingError";
 import { useAssignLatest, useLatestRef } from "@/app/hooks/useLatestRef";
 import { useSidebar } from "@/app/contexts/SidebarContext";
@@ -98,12 +106,12 @@ import {
 } from "@/app/contexts/WorkspaceContext";
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { TabPillButtonUI } from "@mike/ui";
 import { LIQUID_GLASS_SUBTLE_CLASS } from "@/app/components/ui/liquid-surface";
 import { ModelToggle } from "../assistant/ModelToggle";
 import {
     type NoModelsReason,
-} from "@/shared/lib/modelCatalog";
+} from "@mike/client";
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import { useItemWorkspace } from "@/app/hooks/useItemWorkspace";
@@ -126,8 +134,13 @@ export function TRView({ reviewId, projectId }: Props) {
     // Generation and row/column edits can update the review outside PATCH.
     // Refresh History when the authoritative detail reports new activity.
     useEffect(() => {
-        if (review?.updated_at) notifyTabularReviewsChanged();
-    }, [review?.id, review?.updated_at]);
+        if (review?.updated_at) notifyTabularReviewsChanged([{
+            id: review.id, updated_at: review.updated_at, is_running: Boolean(review.is_running),
+            title: review.title, project_id: review.project_id, org_id: review.org_id ?? null,
+            ...(review.is_complete !== undefined && { is_complete: review.is_complete }),
+        }]);
+    }, [review?.id, review?.updated_at, review?.is_running, review?.is_complete,
+        review?.title, review?.project_id, review?.org_id]);
     // Opening a review opens its workspace. One in a project follows its
     // project, which says so itself.
     useItemWorkspace(
@@ -135,7 +148,10 @@ export function TRView({ reviewId, projectId }: Props) {
         review ? (review.org_id ?? null) : undefined,
     );
     const [project, setProject] = useState<Project | null>(null);
-    const [cells, setCells] = useState<TabularCell[]>([]);
+    const confirmedDetail = useRef<Awaited<ReturnType<typeof getTabularReview>> | undefined>(undefined);
+    const detailRequest = useRef(0);
+    const reconciliationTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+    const [cells, setCells, cellStore] = useReviewCells();
     const [documents, setDocuments] = useState<Document[]>([]);
     const [rows, setRows] = useState<TabularReviewRow[]>([]);
     const [columns, setColumns] = useState<ColumnConfig[]>([]);
@@ -306,10 +322,14 @@ export function TRView({ reviewId, projectId }: Props) {
         // can resolve AFTER the new one and clobber fresh state with stale
         // data; drop its results instead.
         let cancelled = false;
+        const request = ++detailRequest.current;
+        confirmedDetail.current = undefined;
         const fetches: Promise<unknown>[] = [
             getTabularReview(reviewId).then(
-                ({ review, cells, rows, documents, active_generation }) => {
-                    if (cancelled) return;
+                (detail) => {
+                    if (cancelled || request !== detailRequest.current) return;
+                    confirmedDetail.current = detail;
+                    const { review, cells, rows, documents, active_generation } = detail;
                     setReview(review);
                     setCells(cells);
                     setRows(rows);
@@ -353,7 +373,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 // Without this the rejection was unhandled: the spinner
                 // cleared and the review read as empty rather than unloaded.
                 .catch((error) => {
-                    if (cancelled) return;
+                    if (cancelled || request !== detailRequest.current) return;
                     notifyError(error, {
                         action: "load this review",
                         dedupeKey: `tr-review:${reviewId}`,
@@ -384,8 +404,10 @@ export function TRView({ reviewId, projectId }: Props) {
         });
         return () => {
             cancelled = true;
+            detailRequest.current += 1;
+            clearTimeout(reconciliationTimer.current);
         };
-    }, [reviewId, projectId]);
+    }, [reviewId, projectId, setCells]);
 
     // A review opened by link may change the active workspace. Its move
     // destinations follow the review itself, including while that switch loads.
@@ -549,9 +571,7 @@ export function TRView({ reviewId, projectId }: Props) {
         // Changing the review's document set is a structure edit server-side
         // (PATCH document_ids 403s below member) — same gate as columns.
         if (!requireStructure("edit the document set")) return;
-        const toAdd = newDocs.filter(
-            (d) => !documents.some((existing) => existing.id === d.id),
-        );
+        const toAdd = missingById(documents, newDocs);
         if (!toAdd.length) return;
         const allIds = [
             ...documents.map((d) => d.id),
@@ -617,7 +637,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 // resend the document set and column config as they were
                 // at drop time, undoing any edit made since.
                 onRetry: () => {
-                    void loadLatestReview();
+                    void retryRef.current?.reloadReview();
                 },
             });
         } finally {
@@ -665,13 +685,12 @@ export function TRView({ reviewId, projectId }: Props) {
             return;
         }
 
-        setCells((prev) =>
-            prev.map((c) =>
-                c.row_id === rowId && c.column_index === colIndex
-                    ? { ...c, status: "generating" as const, content: null }
-                    : c,
-            ),
-        );
+        // One cell changes, so only that cell's subscribers hear about it:
+        // a structural setCells would rewrite and re-index the whole grid.
+        cellStore.patch(rowId, colIndex, {
+            status: "generating",
+            content: null,
+        });
         setExpandedCell((prev) =>
             prev
                 ? { ...prev, status: "generating" as const, content: null }
@@ -697,13 +716,10 @@ export function TRView({ reviewId, projectId }: Props) {
                 );
                 return;
             }
-            setCells((prev) =>
-                prev.map((c) =>
-                    c.row_id === rowId && c.column_index === colIndex
-                        ? { ...c, status: "done" as const, content: result }
-                        : c,
-                ),
-            );
+            cellStore.patch(rowId, colIndex, {
+                status: "done",
+                content: result,
+            });
             setExpandedCell((prev) =>
                 prev
                     ? { ...prev, status: "done" as const, content: result }
@@ -726,32 +742,61 @@ export function TRView({ reviewId, projectId }: Props) {
                     void handleRegenerateCell(rowId, colIndex);
                 },
             });
-            setCells((prev) =>
-                prev.map((c) =>
-                    c.row_id === rowId && c.column_index === colIndex
-                        ? { ...c, status: "error" as const }
-                        : c,
-                ),
-            );
+            cellStore.patch(rowId, colIndex, { status: "error" });
             setExpandedCell((prev) =>
                 prev ? { ...prev, status: "error" as const } : null,
             );
         }
     }
 
+    function announceGenerationStart() {
+        notifyTabularReviewsChanged([{
+            id: reviewId, updated_at: review?.updated_at, is_running: true, is_complete: false,
+        }]);
+    }
+
+    function scheduleReconciliation(request: number) {
+        clearTimeout(reconciliationTimer.current);
+        reconciliationTimer.current = setTimeout(() => {
+            if (request !== detailRequest.current) return;
+            void refreshAfterGeneration().catch(error => {
+                console.error("Failed to reconcile the running review", error);
+                notifyError(error, {
+                    action: "refresh this review",
+                    onRetry: () => { void retryRef.current?.reloadReview(); },
+                });
+            });
+        }, 5000);
+    }
+
     async function refreshAfterGeneration() {
-        for (let attempt = 0; attempt < 40; attempt += 1) {
-            const detail = await getTabularReview(reviewId);
-            if (!detail.review.is_running) {
-                setReview(detail.review);
-                setCells(detail.cells);
-                setRows(detail.rows);
-                setDocuments(detail.documents);
-                setColumns(detail.review.columns_config || []);
-                return;
+        const request = ++detailRequest.current;
+        clearTimeout(reconciliationTimer.current);
+        // Reconcile changed cells against the last confirmed server snapshot.
+        // Streamed and optimistic cell updates never become the delta's base.
+        let detail = await getTabularReview(reviewId, confirmedDetail.current);
+        for (let attempt = 1; detail.review.is_running; attempt += 1) {
+            if (request !== detailRequest.current) return;
+            if (attempt >= 40) {
+                detail = await getTabularReview(reviewId, detail);
+                break;
             }
             await new Promise((resolve) => setTimeout(resolve, 250));
+            if (request !== detailRequest.current) return;
+            const [status] = await getTabularReviewHistoryStatuses([reviewId]);
+            if (request !== detailRequest.current) return;
+            if (status?.is_running) continue;
+            detail = await getTabularReview(reviewId, detail);
         }
+        if (request !== detailRequest.current) return;
+        confirmedDetail.current = detail;
+        if (detail.review.is_running) scheduleReconciliation(request);
+        else setGenerationGuard(null);
+        setReview(detail.review);
+        setCells(detail.cells);
+        setRows(detail.rows);
+        setDocuments(detail.documents);
+        setColumns(detail.review.columns_config || []);
     }
 
     // Reads an SSE response and applies cell_update frames until [DONE].
@@ -768,19 +813,26 @@ export function TRView({ reviewId, projectId }: Props) {
             try {
                 const data = frame as Record<string, unknown>;
                 if (data.type === "cell_update") {
-                    setCells((prev) =>
-                        prev.map((c) =>
-                            c.row_id === data.row_id &&
-                            c.column_index === data.column_index
-                                ? {
-                                      ...c,
-                                      content: data.content as TabularCell["content"],
-                                      status: data.status as TabularCell["status"],
-                                  }
-                                : c,
-                        ),
-                    );
+                    cellStore.patch(data.row_id as string, data.column_index as number, {
+                        content: data.content as TabularCell["content"],
+                        status: data.status as TabularCell["status"],
+                    });
                 } else if (data.type === "error") {
+                    // The frame is the run's failure as the server saw it;
+                    // its code and request id match it to the backend's own
+                    // event. A rejected key is the user's configuration, not
+                    // a fault, and is shown as the key warning only.
+                    if (data.code !== "invalid_api_key") {
+                        reportFlowFailure({
+                            operation: "tabular.run",
+                            reportingOwner: data.reporting_owner === BACKEND_REPORTING_OWNER ? BACKEND_REPORTING_OWNER : undefined,
+                            code: typeof data.code === "string" ? data.code : null,
+                            requestId:
+                                typeof data.request_id === "string"
+                                    ? data.request_id
+                                    : null,
+                        });
+                    }
                     if (data.code === "invalid_api_key") {
                         setApiKeyWarning({
                             kind: "rejected",
@@ -850,14 +902,13 @@ export function TRView({ reviewId, projectId }: Props) {
             if (!response.ok) {
                 throw new Error(`Resume failed: ${response.status}`);
             }
-            notifyTabularReviewsChanged();
+            announceGenerationStart();
             await consumeGenerationStream(response);
             if (ownedAbort && !ownedAbort.signal.aborted) await refreshAfterGeneration();
         } catch (err) {
             if (!ownedAbort?.signal.aborted) throw err;
         } finally {
             resumeStreamOpenRef.current = false;
-            notifyTabularReviewsChanged();
             if (ownedAbort && generationAbortRef.current === ownedAbort)
                 generationAbortRef.current = null;
             if (ownsToolbar) {
@@ -929,6 +980,13 @@ export function TRView({ reviewId, projectId }: Props) {
             );
             if (!response.ok) {
                 const payload = await response.json().catch(() => null);
+                const code =
+                    typeof payload?.code === "string" ? payload.code : null;
+                const requestId =
+                    typeof payload?.request_id === "string"
+                        ? payload.request_id
+                        : response.headers.get("x-request-id");
+                const reportingOwner = payload?.reporting_owner === BACKEND_REPORTING_OWNER ? BACKEND_REPORTING_OWNER : undefined;
                 if (payload?.code === "review_running") {
                     setReview((current) =>
                         current ? { ...current, is_running: true } : current,
@@ -950,23 +1008,41 @@ export function TRView({ reviewId, projectId }: Props) {
                 } else if (payload?.code === "invalid_api_key") {
                     setApiKeyWarning({ kind: "rejected", provider });
                 }
-                throw new Error(
-                    payload?.detail ?? `Generation failed: ${response.status}`,
+                // Status, code and request id ride on the error so the toast
+                // classifies the refusal and the report matches the server's.
+                const failure = Object.assign(
+                    new Error(
+                        payload?.detail ?? `Generation failed: ${response.status}`,
+                    ),
+                    {
+                        status: response.status,
+                        reportingOwner,
+                        ...(code ? { code } : {}),
+                        ...(requestId ? { requestId } : {}),
+                    },
                 );
+                reportFlowFailure({
+                    operation: "tabular.run",
+                    method: "POST",
+                    path: `/api/tabular-reviews/${reviewId}/run`,
+                    status: response.status,
+                    code,
+                    requestId,
+                    reportingOwner,
+                    error: failure,
+                });
+                throw failure;
             }
             if (!response.body) throw new Error("No body");
             generationStarted = true;
-            notifyTabularReviewsChanged();
+            announceGenerationStart();
 
             // Optimistically set empty/pending/error cells to generating (skip done cells)
-            setCells((prev) =>
-                rows.flatMap((row) =>
+            setCells((prev) => {
+                const indexed = indexReviewCells(prev);
+                return rows.flatMap((row) =>
                     columns.map((col) => {
-                        const existing = prev.find(
-                            (c) =>
-                                c.row_id === row.id &&
-                                c.column_index === col.index,
-                        );
+                        const existing = indexed.get(row.id)?.get(col.index);
                         if (existing?.status === "done" && existing?.content) {
                             return existing;
                         }
@@ -987,8 +1063,8 @@ export function TRView({ reviewId, projectId }: Props) {
                                   created_at: new Date().toISOString(),
                               };
                     }),
-                ),
-            );
+                );
+            });
 
             try {
                 await consumeGenerationStream(response);
@@ -1014,12 +1090,12 @@ export function TRView({ reviewId, projectId }: Props) {
                 // and they look identical to a run still in progress.
                 notifyError(err, {
                     action: "run this review",
+                    operation: "tabular.run",
                     dedupeKey: `tr-generate:${reviewId}`,
                     onRetry: () => retryRef.current?.generate(),
                 });
             }
         } finally {
-            notifyTabularReviewsChanged();
             if (generationAbortRef.current === generationAbort) {
                 if (stopRequestedRef.current || (generationStarted && !generationAbort.signal.aborted)) {
                     try {
@@ -1031,7 +1107,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 "The table may be out of date. Reload to see the latest results.",
                             dedupeKey: `tr-refresh:${reviewId}`,
                             onRetry: () => {
-                                void loadLatestReview();
+                                void retryRef.current?.reloadReview();
                             },
                         });
                     }
@@ -1075,15 +1151,28 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function loadLatestReview() {
+        const request = ++detailRequest.current;
+        clearTimeout(reconciliationTimer.current);
         setReloadingLatestReview(true);
         try {
             const detail = await getTabularReview(reviewId);
+            if (request !== detailRequest.current) return;
+            confirmedDetail.current = detail;
+            if (detail.review.is_running) scheduleReconciliation(request);
             setReview(detail.review);
             setCells(detail.cells);
             setRows(detail.rows);
             setDocuments(detail.documents);
             setColumns(detail.review.columns_config || []);
-            setGenerationGuard(detail.review.is_running ? "running" : null);
+            setGenerationGuard(detail.review.is_running && !detail.active_generation ? "running" : null);
+            // A retry can win over the initial load. Preserve its ability to
+            // attach to and stop a generation owned by this server.
+            if (detail.active_generation && !resumeStreamOpenRef.current && !generationAbortRef.current) {
+                lastFrameIdRef.current = 0;
+                retryRef.current?.resume({ stoppable: true }).catch(err =>
+                    console.error("Generation resume failed", err),
+                );
+            }
         } catch (err) {
             // Both callers are "Check again"/"Load latest" buttons in a
             // blocking popup that otherwise just stops responding.
@@ -1091,7 +1180,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 action: "load the latest version of this review",
                 dedupeKey: `tr-latest:${reviewId}`,
                 onRetry: () => {
-                    void loadLatestReview();
+                    void retryRef.current?.reloadReview();
                 },
             });
         } finally {
@@ -1152,62 +1241,31 @@ export function TRView({ reviewId, projectId }: Props) {
             ...current,
             ...normalizedColumns,
         ]);
-        setCells((prev) => [
-            ...prev,
-            ...rows
-                .filter((row) =>
-                    normalizedColumns.some(
-                        (column) =>
-                            !prev.some(
-                                (cell) =>
-                                    cell.row_id === row.id &&
-                                    cell.column_index === column.index,
-                            ),
-                    ),
-                )
-                .flatMap((row) =>
-                    normalizedColumns
-                        .filter(
-                            (column) =>
-                                !prev.some(
-                                    (cell) =>
-                                        cell.row_id === row.id &&
-                                        cell.column_index === column.index,
-                                ),
-                        )
-                        .map((column) => ({
-                            id: `new-${row.id}-${column.index}`,
-                            review_id: reviewId,
-                            row_id: row.id,
-                            document_id: row.document_id,
-                            column_index: column.index,
-                            content: null,
-                            status: "pending" as const,
-                            created_at: new Date().toISOString(),
-                        })),
-                ),
-        ]);
+        setCells((prev) => {
+            const indexed = indexReviewCells(prev);
+            return [...prev, ...rows.flatMap(row => normalizedColumns
+                .filter(column => !indexed.get(row.id)?.has(column.index))
+                .map(column => ({
+                    id: `new-${row.id}-${column.index}`,
+                    review_id: reviewId,
+                    row_id: row.id,
+                    document_id: row.document_id,
+                    column_index: column.index,
+                    content: null,
+                    status: "pending" as const,
+                    created_at: new Date().toISOString(),
+                })))];
+        });
         try {
             await saveColumnsConfig(newCols);
         } catch (err) {
             // Take back only the columns this call added; an edit to a
             // different column may have landed while the save was in flight.
-            applyColumns((current) =>
-                current.filter(
-                    (column) =>
-                        !normalizedColumns.some(
-                            (added) => added.index === column.index,
-                        ),
-                ),
+            const removal = reviewColumnRemoval(
+                normalizedColumns.map((column) => column.index),
             );
-            setCells((prev) =>
-                prev.filter(
-                    (cell) =>
-                        !normalizedColumns.some(
-                            (column) => column.index === cell.column_index,
-                        ),
-                ),
-            );
+            applyColumns((current) => current.filter(removal.keepsColumn));
+            setCells((prev) => prev.filter(removal.keepsCell));
             notifyError(err, {
                 action: "add the column",
                 fallback: "This column could not be saved. Try again.",
@@ -1297,11 +1355,7 @@ export function TRView({ reviewId, projectId }: Props) {
             (left, right) => left.index - right.index,
         )[0];
         if (!firstColumn) return;
-        const firstCell = cells.find(
-            (cell) =>
-                cell.row_id === row.id &&
-                cell.column_index === firstColumn.index,
-        );
+        const firstCell = cellStore.get(row.id, firstColumn.index);
         if (!firstCell) return;
 
         setExpandedCell(firstCell);
@@ -1315,24 +1369,17 @@ export function TRView({ reviewId, projectId }: Props) {
         if (!requireStructure("remove documents from this review")) return;
         const rowIdsToDelete = [...targetIds];
         if (rowIdsToDelete.length === 0) return;
-        const documentIdsToDelete = new Set(
-            rows
-                .filter((row) => rowIdsToDelete.includes(row.id))
-                .flatMap((row) => row.source_document_ids),
-        );
+        const removal = reviewRowRemoval(rowIdsToDelete);
+        const documentIdsToDelete = removal.documentIds(rows);
         const previousDocuments = documents;
         const previousRows = rows;
-        const previousCells = cells;
+        const previousCells = cellStore.values();
         const remaining = documents.filter(
             (document) => !documentIdsToDelete.has(document.id),
         );
         setDocuments(remaining);
-        setRows((current) =>
-            current.filter((row) => !rowIdsToDelete.includes(row.id)),
-        );
-        setCells((current) =>
-            current.filter((cell) => !rowIdsToDelete.includes(cell.row_id)),
-        );
+        setRows((current) => current.filter(removal.keepsRow));
+        setCells((current) => current.filter(removal.keepsCell));
         setSelectedRowIds([]);
         setActionsOpen(false);
         try {
@@ -1350,9 +1397,7 @@ export function TRView({ reviewId, projectId }: Props) {
             // on screen now. A run may be filling cells in as this fails
             // (`cellMutationsBlocked`), and another removal may have
             // succeeded: restoring the whole snapshot wiped both.
-            const failedCellIds = previousCells
-                .filter((cell) => rowIdsToDelete.includes(cell.row_id))
-                .map((cell) => cell.id);
+            const failedCellIds = removal.cellIds(previousCells);
             setDocuments((current) =>
                 restoreOptimisticallyDeletedRows(current, previousDocuments, [
                     ...documentIdsToDelete,
@@ -1392,11 +1437,13 @@ export function TRView({ reviewId, projectId }: Props) {
             setGenerationGuard("running");
             return;
         }
-        const previousCells = cells;
+        const previousCells = cellStore.values();
+        const previousById = new Map(previousCells.map(cell => [cell.id, cell]));
+        const targetRows = new Set(rowIds);
         const previousSelectedRowIds = selectedRowIds;
         setCells((prev) =>
             prev.map((c) =>
-                rowIds.includes(c.row_id)
+                targetRows.has(c.row_id)
                     ? { ...c, content: null, status: "pending" }
                     : c,
             ),
@@ -1423,10 +1470,8 @@ export function TRView({ reviewId, projectId }: Props) {
             if (!cellMutationsBlockedRef.current) {
                 setCells((current) =>
                     current.map((cell) =>
-                        rowIds.includes(cell.row_id)
-                            ? (previousCells.find(
-                                  (previous) => previous.id === cell.id,
-                              ) ?? cell)
+                        targetRows.has(cell.row_id)
+                            ? (previousById.get(cell.id) ?? cell)
                             : cell,
                     ),
                 );
@@ -1590,7 +1635,7 @@ export function TRView({ reviewId, projectId }: Props) {
             index,
         }));
         const previousColumns = columnsRef.current;
-        const previousCells = cells;
+        const previousCells = cellStore.values();
         setApplyingWorkflow(true);
         applyColumns(() => nextColumns);
         setCells([]);
@@ -1779,7 +1824,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                                             "Tabular Review",
                                                         columns,
                                                         rows,
-                                                        cells,
+                                                        cells: cellStore.values(),
                                                     }),
                                                 disabled:
                                                     columns.length === 0 ||
@@ -2009,6 +2054,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 rows={filteredRows}
                                 documents={documents}
                                 cells={cells}
+                                cellStore={cellStore}
                                 highlightedCell={highlightedCell}
                                 savingColumn={savingColumn}
                                 savingColumnsConfig={savingColumnsConfig}
@@ -2104,11 +2150,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 setExpandedDocumentId(undefined);
                             }}
                             onNavigate={(rowId, columnIndex) => {
-                                const nextCell = cells.find(
-                                    (candidate) =>
-                                        candidate.row_id === rowId &&
-                                        candidate.column_index === columnIndex,
-                                );
+                                const nextCell = cellStore.get(rowId, columnIndex);
                                 if (nextCell) {
                                     setExpandedCell(nextCell);
                                     setExpandedCellCitation(undefined);

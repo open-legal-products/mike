@@ -47,24 +47,70 @@ export async function validateFolderMove(
   return null;
 }
 
-export function collectFolderSubtree(
-  folderId: string,
-  folders: Array<{ id: string; parent_folder_id: string | null }>,
-): Set<string> {
-  const childrenByParent = new Map<string, string[]>();
-  for (const folder of folders) {
-    if (!folder.parent_folder_id) continue;
-    const children = childrenByParent.get(folder.parent_folder_id) ?? [];
-    children.push(folder.id);
-    childrenByParent.set(folder.parent_folder_id, children);
+/**
+ * Breadth-first walk of a folder graph one level per round trip, instead of
+ * loading every folder in a scope to find a few. `loadLevel` receives the
+ * current frontier (callers batch and scope it); `nextIds` names the rows to
+ * visit next — parents for an ancestor walk, the row itself for a
+ * children-by-parent walk. Visited ids are never revisited, so a corrupt
+ * parent cycle ends the walk instead of looping. Returns every loaded row.
+ */
+export async function walkFolderGraph<T extends { id: string }>(
+  startIds: Iterable<string | null | undefined>,
+  loadLevel: (ids: string[]) => Promise<T[]>,
+  nextIds: (row: T) => Array<string | null | undefined>,
+): Promise<T[]> {
+  const seen = new Set<string>();
+  const rows: T[] = [];
+  const unseen = (ids: Iterable<string | null | undefined>) =>
+    [...new Set([...ids].filter((id): id is string => !!id && !seen.has(id)))];
+  let frontier = unseen(startIds);
+  while (frontier.length) {
+    for (const id of frontier) seen.add(id);
+    const level = await loadLevel(frontier);
+    rows.push(...level);
+    frontier = unseen(level.flatMap(nextIds));
   }
-  const selected = new Set<string>();
-  const stack = [folderId];
-  while (stack.length) {
-    const id = stack.pop()!;
-    if (selected.has(id)) continue;
-    selected.add(id);
-    stack.push(...(childrenByParent.get(id) ?? []));
-  }
-  return selected;
+  return rows;
+}
+
+/**
+ * Resolve folder ids to "Parent / Child" display paths. Each folder's path is
+ * computed once and reused by every descendant, so labelling D documents in a
+ * tree of depth H costs O(folders + D) instead of O(D·H), and a corrupt
+ * parent cycle ends the walk instead of looping forever. A folder missing from
+ * `folders` (outside the caller's scope) ends the path, as the root does.
+ */
+export function folderPathResolver(
+  folders: Iterable<{ id: string; name: string; parent_folder_id: string | null }>,
+): (folderId: string | null) => string {
+  const byId = new Map<string, { name: string; parent_folder_id: string | null }>();
+  for (const folder of folders) byId.set(folder.id, folder);
+  // null = a folder outside the map: contributes no segment.
+  const memo = new Map<string, string>();
+  return (folderId) => {
+    if (!folderId) return "";
+    const chain: string[] = [];
+    const onChain = new Set<string>();
+    let base: string | null = null;
+    let current: string | null = folderId;
+    while (current) {
+      const cached = memo.get(current);
+      if (cached !== undefined) {
+        base = cached;
+        break;
+      }
+      const folder = byId.get(current);
+      if (!folder || onChain.has(current)) break;
+      onChain.add(current);
+      chain.push(current);
+      current = folder.parent_folder_id;
+    }
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const name = byId.get(chain[i])!.name;
+      base = base === null ? name : `${base} / ${name}`;
+      memo.set(chain[i], base);
+    }
+    return base ?? "";
+  };
 }

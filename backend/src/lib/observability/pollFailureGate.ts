@@ -15,12 +15,41 @@
 //   - stay quiet for repeats, logging a one-line count at most once per
 //     summary interval (console.warn: breadcrumb, never a Sentry event);
 //   - back the poll interval off exponentially, bounded;
-//   - on the first success after failures, log recovery once and reset.
-//
+//   - on the first success after failures, log recovery once and reset;
+//   - after a recovery, stay quiet about a class that was reported within the
+//     repeat window. A loop that alternates one failed tick with successful
+//     ones (a lease lost on every long job, a deadlocked claim every few
+//     minutes) is flapping, not newly broken: re-reporting it on every flap
+//     filed MIKE-BACKEND-M dozens of times per hour with no new information.
+//   - optionally (repeatWhilePersistingMs), report a class that keeps failing
+//     again once per that window, so a long outage stays on the issue's
+//     timeline. Off by default: a poll loop's backed-off line is enough.
+
+import { diagnosticErrorTags } from "./sentryPrivacy";
+
 // The class key is the error's name plus an allowlist-shaped `code` found on
 // the error or its cause chain (PostgREST, SQLSTATE, errno). An error with no
 // code is keyed by a hash of its message, so the key itself never carries
 // dependency text into the log line.
+//
+// Every "the dependency is unreachable or restarting" code is one class. A
+// single Postgres/gateway restart walks 57P01 → PGRST002 → ECONNREFUSED in
+// seconds, and keyed by raw code that was three "new" reports of one outage
+// (MIKE-BACKEND-EA, 4C, DX). Schema → connectivity stays a change of class.
+
+/** Codes meaning a dependency is unreachable or restarting, not a defect. */
+export const DEPENDENCY_UNREACHABLE_CODES: ReadonlySet<string> = new Set([
+  // errno / undici
+  "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH",
+  "ENOTFOUND", "EAI_AGAIN", "EPIPE", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT",
+  // Postgres: admin/crash shutdown, cannot connect now, connection exceptions
+  "57P01", "57P02", "57P03", "08001", "08003", "08006",
+  // PostgREST: cannot connect to the database, or timed out on its pool
+  "PGRST000", "PGRST001", "PGRST002", "PGRST003",
+  // diagnosticErrorTags' label for a code-less "fetch failed"
+  "fetch_failed",
+]);
+const UNREACHABLE_CLASS = "dependency_unreachable";
 
 const SAFE_CODE = /^[A-Za-z0-9_]{2,40}$/;
 const CAUSE_DEPTH = 5;
@@ -44,9 +73,18 @@ function readField(value: object, key: string): unknown {
 }
 
 /** A log-safe identity for "the same failure again". */
+/** What a proxy answers when the service behind it is not there. */
+const GATEWAY_AWAY_STATUSES = new Set([502, 503, 504]);
+
 export function pollFailureClass(error: unknown): string {
   if (!error || typeof error !== "object") {
     return `${typeof error}#${hashText(String(error))}`;
+  }
+  // supabase-js's network shape (code '', errno only in `details`) and a
+  // bare "fetch failed" carry no `code`; diagnosticErrorTags reads them.
+  const tagged = diagnosticErrorTags(error).failure_code;
+  if (typeof tagged === "string" && DEPENDENCY_UNREACHABLE_CODES.has(tagged)) {
+    return UNREACHABLE_CLASS;
   }
   const rawName = readField(error, "name");
   const name =
@@ -57,8 +95,29 @@ export function pollFailureClass(error: unknown): string {
     if (!current || typeof current !== "object" || seen.has(current)) break;
     seen.add(current);
     const code = readField(current, "code");
+    // A gateway that has lost its upstream answers a non-2xx with no
+    // PostgREST body. supabase-js surfaces that with every field blank, and
+    // postgrest-js, given an empty or non-JSON body, as { message: body }
+    // with no `code` at all. A real PostgREST or SQL error always names a
+    // code and a message, so a blank message with no code can only be the
+    // dependency being away; so is a bare 502/503/504 whose body is the
+    // gateway's own HTML (the status is attached by withResponseStatus).
+    if (code === "" || code === undefined || code === null) {
+      const status = readField(current, "status");
+      const cause = readField(current, "cause");
+      if (cause === undefined && readField(current, "message") === "") {
+        return UNREACHABLE_CLASS;
+      }
+      if (
+        cause === undefined &&
+        typeof status === "number" &&
+        GATEWAY_AWAY_STATUSES.has(status)
+      ) {
+        return UNREACHABLE_CLASS;
+      }
+    }
     if (typeof code === "string" && SAFE_CODE.test(code)) {
-      return `${name}:${code}`;
+      return DEPENDENCY_UNREACHABLE_CODES.has(code) ? UNREACHABLE_CLASS : `${name}:${code}`;
     }
     current = readField(current, "cause");
   }
@@ -84,6 +143,18 @@ export type PollFailureGateOptions = {
   maxDelayMs: number;
   /** Minimum spacing of the "still failing" line. Default 60 s. */
   summaryIntervalMs?: number;
+  /**
+   * How long after a class was reported the same class, returning after a
+   * recovery, is treated as a repeat rather than news. Default 15 min.
+   */
+  repeatReportIntervalMs?: number;
+  /**
+   * Re-report a class that has kept failing (persisting or flapping) once
+   * per this window since its last report. Default off: report once.
+   */
+  repeatWhilePersistingMs?: number;
+  /** The "same failure" key. Default pollFailureClass. */
+  classify?: (error: unknown) => string;
   now?: () => number;
   log?: Pick<Console, "warn" | "log">;
 };
@@ -102,6 +173,9 @@ export function createPollFailureGate(
   const now = options.now ?? Date.now;
   const log = options.log ?? console;
   const summaryIntervalMs = options.summaryIntervalMs ?? 60_000;
+  const repeatReportIntervalMs = options.repeatReportIntervalMs ?? 15 * 60_000;
+  const repeatWhilePersistingMs = options.repeatWhilePersistingMs;
+  const classify = options.classify ?? pollFailureClass;
   const baseDelay = () =>
     typeof options.baseDelayMs === "function"
       ? options.baseDelayMs()
@@ -109,13 +183,39 @@ export function createPollFailureGate(
 
   let currentClass: string | null = null;
   let consecutive = 0;
-  let quietSinceSummary = 0;
-  let lastSummaryAt = 0;
   let retryAt = 0;
+  // Failures kept out of Sentry are counted into one log line per summary
+  // interval. A persisting class and a class flapping back keep their own
+  // count and cadence: the first flap after a report is worth a line at once,
+  // the first repeat of a persisting class is not.
+  const quiet = {
+    persisting: { suppressed: 0, lineAt: 0 },
+    flapping: { suppressed: 0, lineAt: 0 },
+  };
+  // Survives success(): when each class was last sent to Sentry, so a flap
+  // back into it is a repeat even with other classes reported in between.
+  // Entries outside the window are dropped on every failure, so the map holds
+  // at most the classes seen within one window.
+  const reportedAt = new Map<string, number>();
+
+  const suppress = (
+    track: { suppressed: number; lineAt: number },
+    at: number,
+    delayMs: number,
+    line: (suppressed: number) => string,
+  ): PollFailureVerdict => {
+    track.suppressed += 1;
+    if (at - track.lineAt >= summaryIntervalMs) {
+      log.warn(line(track.suppressed));
+      track.lineAt = at;
+      track.suppressed = 0;
+    }
+    return { report: false, delayMs, consecutive };
+  };
 
   return {
     failure(error) {
-      const failureClass = pollFailureClass(error);
+      const failureClass = classify(error);
       const at = now();
       consecutive += 1;
       const base = Math.max(0, baseDelay());
@@ -125,22 +225,38 @@ export function createPollFailureGate(
         base * 2 ** Math.min(consecutive - 1, 20),
       );
       retryAt = at + delayMs;
-      if (failureClass !== currentClass) {
-        currentClass = failureClass;
-        quietSinceSummary = 0;
-        lastSummaryAt = at;
-        return { report: true, delayMs, consecutive };
-      }
-      quietSinceSummary += 1;
-      if (at - lastSummaryAt >= summaryIntervalMs) {
-        log.warn(
+      const seconds = (ms: number) => Math.round(ms / 1000);
+      if (failureClass === currentClass) {
+        const lastReport = reportedAt.get(failureClass);
+        if (
+          repeatWhilePersistingMs !== undefined &&
+          (lastReport === undefined || at - lastReport >= repeatWhilePersistingMs)
+        ) {
+          reportedAt.set(failureClass, at);
+          quiet.persisting.suppressed = 0;
+          quiet.persisting.lineAt = at;
+          return { report: true, delayMs, consecutive };
+        }
+        return suppress(quiet.persisting, at, delayMs, (n) =>
           `${options.label} still failing (${failureClass}): ${consecutive} consecutive failures, ` +
-            `${quietSinceSummary} not re-reported since the last line; next attempt in ${Math.round(delayMs / 1000)}s`,
+            `${n} not re-reported since the last line; next attempt in ${seconds(delayMs)}s`,
         );
-        lastSummaryAt = at;
-        quietSinceSummary = 0;
       }
-      return { report: false, delayMs, consecutive };
+      currentClass = failureClass;
+      quiet.persisting.suppressed = 0;
+      quiet.persisting.lineAt = at;
+      for (const [reportedClass, when] of reportedAt) {
+        if (at - when >= repeatReportIntervalMs) reportedAt.delete(reportedClass);
+      }
+      const lastReport = reportedAt.get(failureClass);
+      if (lastReport !== undefined) {
+        return suppress(quiet.flapping, at, delayMs, (n) =>
+          `${options.label} failing again (${failureClass}) ${seconds(at - lastReport)}s after it was reported; ` +
+            `${n} recurrence(s) not re-reported; next attempt in ${seconds(delayMs)}s`,
+        );
+      }
+      reportedAt.set(failureClass, at);
+      return { report: true, delayMs, consecutive };
     },
     success() {
       if (currentClass !== null) {
@@ -150,7 +266,7 @@ export function createPollFailureGate(
       }
       currentClass = null;
       consecutive = 0;
-      quietSinceSummary = 0;
+      quiet.persisting.suppressed = 0;
       retryAt = 0;
     },
     ready() {

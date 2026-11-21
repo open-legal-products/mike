@@ -1,10 +1,10 @@
-import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
-import caseLaw from "../../../../../public/icons/legal-sources/case-law.svg";
 import { Loader2 } from "lucide-react";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
+import { LegalSourceIcon } from "../../shared/LegalSourceIcon";
+import { legalSourceIconKind } from "../../shared/documentCapabilities";
 import { displayCitationQuote, formatCitationPage } from "../../shared/types";
 import type { Citation } from "../../shared/types";
-import { CitationPillUI } from "@/shared/ui/CitationPillUI";
+import { CitationPillUI } from "@mike/ui";
 import { RESPONSE_GLASS_SURFACE } from "./messageStyles";
 import {
     citationVerificationAriaLabel,
@@ -45,17 +45,11 @@ export function citationTooltip(annotation: Citation): string {
 }
 
 function CitationSourceIcon({ annotation }: { annotation: Citation }) {
-    if (annotation.kind === "case") {
-        return (
-            <SvgAssetIcon
-                src={caseLaw}
-                aria-hidden="true"
-                width={14}
-                height={14}
-                className="h-3.5 w-3.5 shrink-0"
-            />
-        );
-    }
+    if (annotation.kind === "case") return <LegalSourceIcon kind="case" />;
+    // A provider-backed source is titled, not named like a file, so its
+    // document type picks the icon, as in the panel.
+    const legalIcon = legalSourceIconKind(annotation.document?.type);
+    if (legalIcon) return <LegalSourceIcon kind={legalIcon} />;
     return (
         <FileTypeIcon fileType={annotation.filename} className="h-3.5 w-3.5" />
     );

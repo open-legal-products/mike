@@ -1,7 +1,7 @@
 "use client";
 
 import { useDocumentWorkspace, useWorkspace } from "@/app/contexts/WorkspaceContext";
-import { workspaceIdentityKey } from "@/shared/lib/workspaceSelection";
+import { workspaceIdentityKey } from "@mike/client";
 
 /** Ephemeral UI state belongs to one account and one content workspace. */
 export function useWorkspaceIdentity(): string {

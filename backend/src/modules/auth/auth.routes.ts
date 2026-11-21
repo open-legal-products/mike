@@ -14,8 +14,15 @@ import {
   publicAuthUser,
 } from "../../lib/authSession";
 import { ssoConfiguration, ssoDomainSchema } from "../../lib/ssoConfig";
-import { sendInternalError } from "../../lib/httpError";
+import {
+  sendInternalError,
+  sendUpstreamUnavailable,
+} from "../../lib/httpError";
+import { isAuthUpstreamFailure } from "../../lib/authUpstream";
+import { AppError } from "../../lib/appError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
 import { requestOriginIsWordAddin } from "../../lib/origins";
+import { createServerSupabase } from "../../lib/supabase";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { requireTrustedOrigin } from "../../middleware/trustedOrigin";
@@ -25,6 +32,9 @@ import {
   challengeAndVerifyMfa,
   challengeMfaFactor,
   consumeWordHandoff,
+  createFirstAccount,
+  emailSignupOpen,
+  SIGNUP_EMAIL_NOT_CONFIGURED_DETAIL,
   credentialsSchema,
   currentUser,
   emailSchema,
@@ -40,6 +50,7 @@ import {
   passwordSchema,
   sendPasswordReset,
   signInWithPassword,
+  signInOptions,
   signOut,
   signUpWithPassword,
   startGoogleOAuth,
@@ -84,13 +95,22 @@ function authError(
   fallback = "Authentication could not be completed.",
 ) {
   const wire = describeAuthProviderError(error, fallback);
-  if (wire.status >= 500) {
-    console.error(
-      "[auth] unexpected server-side authentication failure",
-      error,
-    );
+  if (wire.status < 500) {
+    return res.status(wire.status).json({ code: wire.code, detail: wire.detail });
   }
-  res.status(wire.status).json({ code: wire.code, detail: wire.detail });
+  // A server-side failure goes through sendInternalError, the one place a
+  // 5xx becomes a Sentry event: reported once, logged, and marked so the
+  // response sanitizer does not file it again. GoTrue being unreachable (no
+  // answer, or a gateway 502/503/504) is an outage the user can only wait
+  // out: 503 upstream_unavailable. A GoTrue 500 is GoTrue failing on
+  // something of ours, so it stays a 500.
+  const failure = new AppError(
+    "auth.supabase_unavailable",
+    "unexpected server-side authentication failure",
+    { cause: error },
+  );
+  if (isAuthUpstreamFailure(error)) return sendUpstreamUnavailable(res, failure);
+  return sendInternalError(res, failure);
 }
 
 function invalidBody(
@@ -113,6 +133,7 @@ function cookieClient(req: Request, res: Response): SupabaseClient | null {
 }
 
 authRouter.post("/login", asyncRoute(async (req, res) => {
+  setOperation("auth.signin");
   const parsed = credentialsSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res, parsed.error.issues);
 
@@ -127,6 +148,14 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/signup", asyncRoute(async (req, res) => {
+  setOperation("auth.signup");
+  // Refuse before GoTrue creates an account that can never be confirmed.
+  if (!emailSignupOpen()) {
+    return res.status(403).json({
+      code: "signup_email_not_configured",
+      detail: SIGNUP_EMAIL_NOT_CONFIGURED_DETAIL,
+    });
+  }
   const parsed = signupSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res, parsed.error.issues);
 
@@ -142,6 +171,57 @@ authRouter.post("/signup", asyncRoute(async (req, res) => {
       user: publicAuthUser(data.user),
       requiresEmailConfirmation: !data.session,
     });
+  } catch (error) {
+    authError(res, error);
+  }
+}));
+
+// Which sign-in routes to offer, and whether this instance still needs its
+// first account. Public: the login page asks before anyone is signed in.
+authRouter.get("/options", asyncRoute(async (_req, res) => {
+  setOperation("auth.options");
+  try {
+    res.json(await signInOptions(createServerSupabase()));
+  } catch (error) {
+    sendInternalError(
+      res,
+      new AppError("auth.options_failed", "Sign-in options could not be read", {
+        cause: error,
+      }),
+    );
+  }
+}));
+
+// First-run setup: create the instance's first account and sign it in.
+authRouter.post("/setup", asyncRoute(async (req, res) => {
+  setOperation("auth.setup");
+  const parsed = signupSchema.safeParse(req.body);
+  if (!parsed.success) return invalidBody(res, parsed.error.issues);
+
+  let result: Awaited<ReturnType<typeof createFirstAccount>>;
+  try {
+    result = await createFirstAccount(createServerSupabase(), parsed.data);
+  } catch (error) {
+    return sendInternalError(
+      res,
+      new AppError("auth.setup_failed", "First-run setup could not be completed", {
+        cause: error,
+      }),
+    );
+  }
+  if (!result.ok) {
+    if (result.reason === "auth_error") return authError(res, result.error);
+    return res.status(409).json({
+      code: "setup_complete",
+      detail: "This Mike instance is already set up. Log in instead.",
+    });
+  }
+
+  try {
+    const client = createRequestSupabase(req, res);
+    const { data, error } = await signInWithPassword(client, parsed.data);
+    if (error || !data.user || !data.session) return authError(res, error);
+    res.status(201).json({ user: publicAuthUser(data.user) });
   } catch (error) {
     authError(res, error);
   }
@@ -189,19 +269,24 @@ async function startSso(req: Request, res: Response) {
             detail: "Unable to start single sign-on for this domain.",
           });
       }
-      throw new Error("SSO provider request failed");
+      throw new Error("SSO provider request failed", { cause: error });
     }
     if (!data?.url) throw new Error("Missing SSO redirect");
     return res.json({ url: data.url });
-  } catch {
+  } catch (error) {
+    // The thrown value stays the cause so the event names what failed
+    // (a GoTrue status, a network code) without its message ever leaving.
     return sendInternalError(
       res,
-      new Error("SSO sign-in could not be started"),
+      new AppError("auth.sso_failed", "SSO sign-in could not be started", {
+        cause: error,
+      }),
     );
   }
 }
 
 authRouter.post("/oauth", asyncRoute(async (req, res) => {
+  setOperation("auth.signin");
   if (req.body?.provider === "sso") return startSso(req, res);
   if (req.body?.provider !== "google") return invalidBody(res);
   try {
@@ -225,6 +310,7 @@ authRouter.post("/oauth", asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/exchange", asyncRoute(async (req, res) => {
+  setOperation("auth.signin");
   const parsed = exchangeSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res);
   try {
@@ -235,6 +321,7 @@ authRouter.post("/exchange", asyncRoute(async (req, res) => {
     );
     if (error || !data.user || !data.session) return authError(res, error);
     if (parsed.data.handoffRequestId) {
+      setOperation("auth.handoff");
       if (!requestOriginIsWordAddin(req.get("origin"))) {
         res.status(403).json({
           code: "word_handoff_origin_required",
@@ -258,6 +345,7 @@ authRouter.post("/exchange", asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/handoff", asyncRoute(async (req, res) => {
+  setOperation("auth.handoff");
   const parsed = handoffSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res);
   if (!requestOriginIsWordAddin(req.get("origin"))) {
@@ -307,23 +395,35 @@ authRouter.post("/handoff", asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/password-reset", asyncRoute(async (req, res) => {
+  setOperation("auth.signin");
   const email = emailSchema.safeParse(req.body?.email);
   if (email.success) {
     try {
       const client = createRequestSupabase(req, res);
-      await sendPasswordReset(
+      const { error } = await sendPasswordReset(
         client,
         email.data,
         callbackUrl(req, "/reset-password", "/reset-password"),
       );
-    } catch {
-      // Deliberately indistinguishable to prevent account enumeration.
+      if (error) throw error;
+    } catch (error) {
+      // Deliberately indistinguishable to prevent account enumeration: the
+      // response is the same 204 either way. The failure itself is still
+      // worth seeing (GoTrue down, or its mailer), so it is reported, as a
+      // warning, with no trace of the address.
+      reportError(
+        new AppError("auth.password_reset_failed", "password reset request failed", {
+          cause: error,
+        }),
+        { level: "warning", tags: { component: "http" } },
+      );
     }
   }
   res.status(204).end();
 }));
 
 authRouter.get("/session", requireAuth, asyncRoute(async (_req, res) => {
+  setOperation("auth.session");
   const client = cookieClient(_req, res);
   if (!client) return;
   const { user, error } = await currentUser(client);
@@ -332,12 +432,20 @@ authRouter.get("/session", requireAuth, asyncRoute(async (_req, res) => {
 }));
 
 authRouter.post("/logout", asyncRoute(async (req, res) => {
+  setOperation("auth.session");
   try {
     const client = createRequestSupabase(req, res);
     await signOut(client, req.body?.scope === "global" ? "global" : "local");
   } catch (error) {
-    // Local cookie removal must not depend on the upstream revocation request.
-    console.error("[auth/logout] upstream sign-out failed", error);
+    // Local cookie removal must not depend on the upstream revocation request,
+    // but a GoTrue that cannot revoke sessions is an outage worth seeing.
+    const failure = new AppError(
+      "auth.supabase_unavailable",
+      "upstream sign-out failed",
+      { cause: error },
+    );
+    reportError(failure, { level: "warning", tags: { component: "http" } });
+    console.error("[auth/logout] upstream sign-out failed", failure);
   } finally {
     clearRequestAuthCookies(req, res);
   }
@@ -345,6 +453,7 @@ authRouter.post("/logout", asyncRoute(async (req, res) => {
 }));
 
 authRouter.patch("/email", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.session");
   const email = emailSchema.safeParse(req.body?.email);
   if (!email.success) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -359,6 +468,7 @@ authRouter.patch("/email", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 authRouter.patch("/password", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.session");
   const parsed = passwordSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res, parsed.error.issues);
   const client = cookieClient(req, res);
@@ -373,6 +483,7 @@ authRouter.patch("/password", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 authRouter.get("/mfa/factors", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.mfa");
   const client = cookieClient(req, res);
   if (!client) return;
   const { data, error } = await listMfaFactors(client);
@@ -381,6 +492,7 @@ authRouter.get("/mfa/factors", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 authRouter.get("/mfa/assurance", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.mfa");
   const client = cookieClient(req, res);
   if (!client) return;
   const { data, error } = await mfaAssuranceLevel(client);
@@ -389,6 +501,7 @@ authRouter.get("/mfa/assurance", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/mfa/enroll", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.mfa");
   const friendlyName = friendlyNameSchema.safeParse(req.body?.friendlyName);
   if (!friendlyName.success) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -399,6 +512,7 @@ authRouter.post("/mfa/enroll", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/mfa/challenge", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.mfa");
   const parsed = factorSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -409,6 +523,7 @@ authRouter.post("/mfa/challenge", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/mfa/verify", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.mfa");
   const parsed = verificationSchema.safeParse(req.body);
   if (!parsed.success || !parsed.data.challengeId) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -423,6 +538,7 @@ authRouter.post("/mfa/verify", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/mfa/challenge-and-verify", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.mfa");
   const parsed = verificationSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -436,6 +552,7 @@ authRouter.post("/mfa/challenge-and-verify", requireAuth, asyncRoute(async (req,
 }));
 
 authRouter.delete("/mfa/factors/:factorId", requireAuth, asyncRoute(async (req, res) => {
+  setOperation("auth.mfa");
   const parsed = factorSchema.safeParse({ factorId: req.params.factorId });
   if (!parsed.success) return invalidBody(res);
   const client = cookieClient(req, res);

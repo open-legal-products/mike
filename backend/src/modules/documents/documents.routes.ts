@@ -6,18 +6,21 @@
 
 import { Router } from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
-import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
+import { sendServiceFailure } from "../../lib/serviceResult";
 import { sendInternalError } from "../../lib/httpError";
+import { pipeToResponse } from "../../lib/pipeToResponse";
+import { setOperation } from "../../lib/observability/sentry";
 import { buildContentDisposition, createFileReadStream } from "../../lib/storage";
 import { sendDocumentDisplay } from "../../lib/documentDisplay";
 import { contentTypeForDocumentType } from "../../lib/documentTypes";
 import { uniqueArchiveFilename } from "../../lib/zipExport";
 import {
     getDocument,
+    getDocumentStatuses,
     deleteDocument,
     getDisplayableVersion,
     resolveZipExportDocuments,
@@ -31,6 +34,17 @@ import {
 } from "./documents.service";
 
 export const documentsRouter = Router();
+
+// One bounded poll replaces a request per converting document.
+documentsRouter.post("/status", requireAuth, asyncRoute(async (req, res) => {
+    const result = await getDocumentStatuses(createServerSupabase(), {
+        documentIds: req.body?.document_ids,
+        userId: res.locals.userId as string,
+        userEmail: res.locals.userEmail as string | undefined,
+    });
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.json(result.data);
+}));
 
 // GET /single-documents/:documentId
 // One document, same shape as a list entry — the client polls this while a
@@ -131,7 +145,7 @@ documentsRouter.get("/:documentId/file", requireAuth, asyncRoute(async (req, res
     );
     const source = createFileReadStream(result.storagePath);
     try {
-        await pipeline(source, res);
+        await pipeToResponse(source, res);
     } catch (error) {
         source.destroy();
         if (!res.headersSent && !res.destroyed) {
@@ -200,7 +214,7 @@ documentsRouter.post("/download-zip", requireAuth, asyncRoute(async (req, res) =
         compression: "STORE",
     }) as Readable;
     try {
-        await pipeline(archiveStream, res);
+        await pipeToResponse(archiveStream, res);
     } catch (error) {
         // Destroy the per-file readers so a failed archive does not leave
         // object-storage GETs open. Once bytes are on the wire the status is
@@ -241,6 +255,7 @@ documentsRouter.get("/:documentId/url", requireAuth, asyncRoute(async (req, res)
 // Returns every version row for the document in document order, with
 // the human-friendly version number when present.
 documentsRouter.get("/:documentId/versions", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("documents.version");
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { documentId } = req.params;
@@ -263,6 +278,7 @@ documentsRouter.post(
     "/:documentId/versions/from-document",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("documents.version");
         const userId = res.locals.userId as string;
         const userEmail = res.locals.userEmail as string | undefined;
         const { documentId } = req.params;
@@ -297,16 +313,15 @@ documentsRouter.post(
             db,
         );
         if (!result.ok) {
+            // The 500s carry their cause: one report, with the kind and the
+            // failing dependency's code, instead of a bare detail string.
+            if ("error" in result)
+                return void sendInternalError(res, result.error);
             const status =
                 result.kind === "source_not_owner" ||
                 result.kind === "target_forbidden"
                     ? 403
-                    : result.kind === "target_not_found" ||
-                        result.kind === "source_not_found" ||
-                        result.kind === "source_no_active" ||
-                        result.kind === "source_bytes"
-                      ? 404
-                      : 500;
+                    : 404;
             return void res.status(status).json({ detail: result.detail });
         }
         res.status(201).json(result.version);
@@ -325,6 +340,7 @@ documentsRouter.patch(
     "/:documentId/versions/:versionId",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("documents.version");
         const userId = res.locals.userId as string;
         const userEmail = res.locals.userEmail as string | undefined;
         const { documentId, versionId } = req.params;
@@ -355,6 +371,7 @@ documentsRouter.delete(
     "/:documentId/versions/:versionId",
     requireAuth,
     asyncRoute(async (req, res) => {
+        setOperation("documents.version");
         const userId = res.locals.userId as string;
         const userEmail = res.locals.userEmail as string | undefined;
         const { documentId, versionId } = req.params;

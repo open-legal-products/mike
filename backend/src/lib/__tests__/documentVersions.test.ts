@@ -5,6 +5,7 @@ import {
     attachActiveVersionPaths,
     attachLatestVersionNumbers,
 } from "../documentVersions";
+import { tableDb } from "../../__tests__/helpers/tableDb";
 
 type Row = Record<string, unknown>;
 
@@ -34,6 +35,12 @@ function makeDb(tables: Record<string, Row[]>) {
                     if (operator === "is" && value === null) {
                         rows = rows.filter((row) => row[column] != null);
                     }
+                    return query;
+                },
+                order: () => query,
+                limit: () => query,
+                gt: (column: string, value: string) => {
+                    rows = rows.filter((row) => String(row[column]) > value);
                     return query;
                 },
                 single: async () => ({ data: rows[0] ?? null, error: null }),
@@ -373,5 +380,16 @@ describe("contentSha256", () => {
         expect(contentSha256(Buffer.from("abc"))).not.toBe(
             contentSha256(Buffer.from("abd")),
         );
+    });
+});
+
+describe("attachActiveVersionPaths at project scale", () => {
+    it("resolves every path past the gateway's id-list limit instead of nulling them all", async () => {
+        const docs = Array.from({ length: 120 }, (_, i) => ({ id: `doc-${i}`, current_version_id: `ver-${i}` }));
+        const versions = docs.map((d, i) => ({ id: d.current_version_id, storage_path: `p/${i}`, deleted_at: null }));
+        const fake = tableDb({ document_versions: versions });
+        await attachActiveVersionPaths(fake.db, docs as TestDoc[]);
+        expect(docs.filter((d) => (d as TestDoc).storage_path).length).toBe(120);
+        expect(fake.calls.map((c) => c.inSizes[0])).toEqual([50, 50, 20]);
     });
 });

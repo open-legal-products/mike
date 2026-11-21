@@ -32,13 +32,39 @@ records the final transport boundary that closes them. Internal source-code
 filenames identify the failing code; client document filenames are excluded.
 
 Resolution order, per runtime: `*_SENTRY_DISABLED=true` → off;
-`*_SENTRY_DSN` set → that DSN; otherwise the built-in Mike project DSN. Backend test
+`*_SENTRY_DSN` set → that DSN; a development build → off; otherwise the
+built-in Mike project DSN. A development build is `next dev` (the Next
+server's `NODE_ENV=development`), the backend run from its TypeScript source
+(`tsx watch src/index.ts`, `npm run dev`; the compiled image is never one,
+whatever `NODE_ENV` compose sets; the rule is `backend/src/lib/buildMode.ts`,
+and the backend's `build_mode` tag follows it rather than `NODE_ENV`;
+`SENTRY_SOURCE_RUN_IS_INSTALL=true` declares a source run in production an
+install, so it reports like the compiled image), and the
+add-in's webpack dev server. It
+never falls back to the Mike project, and `*_SENTRY_DISABLED=false` does not
+change that; to see a development build's events, point its DSN at your own
+project or at `node scripts/sentry-sink.mjs`. For the
+web app one rule, `reportingDestination` in `frontend/src/app/lib/errorReporting.ts`,
+decides for the Next server's own events and for every browser envelope alike
+(the browser posts to `/monitoring`, `frontend/src/app/monitoring/route.ts`,
+which forwards): `SENTRY_DISABLED=true` → off (when unset or empty, the baked
+`NEXT_PUBLIC_SENTRY_DISABLED` supplies this default); `SENTRY_DSN` (`FRONTEND_SENTRY_DSN`
+in compose) → that project; `NEXT_PUBLIC_SENTRY_DSN` baked at image build →
+that project; otherwise the built-in Mike project. `SENTRY_ENVIRONMENT` and
+`SENTRY_INSTALL` at runtime override what the bundle was built with. The rule
+that applied is printed once at boot (`[sentry] web app reports → ...`) and
+answered by `GET /monitoring` (`{"reports":"runtime"}` etc., plus
+`"disabledBy":"runtime"|"build"` when off, never the DSN), so
+a pulled image honours the operator's opt-out and destination without a
+rebuild and the operator can see that it did. Backend test
 processes (vitest, `NODE_ENV=test`) never report unless
 `SENTRY_ALLOW_IN_TESTS=true`. Browser tests disable reporting or use intercepted
 transports. Every event carries `install=community` unless
 the deployment sets `SENTRY_INSTALL=official` (env, all three runtimes), and
-`environment` defaults to `self-hosted`, so the official deployment and the
-community are separable in Sentry. The boot log says which applies:
+`environment` defaults to `self-hosted` (`development` for a development build
+that has a DSN set; an explicit `SENTRY_ENVIRONMENT` always wins), so the
+official deployment, the community and contributors' checkouts are separable
+in Sentry. The boot log says which applies:
 `[sentry] enabled for api → Mike project Sentry (community install). Opt out
 with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.`
 
@@ -73,14 +99,27 @@ cannot stop that sender. The controls below protect different things:
 
 | Control | Current implementation / verified state | Limit |
 | --- | --- | --- |
-| Per-issue burst limit | Backend and shared web/add-in scrubbers allow 10 events per issue key per minute by default, before the quota budget below. Backend override: `SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE`. | Keyed on the raw error text, so varying messages bypass it; the transport budget below is keyed on the final grouping. |
-| Quota budget in the final transport | Per issue as Sentry groups it (the diagnostic fingerprint, error type and top frame), only occurrences 1, 2, 4, 8, … are sent, each tagged `occurrence`; the count restarts after an hour without that issue. Each SDK client also sends at most 50 events a day across all issues. Diagnostic test probes skip the per-issue step. A loop failing every second costs about 17 events a day per issue. This replaced a flat 60-a-minute cap, under which one install's stuck poll loops used the whole 5,000-event month in nine hours (2026-09-23). | Per process, worker thread, browser tab, or task pane, so a fleet of installs still adds up. Restarts reset it. Installs built before this change keep the old cap until they update. Does not stop direct submissions to the public DSN. |
+| Repeat budget after privacy filtering | Pinned fingerprints use their complete controlled fingerprint and severity; fingerprints containing `{{ default }}` also use exception type and top frame. Only the first accepted observation of an issue/severity that day bypasses the repeat allowance; repeats send at power-of-two occurrences. One quiet hour resets occurrence sampling, never first-observation eligibility. Mike's projects have a hard ceiling of **50 total events/day** per budget, including new issues, escalations and diagnostic probes. Repeats use at most 25 slots, reserving the rest for new failures/escalations. Matching uses the resolved host/project, even for explicitly configured DSNs or rotated keys. Other projects have no daily cap by default. | SDK budgets are per process/thread/task pane. Browser budgets live in each Next tunnel process, where the runtime destination is known. Occurrence and daily-identity caches are each bounded to 1,000 issue/severity keys; daily-identity overflow conservatively uses repeat capacity. Quiet resets and eviction never reset daily counters or restore new-issue capacity; process restarts do. A fixed local warning is emitted once when the daily ceiling rejects an event. This is not a hard account quota or protection against direct public-DSN submissions. |
 | Duplicate and expected-error suppression | Explicit reports mark the same error object to prevent a later console/unhandled duplicate. API 4xx and deliberate client cancellations are excluded from the API reporting paths. | New error objects or independent console messages can still produce events. Grouping several events into one issue does not make them one quota unit. |
 | Non-error telemetry | The final transport rejects sessions, transactions, spans, logs, replay, attachments and every other non-error item. | Adding a new telemetry category requires an explicit privacy-reviewed policy change. |
 | Sentry spike protection | Enabled on all three projects of the `open-legal-products` organization when checked on 2026-10-20 UTC; no project notification actions are attached. | Uses historical volume; Sentry explicitly says it must not be the sole defense. |
 | Inbound filters | The frontend project has browser-extension, crawler, legacy-browser, hydration-error, and chunk-load-error filters enabled; localhost filtering is off (checked on the same date). | Filters can hide genuine bugs too. Custom release/message filters are offered during the Business trial but none are set, and the Developer plan does not offer them; no custom IP blocklist was set on the inspected frontend project. |
 | Hard DSN rate limit | The inspected frontend key has no custom limit. The organization was created on a 14-day Business trial (1,000,000 errors) that ends on 2026-11-03; it then falls back to the Developer plan with 5,000 errors per month, where key rate-limit controls are unavailable. | The monthly allowance can be exhausted, leaving genuine new errors unrecorded. |
 | Official/community isolation | Separate backend, frontend, and add-in projects; official and community events currently share each runtime's default key/project. | `install=official` is a client-supplied tag, not authentication or a reserved quota. |
+
+Volume policy is separate from `privacyBoundaryIntegration`, which always rebuilds
+the outbound allowlist. `SENTRY_MAX_REPEAT_EVENTS_PER_DAY` configures the backend,
+Next server and browser tunnel; `REACT_APP_SENTRY_MAX_REPEAT_EVENTS_PER_DAY`
+configures the add-in at build time. A nonnegative integer sets the repeat allowance, limited to 25 for Mike projects;
+`0` keeps only first observations, severity changes and diagnostic probes, all
+subject to the 50-event ceiling. Power-of-two repeat sampling also applies to
+custom projects. These are per-runtime limits, not a guaranteed 5,000-event
+monthly account limit: multiple installs/processes and restarts still add up. The former
+`SENTRY_MAX_EVENTS_PER_ISSUE_PER_MINUTE` setting is retired: there is no earlier
+raw-message throttle competing with final event grouping. `occurrence` counts
+observations reaching this budget, not all user failures: owning boundaries may
+already have deduplicated or gated an outage. Sampled events are acknowledged
+locally without retrying transmission.
 
 These are a dated account audit, not settings enforced by the repository.
 Recheck them in Sentry when changing the plan or deploying to another account.
@@ -137,9 +176,21 @@ however many users hit it.
   body and the `X-Request-ID` header (exposed to cross-origin scripts). A handler that
   writes its own 5xx body is caught by the response sanitizer and reported as
   a message.
-- Model streams that fail after the response has started (the 500 path never
-  sees these). Deliberate, explained refusals (`UserFacingError`: missing API
-  key, disallowed model) are not bugs and are not reported.
+- Model failures preserve the provider's original cause and credential origin.
+  Rate limits and dependency outages are warnings; unexplained failures and
+  rejected deployment credentials are errors. Unknown credential ownership
+  stays visible. A chat turn may mark a known user-account refusal handled
+  when it returns the remedy to that user. A Vercel AI Gateway 403 carrying
+  the gateway's own error is a `chat.provider_rejected` account refusal,
+  read from the status and the body under the SDK's error class: the turn
+  shows the gateway's sanitized reason to the owner of a personal key and a
+  fixed sentence to everyone else, and it stays reported (warning for a
+  personal key, error for a shared one) because the reason is relayed, not
+  recognized. Background memory jobs and tabular
+  cells retain reports because they do not own that interaction. Deterministic
+  provider refusals end memory retries; no available model leaves the curator
+  idle for a later turn. Repeat sampling belongs to the final transport, never
+  a process-lifetime "already seen this provider" set.
 - Background jobs: every failed attempt of a `db_jobs` job (warning while
   retries remain, error when exhausted), failure-hook crashes, unknown job
   kinds, claim/tick/retention failures, BullMQ conversion/extraction/delivery
@@ -167,10 +218,39 @@ however many users hit it.
 - Everything else that reaches `console.error`, via Sentry's console bridge.
   The same error object already reported explicitly is recognised and not
   sent twice; unrelated console messages do not share that identity.
+- Node's own process warnings (`DeprecationWarning`, `ExperimentalWarning`,
+  `MaxListenersExceededWarning`, …), as warnings tagged
+  `component=runtime-warning` with `warning_name` and, for deprecations, the
+  `warning_code` (`DEP0040`), grouped per name and code. Node prints these
+  through `console.error` from its own internals, so through the bridge alone
+  they arrived as a context-free "Failure in application"; the printed copy is
+  now dropped and the warning object, whose stack names the module that
+  raised it, is reported instead. `--no-warnings` silences this too.
 
 Backend events carry `service=mike-backend` and `role` (`api`, `worker`,
-`worker-thread`, or `job`); explicit reporting paths add `component`.
+`worker-thread`, or `job`). Every API request starts its own isolation scope
+before parsing, authentication or routing, with `component=http`, the fallback
+`operation=http.request`, HTTP method, sanitized route and generated request ID.
+Domain `setOperation` calls replace that fallback. Thus a leftover console error
+or an early middleware failure still identifies its request without a log lookup.
+Only fixed route segments survive; resource names, IDs and query strings do not.
 User identity is removed by the final transport in both installation modes.
+
+Row extraction in a queue leaves failure reporting to the runner, once per
+failed attempt with the runner's retry severity. Inline row streams report at
+the query boundary. Optional storage reads retain default stack grouping and
+failure-kind/code tags; the raw `best-effort` fingerprint does not override that
+at the final boundary. Required export reads propagate storage failures rather
+than publishing an apparently successful ZIP with an unreadable file omitted.
+
+Error objects retain repository-relative code paths, line and column numbers;
+a nested Error logged through the console keeps its original stack location.
+Plain strings and database error objects have no original stack, so their event
+identifies the reporting line instead. Preserve the original Error as `cause`
+when wrapping a failure; an overwritten or discarded stack cannot be recovered.
+Source locations are code filenames, never uploaded document names. Production
+source mapping still depends on the release/source-map configuration below;
+minified browser frames cannot promise an original TypeScript line without it.
 
 **Web app**
 
@@ -186,10 +266,22 @@ User identity is removed by the final transport in both installation modes.
 - Assistant chat streams that fail for a reason other than the user stopping
   them.
 - Server side: gateway failures to reach the backend, and render/route-handler
-  errors through Next's `onRequestError` hook.
+  errors through Next's `onRequestError` hook. An unreachable backend is one
+  warning issue per failure code (`upstream-unavailable`); a backend that drops
+  a response mid-stream is a separate issue per code (stage `gateway-stream`),
+  and a stream body timeout or unknown stream failure stays at error level.
 - Everything else that reaches `console.error`, deduplicated as above. An
   error reported explicitly is also not filed a second time if the same
   object then escapes to the browser's unhandled-error or rejection handler.
+- Limits of whatever sits in front of the API (`component=gateway-limit`,
+  warning). Neither is visible from the gateway or the backend, so the
+  browser reports them: a `413` that carries none of the backend's own codes
+  (`stage=payload-too-large`: a reverse proxy's or serverless host's
+  request-size cap refused the body, one issue per route), and an assistant
+  stream that ended without its `[DONE]` marker (`stage=stream-incomplete`: a
+  proxy or function time limit, or a restart, closed a reply that was still
+  running). The backend's own size limits answer with a `code` and are not
+  reported.
 
 **Word add-in**
 
@@ -215,18 +307,27 @@ in depth, but neither is the final guarantee: SDK session items bypass
 and rebuilds the complete envelope before serialization. It is installed in
 the backend, Next server/edge, browser, and all Word add-in entries.
 
-- Only error `event` items may leave. Sessions (including authenticated `did`),
-  client reports, attachments, replay, traces, logs, metrics and unknown future
-  item types are dropped locally without a network request.
+- Only error `event` items may leave by default. Sessions (including
+  authenticated `did`), client reports, attachments, replay, traces, logs,
+  metrics and unknown future item types are dropped locally without a network
+  request. The backend can opt in to structured logs and metrics; see
+  [Structured logs and metrics](#structured-logs-and-metrics).
 - Error/console prose is replaced with a description made from approved
-  component, stage, method, normalized route, status, and error-code values.
-  For example: `Failure in upload-worker / conversion`. Native exception
-  classes, relative source-code file paths and line/column numbers remain.
+  operation, component, stage, error-kind, method, normalized route, status,
+  and error-code values. For example:
+  `Failure in documents.upload.complete / upload-worker / process-file / conversion.no_output`.
+  Static exception constructor names, relative source-code locations and
+  function names on our own frames remain. Before serialization, the
+  reporter checks exception types against the actual Error constructors in
+  the cause chain; an SDK's mutable `Error.name` is not evidence of a class
+  name. Node's fixed warning categories are also retained. Function names
+  are trusted under the source contract below, with dependency frames
+  excluded even when `node_modules` sits inside an application directory.
 - Request data, headers, cookies, URLs and queries are absent. Routes retain
   only fixed endpoint vocabulary; other segments become `:id`.
-- User objects, machine details, breadcrumbs, arbitrary contexts, source
-  snippets, frame locals, function names, custom tags and free-form extras
-  are absent. Correlation/domain IDs are allowed only under named keys and
+- User objects, machine details, arbitrary contexts, source snippets, frame
+  locals, custom tags and free-form extras are absent. Of breadcrumbs only
+  the stage trail survives (`markStage`, category `mike.stage`): static stage labels, with timestamps, never a message or data. Correlation/domain IDs are allowed only under named keys and
   only in UUID format. IDs remain linkable to internal records; this is data
   minimization, not a claim of anonymity.
 - Finite failure codes, dependency HTTP status, storage operation, file type,
@@ -236,8 +337,31 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   category; response bodies, prompts and credentials are never retained.
   Browser fetch failures include only `network_state` (online/offline/unknown)
   and `request_origin` (same-origin/cross-origin/unknown), never the hostname.
+  A browser's direct storage PUT that fails after its retries adds
+  `storage_target` (loopback/mixed_content/cross_origin/same_origin: where
+  the signed URL points relative to the page) and is pinned to
+  `upload-storage-put`, one issue per component, failure code and
+  `http_status` (a 403, a 404, a 5xx and a network failure are separate
+  issues). Every non-2xx is
+  reported: the URL was just signed for a file the backend already accepted,
+  so 403/404/405/413 are the deployment's storage or proxy, not the file.
   Online means the browser reports connectivity, not that a server is reachable. Arbitrary
   codes/names/messages and dependency metadata are not transmitted.
+- Queue diagnostics retain static `queue` labels and bounded numeric
+  `network_failure_count` and `outage_minutes`. Parser retry verdicts stay local;
+  event kinds identify deterministic parse failures without transmitting parser
+  input or output.
+- Process warnings retain finite `warning_name`, Node `DEPnnnn` or reviewed
+  SDK `warning_code`, finite `warning_emitter`/`warning_event`, and bounded
+  numeric `warning_listener_count`. SDK deprecation codes distinguish known
+  APIs/settings; unknown warnings use a fixed fallback code. Raw warning
+  identity stays local.
+- Provider diagnostics retain reviewed `provider_error_type` and
+  `provider_reason` values alongside status. Quota/account verdicts are
+  classified locally; response bodies and credential ownership data are not
+  transmitted. A gateway 4xx whose type is outside the reviewed list carries
+  no `provider_error_type`: neither the unreviewed string nor the SDK's
+  catch-all `internal_server_error` class stands in for it.
 - Invalid configuration reports may name approved environment **fields**, never
   their values. Converter failures distinguish missing binary, timeout and
   nonzero exit without sending stderr or document paths.
@@ -260,20 +384,70 @@ Performance tracing settings do not bypass the error-only transport boundary;
 tracing is unsupported until a separate outbound policy is reviewed.
 
 The boundary is mirrored in `backend/src/lib/observability/sentryPrivacy.ts`
-and `frontend/src/shared/lib/sentryPrivacy.ts`, with a synchronization test.
+and `packages/client/src/sentryPrivacy.ts`, with a synchronization test.
 When adding diagnostics, extend reviewed enum/ID fields and their tests. Do not
 add free-form text just to restore a more detailed exception message.
+
+## Structured logs and metrics
+
+Off by default. With `SENTRY_LOGS=on` the backend also sends its structured
+logs to [Sentry Logs](https://docs.sentry.io/platforms/javascript/guides/node/logs/)
+and its counters to [Sentry's Application Metrics](https://docs.sentry.io/platforms/javascript/guides/node/metrics/),
+to whichever project its error events go to. Error events and their 50-a-day
+ceiling are unaffected. The web app and the Word add-in do not send logs.
+
+The backend's logger is `backend/src/lib/log.ts`:
+
+```ts
+import { countMetric, log, logEvent, tpl } from "../lib/log";
+
+log.warn("dbq", "poll failed", error);                    // "[dbq] poll failed" + error printed
+log.info(tpl`[dbq] runner started (poll ${ms}ms)`);       // values printed, not sent
+logEvent("info", "tool-activity", "counted", { tool, count });
+countMetric("tool_activity", count, { kind, tool, outcome });
+```
+
+Every call prints to the process log exactly as `console.warn` or
+`console.log` would. What goes to Sentry is narrower:
+
+| Part | Printed | Sent to Sentry |
+|---|---|---|
+| Scope and message | yes | yes; both must be literals in the source |
+| A `tpl` line's values | yes | no; each is sent as `{}` |
+| `logEvent` and `countMetric` attributes | yes | only `kind`, `tool`, `outcome` and `count`, each a number, a boolean, or a string shaped like an identifier (letters, digits, `_ . : -`, at most 64 characters) |
+| `detail` arguments (errors, paths, objects) | yes | never |
+
+The privacy boundary enforces this again on the way out: it rebuilds each log
+and metric from those fields, refuses a body that is not `[scope] message` or
+a metric name that is not an identifier, and drops every attribute not named
+in `TELEMETRY_ATTRIBUTES` (`sentryPrivacy.ts`, mirrored in
+`packages/client`), including the SDK's own (`user.*`, `server.address`,
+`sentry.*`) except the environment and release. To send a new attribute, add
+its name there in both copies; a shape check alone cannot tell an identifier
+from a file name or a key.
+`backend/src/__tests__/logContract.test.ts` fails if a scope, message or
+metric name is built at run time, or if code calls `Sentry.logger` or
+`Sentry.metrics` directly. As with diagnostic labels, never put a client's
+words in a scope, a message or a metric name.
+
+At most `SENTRY_MAX_LOGS_PER_DAY` logs and as many metrics (default 5,000
+each) leave one process per UTC day; one `[sentry]` warning marks the limit.
+Logs and metrics are billed by Sentry separately from errors.
+
+`console.error` is not part of this: it is already filed as an error event.
+Warn and info lines that still call `console.warn` or `console.log` directly
+(a message with no `[scope]`, or one built from a variable) are printed only.
 
 ## Configuration
 
 Backend (`backend/.env`, read at process start):
 
 ```
-SENTRY_DISABLED=false                  # true = send nothing
-SENTRY_DSN=                            # your own Sentry; empty = Mike project Sentry
+SENTRY_DISABLED=                       # empty = image default; true = off; false = explicitly on
+SENTRY_DSN=                            # your own Sentry; empty = image default, then Mike project
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
-SENTRY_ENVIRONMENT=production          # defaults to self-hosted
-SENTRY_RELEASE=mike@1.4.0              # optional; defaults to mike@<git sha>
+SENTRY_ENVIRONMENT=production          # defaults to self-hosted (development when run from source)
+SENTRY_RELEASE=mike@1.4.0              # optional; defaults to mike@<MIKE_VERSION>+<sha12>
 SENTRY_TRACES_SAMPLE_RATE=0            # optional, 0..1
 SENTRY_ENABLE_TEST_ROUTE=false         # see "Verifying" below
 ```
@@ -283,39 +457,100 @@ Do not add `SENTRY_DSN` to the `environment:` block of the backend service in
 variable would blank the value from `.env`. Put it in `backend/.env` or the
 compose-root `.env`.
 
-Web app. The browser DSN is inlined by `next build`, so for the Docker image it
-is a build argument; the Next server reads its own DSN at runtime:
+The backend image stores its reporting defaults in `MIKE_BUILD_SENTRY_DSN`
+and `MIKE_BUILD_SENTRY_DISABLED`. A non-empty runtime `SENTRY_DSN` or
+`SENTRY_DISABLED` overrides the corresponding default; empty values preserve
+it. Leave `MIKE_VERSION` and `GIT_SHA` commented in the sample `.env` when
+using published images so their baked release identity survives `env_file`.
+Without a version the release is `mike@0.0.0` (plus `+<sha12>` if available).
+
+Web app. One runtime setting on the Next server decides where every web-app
+report goes, the server's own and the browser's: the browser SDK always starts
+with a placeholder DSN, and every envelope it produces goes to the Next
+server's `/monitoring` route, which applies the same rule and forwards. The
+published images therefore need no build-time configuration at all:
 
 ```
-# root .env (Docker Compose)
+# root .env (Docker Compose); the Next server reads these at runtime
+SENTRY_DISABLED=                       # empty = image default; true = off; false = explicitly on
 FRONTEND_SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
 SENTRY_ENVIRONMENT=production
-SENTRY_RELEASE=mike@1.4.0
+SENTRY_INSTALL=                        # "official" only on Mike's own deployment
 
-# or, building the frontend directly
-NEXT_PUBLIC_SENTRY_DISABLED=true       # browser opt-out (build time)
-NEXT_PUBLIC_SENTRY_INSTALL=official    # only on Mike's own deployment
-NEXT_PUBLIC_SENTRY_DSN=...             # browser (build time)
-NEXT_PUBLIC_SENTRY_ENVIRONMENT=...     # optional
-NEXT_PUBLIC_SENTRY_RELEASE=...         # optional
-SENTRY_DSN=...                         # Next server (runtime)
+# building the frontend yourself (optional): build-time defaults
+NEXT_PUBLIC_SENTRY_DISABLED=true       # server/tunnel default to off; runtime false re-enables both
+NEXT_PUBLIC_SENTRY_DSN=...             # used when SENTRY_DSN is not set at runtime
 ```
+
+Check which rule applied on a running deployment: the boot log line
+`[sentry] web app reports → ...`, or `curl -s https://<host>/monitoring`, which
+answers `{"reports":"disabled"|"runtime"|"build"|"default"}` (with
+`"disabledBy":"runtime"|"build"` when off) and never the DSN. An explicit
+runtime `SENTRY_DISABLED` (`true` or `false`) always wins over the image's baked
+default; the shipped `.env.example` leaves it empty to preserve that default,
+including a fork image's baked opt-out.
+
+The `/monitoring` route is not an open relay: the destination is the server's
+own configuration, the client's envelope header is overwritten with it, and a
+malformed operator DSN drops envelopes rather than falling back upstream.
 
 Use a separate Sentry project for the web app and the backend: separate issue
 streams, separate source maps, and the frontend DSN is public in the bundle.
 
 ### Releases
 
-Every event carries a release so Sentry can flag a regression in a deploy and
-resolve an issue "until the next release". Set `SENTRY_RELEASE` explicitly, or
-leave it unset and build with the commit hash; the images then tag events
-`mike@<sha>`:
+Every event carries a release so Sentry can flag a regression in a release and
+resolve an issue "until the next release". The release is
+`mike@<version>+<sha12>`: the product version from `/VERSION` plus the commit,
+in Sentry's `package@version+build` form, so releases order by version (an old
+self-hosted install reporting late sorts where it belongs, not after the fix)
+while the build metadata still names the exact commit. The same string is
+produced by every runtime (`packages/client/src/sentryEvent.ts`,
+`backend/src/lib/observability/sentry.ts`) and by both source-map build plugins
+(`packages/client/src/releaseName.cjs`), so uploaded maps attach to the
+release the events carry.
 
-```bash
-GIT_SHA=$(git rev-parse HEAD) docker compose build
-```
+Where the parts come from:
 
-`GIT_SHA` is a build argument for all three images, never a runtime variable.
+| Build | Release | Image tags |
+| --- | --- | --- |
+| `v<VERSION>` tag, published by CI | `mike@2.1.0+<sha12>` | `2.1.0`, `latest` |
+| push to `main`, published by CI | `mike@2.1.0-dev.<run>+<sha12>` | `2.1.0-dev.<run>`, `main` |
+| your own `docker compose build` with `MIKE_VERSION=$(cat VERSION) GIT_SHA=$(git rev-parse HEAD)` | `mike@2.1.0+<sha12>` | local |
+| your own build without them | `mike@0.0.0+<sha12>` or `mike@0.0.0` | local |
+
+`0.0.0` is deliberate: a build that did not come from the release workflow is
+valid but visibly not a release, and the backend warns about it at boot in
+production. Set `MIKE_VERSION` and `GIT_SHA` as build arguments for images you
+build yourself; leave them unset at runtime when using published images so
+the baked identity is preserved. Runtime `SENTRY_RELEASE` overrides the whole
+string for the backend and Next server only. In a pulled web image the browser
+keeps its build-time release (`NEXT_PUBLIC_SENTRY_RELEASE`, or the baked
+version and commit); the tunnel does not rewrite it. Changing the browser's
+release requires rebuilding with `NEXT_PUBLIC_SENTRY_RELEASE` (Compose passes
+`SENTRY_RELEASE` to that build argument). Leave runtime `SENTRY_RELEASE` unset
+on published images to keep all runtimes on their baked release. Release
+overrides must not contain customer information.
+
+Each release uses the original image digests. The workflow retains each build
+in GHCR as `mike-{backend,frontend}:build-<version>`, with the source commit and
+version in its image labels. It builds only after a registry lookup confirms
+the image is absent; authentication, network and unexpected registry errors
+stop the run. An existing version must match its saved build exactly.
+
+All refs share one workflow concurrency group so publications cannot interleave
+their `latest` or `main` updates. `queue: max` preserves up to 100 pending runs;
+additional runs beyond that limit are canceled and must be rerun. Only
+main-branch builds update `main`. After
+both builds succeed, publication attaches both immutable version tags, then
+the floating tags, then finalizes the Sentry release for both projects. Registry
+writes across repositories are not atomic: an interrupted publication can leave
+some tags attached. Rerun the failed jobs or the full workflow to finish it;
+both paths reuse the saved digests, accept matching existing tags, and complete
+missing writes without rebuilding. Recovery does not depend on expiring Actions
+artifacts. Keep the `build-<version>` registry tags; exclude them from cleanup.
+If a published version loses its saved build, the workflow refuses to rebuild it.
+It records no deploy: publishing an image is not deploying it.
 
 Word add-in (build time, `word-addin/.env` or the Docker build arguments):
 
@@ -328,14 +563,23 @@ REACT_APP_SENTRY_RELEASE=...           # optional
 
 ### Readable stack traces (source maps)
 
-Production bundles are minified. To see real file and line numbers in Sentry,
-provide upload credentials at build time; the build then uploads source maps
-and deletes them from the output so they never ship:
+Production bundles are minified. Without source maps a frontend issue's
+culprit reads `_next/static/chunks/0vffwuerb8hxi.js:1:6381` and Sentry cannot
+say which component threw. Sentry matches a frame to its map by the debug ID
+stamped into the bundle at build time, so only the exact bundle that was
+uploaded resolves: a rebuild elsewhere, however similar, does not. That is why
+the published images exist (`docs/deployment.md`, "Running the published
+images"): CI builds each release once, uploads its maps, and publishes that
+bundle, so every deployment running the official image gets readable frames
+without holding any Sentry credential.
+
+Building yourself, provide upload credentials at build time; the build then
+uploads the maps to Sentry and deletes them from the output so they never ship:
 
 ```
-SENTRY_AUTH_TOKEN=...   # organization token with Source Map Upload permission (org:ci)
-SENTRY_ORG=...
-SENTRY_PROJECT=...
+SENTRY_AUTH_TOKEN=...   # organization auth token, see below
+SENTRY_ORG=...          # organization slug
+SENTRY_PROJECT=...      # project slug: the web app's, or the add-in's
 ```
 
 Applies to `next build` (frontend) and `webpack --mode production` (add-in).
@@ -344,6 +588,150 @@ The backend needs no upload: `tsc` emits source maps next to the compiled
 files and the process runs with `--enable-source-maps` (the `start` script,
 and `NODE_OPTIONS` in the Dockerfile), so backend frames already read
 `src/lib/x.ts:line`.
+
+The build plugin stamps each bundle with a debug ID and uploads the maps
+under it, so frames resolve regardless of the release name; the release tag on
+events still comes from `MIKE_VERSION` and `GIT_SHA`, or the explicit
+`SENTRY_RELEASE` override, as described above.
+
+#### Setting it up in Sentry
+
+1. Open the Sentry organization, then **Settings → Developer Settings →
+   Organization Tokens** (older UI: **Settings → Auth Tokens**) and create a
+   token. Organization tokens carry only the `org:ci` scope (release and
+   artifact upload), which is all this needs. Copy the token once; it is not
+   shown again.
+2. Note the organization slug (in the URL, `https://<org>.sentry.io`) and the
+   project slug (**Settings → Projects**). The web app and the Word add-in are
+   separate projects, so they need separate builds with their own
+   `SENTRY_PROJECT`.
+3. Treat the token as a deploy secret: it may create releases and upload
+   artifacts for every project in the organization. Rotate it from the same
+   page if it leaks.
+
+#### Passing it to the image build
+
+The token is read from a BuildKit secret, never a build argument, so it does
+not end up in the image layers or `docker history`. `SENTRY_ORG` and
+`SENTRY_PROJECT` are ordinary build arguments.
+
+Docker image uploads are opt-in: set `SENTRY_UPLOAD_ENABLED=1`. This
+non-secret build argument changes the build cache key when uploads are enabled,
+so a previously tokenless build is rebuilt. The default is `0`; tokenless
+builds keep working. When the enabled build step executes, a missing token,
+organization or project fails the build instead of silently skipping upload.
+A cache hit skips that step and its credential validation.
+
+Docker Compose (Dokploy and similar): put these non-secret settings, plus
+`MIKE_VERSION` and `GIT_SHA` for the release identity, in the compose-root
+`.env` or the platform's environment; `docker-compose.yml` forwards them to the
+frontend build:
+
+```
+SENTRY_UPLOAD_ENABLED=1
+SENTRY_ORG=<org slug>
+SENTRY_PROJECT=<web app project slug>
+MIKE_VERSION=<contents of VERSION>
+GIT_SHA=<commit being deployed>
+SENTRY_ENVIRONMENT=production
+```
+
+Supply `SENTRY_AUTH_TOKEN` through the **environment of the Compose process**.
+A value set only in the compose-root `.env` is not reliably forwarded to the
+Bake secret provider across Compose versions. On a deployment platform, inject
+it as a build secret/environment variable available to the Compose process.
+For a local shell, read it from a restricted file outside the repository/build
+context (provision that file through your secret manager):
+
+```bash
+export SENTRY_AUTH_TOKEN="$(cat /secure/path/sentry-token)"
+docker compose build frontend
+unset SENTRY_AUTH_TOKEN
+```
+
+The command text contains only the file path, so the token is not entered into
+shell history. Do not use an inline token assignment or enable shell tracing
+(`set -x`) while loading secrets. Compose forwards it to the BuildKit secret
+mount; the token is not a build argument or a container runtime variable.
+
+Plain `docker build`, from the repository root, can read the same file directly:
+
+```bash
+docker build -f frontend/Dockerfile \
+  --secret id=SENTRY_AUTH_TOKEN,src=/secure/path/sentry-token \
+  --build-arg SENTRY_UPLOAD_ENABLED=1 \
+  --build-arg SENTRY_ORG=<org> --build-arg SENTRY_PROJECT=<project> \
+  --build-arg MIKE_VERSION=$(cat VERSION) \
+  --build-arg GIT_SHA=$(git rev-parse HEAD) \
+  --build-arg NEXT_PUBLIC_SENTRY_DSN=... .
+```
+
+For `word-addin/Dockerfile`, use the add-in's project slug and also pass its
+required `--build-arg REACT_APP_WEB_APP_URL=https://<web app host>` (and
+`WORD_ADDIN_PUBLIC_URL` when configuring its manifest). Compose builds the web
+app only; build the add-in image separately.
+
+#### How CI publishes (and what a fork gets)
+
+`.github/workflows/publish-images.yml` runs on pushes to `main` and `v*` tags,
+never on pull requests, so neither forks' PRs nor contributors ever see the
+token. An administrator sets, on the repository:
+
+- secret `SENTRY_AUTH_TOKEN` (organization token, scope `org:ci`);
+- variables `SENTRY_ORG`, `SENTRY_PROJECT_FRONTEND`, `SENTRY_PROJECT_BACKEND`.
+
+Upstream publication requires all four settings, including for `main` and
+manual builds. Missing credentials or blank project/organization variables
+fail the identity job before any registry lookup or build. This prevents
+retaining a mapless image that a later retry would reuse instead of rebuilding.
+Forks retain the optional-upload behavior described below.
+
+For a new build with uploads enabled, the workflow passes
+`SENTRY_UPLOAD_ENABLED=1` and rebuilds the frontend `app` stage
+(`no-cache-filters`): the switch separates token-less and token builds in the
+cache, and bypassing the stage cache ensures the upload executes because secret
+contents are not part of the cache key. Retries reuse saved images instead of
+rebuilding them. For both new and reused builds the workflow asks Sentry's API
+(`files/artifact-bundles/`) whether a bundle is associated with the release and
+fails the run if not.
+
+Where events go is decided together with where maps go, so a fork never
+reports upstream by accident. The image owner is the repository owner, so a
+fork publishes to `ghcr.io/<owner>/mike-*` with no setup, and:
+
+| Repository | Events | Source maps |
+| --- | --- | --- |
+| `open-legal-products` | built-in Mike DSNs | required; missing configuration stops publication before building |
+| fork with `FORK_SENTRY_DSN_FRONTEND` and `FORK_SENTRY_DSN_BACKEND` variables | the fork's own projects (baked as defaults, overridable at runtime) | uploaded to the fork's org when its own secret and variables are set |
+| fork without them | reporting disabled in every runtime (`SENTRY_DISABLED=true` baked as the image default; the stock `.env.example` preserves it, while explicit runtime `false` re-enables reporting) | none |
+
+Self-hosted Sentry servers (`SENTRY_URL`) are not supported by the workflow.
+The Word add-in image is not published (its build bakes the deployment's
+web-app URL); build it with your own token as above to get readable frames.
+
+**Rotating, removing or revalidating the token, or repeating an upload for
+unchanged source:** secret contents are excluded from BuildKit's cache key.
+Use `docker compose build --no-cache frontend`, or add `--no-cache` to the plain
+`docker build` command, before relying on credential validation or forcing
+another upload. Changing the upload switch from `0` to `1` already invalidates
+the build step; replacing or removing the token while the switch stays `1`
+does not. A cached successful build does not prove the current token is valid.
+
+A host-side `npm run build` uses `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and
+`SENTRY_PROJECT` directly from the process environment; the upload switch is
+only for the Dockerfiles. For Next.js this also permits the usual local
+`.env*` loading; production add-in webpack builds require process variables.
+
+With uploads enabled, the Sentry plugin uploads the maps. Upload logs appear
+when plugin logging is enabled; the frontend uses `silent: !process.env.CI`,
+so a local Docker/host build can upload successfully without those log lines.
+Check **Settings → Projects → <project> → Source Maps** and confirm that a new
+test event resolves to the original source location. When the upload step
+executes, a rejected token fails the build rather than quietly shipping
+unmapped frames; use `--no-cache` when validating credentials.
+
+Only events reported after the rebuild are affected: Sentry resolves frames
+when it receives an event, so earlier issues keep their minified frames.
 
 ## Verifying a deployment
 
@@ -365,8 +753,9 @@ and `NODE_OPTIONS` in the Dockerfile), so backend frames already read
    `setTimeout(() => { throw new Error("Sentry web test") })`. The error
    arrives tagged `service=mike-frontend runtime=browser`. To see the
    request-id correlation, stop the backend and click anything that loads
-   data: the browser reports the normalized route and status 502 and the Next server reports
-   the gateway failure.
+   data: the Next server reports the gateway failure. Its explicit
+   `reporting_owner: "backend"` response prevents a second browser event.
+   An unowned proxy response or terminal body failure remains reportable.
 4. Word add-in: with the DSN baked in, open the pane and stop the backend; the
    next action reports a transport-failure warning with the Office host tags.
 
@@ -405,10 +794,124 @@ and `office_code` to identify the failing Word operation. Retryable job
 attempts are warnings; exhausted attempts are errors. These fields make an
 issue useful even when its exception title is a generic provider message.
 
+The transport keeps a restricted set of fields. Application labels are
+authored in code and **do not require a central registration list**. Use
+short lowercase labels separated by dots, underscores or hyphens; the syntax
+check is defense in depth, not a test for PII. Two labels identify a failure:
+
+- `operation`: the user-level flow a request or job belongs to
+  (`documents.upload.complete`, `chat.turn`, `playbooks.import`). Set it once
+  at the entry with `setOperation(...)` in the backend, or pass `operation`
+  to the client reporters; every event captured until the request or job
+  finishes carries it, and it leads the title and the fingerprint. The default stack grouping remains, so different failure sites
+  within one operation can still be separate issues.
+- `error_kind`: what went wrong, from the code that threw. Throw an
+  `AppError` (or a subclass: `StorageOperationError`, `AssistantStreamError`,
+  `DbJobDeferredError`, `NonRetryableJobError`) with a kind such as
+  `conversion.no_output` or `chat.provider_rate_limited`; the boundary reads
+  the deepest application-authored kind on the cause chain, so a wrapper's kind never hides the
+  cause's. `withKind` in `appError.ts` preserves an Error already carrying a
+  named cause. Wrap a dependency's error as the cause
+  rather than re-throwing a bare `new Error(...)`: its errno, SQLSTATE,
+  PostgREST or AWS code and HTTP status already extract as `failure_code`
+  and `dependency_status`.
+- `markStage("seal-recover")` records the stages a request passed through as
+  its breadcrumb trail, so a throw reached via one path is distinguishable
+  from the same throw reached via another.
+
+Raw error messages still do not leave the process in either install mode.
+The kind and operation provide a safe, descriptive identity without requiring
+a second list to be edited. `AppError` stamps its kind with a non-enumerable
+local marker; a dependency's arbitrary `kind` property is never adopted.
+Dependency messages, response bodies and credentials remain local, while
+approved technical codes and numeric statuses can be extracted from causes.
+
+### Source contract for diagnostic identity
+
+- Give errors static class names. Do not derive `Error.name`, class names or
+  function names from a customer, document, request or upstream response.
+- Write operation, kind, stage, component and job labels in code. A fixed map
+  selected by runtime state is fine; interpolating runtime data into a label
+  is not. New labels and application error subclasses need no registration.
+- Wrap upstream failures with `new AppError("feature.step_failed",
+  "Step failed", { cause })`. Preserve the cause for technical classification;
+  never copy its prose into diagnostic labels or extras. The message remains
+  local and is not treated as safe to transmit merely because it is an AppError.
+- `backend/src/__tests__/diagnosticVocabulary.test.ts` parses production
+  TypeScript/TSX across all three applications. It rejects common dynamic-name
+  and label mistakes. This is a coding contract backed by CI and review, not
+  whole-program taint analysis: helper parameters and fixed mappings still
+  need review for their origin.
+- Real-SDK transport tests cover both install modes, including new unregistered
+  labels, dependency-provided names/kinds, cause payloads and automatic captures.
+
+### Reporting ownership
+
+Capture the original exception at the boundary that knows the operation and
+whether recovery failed. A known UI code, HTTP status or `AbortError` name is
+not evidence that another owner handled the failure. Expected outcomes are
+marked explicitly with `markErrorHandled` at that boundary. The registry means
+the reporting decision was made; it does not guarantee delivery to Sentry.
+Keep unowned terminal failures visible, including response-body failures after
+`fetch` resolves and plain proxy errors without a Mike ownership marker.
+
+Development reporting stays off unless a destination is explicitly configured;
+opted-in errors are not filtered using compiler or framework filenames.
+
+Console capture is a fallback. Its primary exception determines identity and
+deduplication; contextual errors alongside it cannot hide or relabel it. Prefer
+`reportError(original, context)` followed by logging the same object. Preserve
+causes, code locations, operation/stage and safe correlation IDs. Tests should
+inspect final SDK envelopes for diagnostic usefulness and privacy.
+
+The job runner owns retry/terminal reporting. `NonRetryableJobError` retains a
+cause and accepts a terminal `reportLevel`: `error` by default, `warning`, or
+`null` only for an outcome the handler has deliberately handled. Quiet outcomes
+are registered so a later automatic copy cannot resurrect them.
+
+### Client reporting contract
+
+- `describeError`, `userFacingApiError` and the add-in's `userMessage` only
+  classify or format a failure. They never capture an event. For an inline
+  error, call `reportFault(error, { operation, ...descriptionOptions })`;
+  it reports eligible faults and returns the description to render.
+- `notifyError` reports and presents an eligible failure. Partial-failure
+  notices can report their underlying cause, while their user-facing summary
+  stays out of telemetry.
+- Typed API wrappers pass their static operation into `apiRequest` before
+  the request begins. API 5xx reports are captured immediately with that
+  operation; there is no pending-report timer or later screen claim. A
+  delayed screen handler cannot change or lose the operation on the event.
+- Reporting callers and automatic captures consult the same error registry,
+  including a bounded, cycle-safe walk of wrapped causes. Reformatting an
+  already-reported failure does not create another event.
+- Storage PUT retries report only after the final attempt fails. A recovered
+  5xx or network interruption stays quiet; cancellation is not a failure.
+  Both clients receive only the terminal error/status from the upload core,
+  never the signed URL or file as diagnostic metadata.
+- Terminal stream frames use `reporting_owner: "backend"` when the backend
+  owns reporting. This does not promise delivery to Sentry. Clients preserve
+  that ownership and avoid duplicate reports. A request ID is only for
+  correlation: older frames without an ownership field retain client-side
+  fallback reporting, even when they have a request ID.
+
+Use `withKind` to wrap a failure only when its cause chain has no application
+kind. Domain helpers may build result objects or apply domain-specific policy,
+but delegate kind preservation to that helper. `ConversionError` derives its
+legacy consumer code from its diagnostic kind; callers do not supply both.
+
+Example (no registry update):
+
+```ts
+setOperation("documents.compare");
+markStage("load-revisions");
+throw new AppError("comparison.source_read_failed", "Could not read revision", { cause });
+```
+
 For each new reporting path:
 
-- Use a static operation/component and stage, plus a stable error code where
-  available. Keep request/job IDs out of the title and grouping fingerprint.
+- Use a static operation/component and stage, plus a stable error kind or
+  code. Keep request/job IDs out of the title and grouping fingerprint.
 - Retain safe diagnostic IDs and the original stack. Check the scrubber's
   allowlist before assuming a new `extra` field will survive transmission.
 - Set release metadata and upload matching browser/add-in source maps in
@@ -421,7 +924,7 @@ For each new reporting path:
 
 Sentry detects failures on instrumented paths; it cannot discover every
 incorrect result or silently swallowed exception. Console capture is a
-fallback; its free-form label is omitted, so add approved component/stage context at the call site.
+fallback; its free-form label is omitted, so add static component/stage context at the call site.
 The client 5xx fingerprint groups symptoms by endpoint/status, so investigate
 the correlated backend events before assuming one symptom has one cause.
 Throttling, filters, and delivery failures also mean Sentry's event count is
@@ -448,3 +951,50 @@ not an exact count of every failure experienced by users.
   in event titles or grouping keys. Attach safe diagnostic ids explicitly.
   The final transport discards raw error prose rather than guessing which
   parts are private. Source logs should still avoid privileged information.
+
+Unknown database-queue job kinds use `operation=jobs.dispatch` inside the
+same per-job isolation scope as normal handlers. Their
+`error_kind=dbq.unknown_job_kind` identifies the dispatch failure; destructive
+cleanup kinds retain their retry-until-success policy during rolling upgrades.
+
+### Consolidated failure handling
+
+HTTP error helpers and the Next gateway send `reporting_owner: "backend"` only
+after taking responsibility for a failure. Clients propagate that field on the
+original error; a status, request ID or recognized UI code alone is insufficient.
+Old servers without the field remain observable, with potentially redundant
+reports until upgraded. These copies use the same repeat budget as other
+events, and on Mike's own projects the same hard daily ceiling (a custom
+destination has no daily ceiling unless one is configured; see the quota
+table); a recognized code alone cannot safely suppress an unowned failure. Stream protocols keep their existing owner field. The marker
+also covers expected refusals explicitly handled at their source, independent
+of whether telemetry delivery is enabled. Merely classifying an error as safe
+to display does not establish ownership.
+
+Redis listeners cover producer, consumer and worker emitters. Connection
+outages recover only after Redis command readiness succeeds and escalate after
+15 minutes. The escalation is raised by the next connection error at or past
+that mark, not by a timer: a connection that stops retrying, and so stops
+emitting errors, does not escalate. Each failing connection, including a worker's separate blocking
+connection, must recover; unrelated socket readiness cannot reset the outage.
+Non-connection worker defects retain their own classification. Parser IPC keeps
+bounded original cause trees and source stacks locally, while the final outbound
+allowlist removes messages and private paths. Proven invalid bytes end document
+and tabular job retries; missing IPC verdicts, unknown parser failures and
+environment failures remain retryable.
+
+SDK compatibility notices become local warnings and stage breadcrumbs at their
+source. SDK deprecations and unrecognized SDK warnings remain reportable, with a
+bounded five-minute cooldown per local identity and finite diagnostic codes.
+Process warnings keep their own reporting path.
+Listener warnings retain only finite emitter/event labels and a numeric count.
+Missing credential-encryption secrets are diagnosed at the actual read/write
+boundary, including workers; no asynchronous boot database scan is required.
+
+Provider quota exhaustion and zero-allocation responses are deterministic
+refusals: neither the SDK nor memory jobs retry them. Shared deployment or
+organization credentials make these operator-actionable errors. A recognized
+personal-key refusal is handled where shown to the user; an opaque 403/404
+remains visible, as does a gateway account refusal whose reason is only relayed. Locally authored missing-key/model configuration refusals are
+warnings. Deployment-specific configuration problems still require operators
+to correct their settings.

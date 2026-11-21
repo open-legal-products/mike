@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
+import { isReported } from "../../lib/observability/sentry";
 import { streamAiSdk } from "../../lib/llm/aiSdk";
 import {
     callStep,
@@ -52,6 +53,8 @@ const {
         terminalUpdateFailures: 0,
         terminalUpdateAttempts: 0,
         terminalUpdateGate: null as Promise<void> | null,
+        // Holds append_chat_assistant_events open until a test releases it.
+        appendEventsGate: null as Promise<void> | null,
         wordChatMissing: false,
         // Makes the chat_access_grants probe behind hasDirectContentGrants
         // fail, which is how a transient DB error reaches the route.
@@ -323,8 +326,11 @@ function makeQuery(table: string) {
 function mockSupabase() {
   return {
     from: vi.fn((table: string) => makeQuery(table)),
-    rpc: vi.fn((name: string, args: unknown) => {
+    rpc: vi.fn(async (name: string, args: unknown) => {
       dbRpcCalls.push({ name, args });
+      if (name === "append_chat_assistant_events" && dbControl.appendEventsGate) {
+        await dbControl.appendEventsGate;
+      }
       // Model the append-only persistence seam for the wired pause/resume
       // tests. The RPC implementation itself is not exercised here.
       const params = args as Record<string, unknown>;
@@ -434,6 +440,7 @@ vi.mock("../../lib/llm", async (importOriginal) => {
 
 import { app } from "../../app";
 import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
+import { chatTurnAuditEvents, type ChatTurnAuditBase } from "../../lib/audit";
 import { createServerSupabase } from "../../lib/supabase";
 import { DEFAULT_WEB_SEARCH_SETTINGS } from "../../lib/webSearch";
 
@@ -578,6 +585,44 @@ describe("POST /chat — streaming endpoint", () => {
     });
     expect(scheduleMemoryConsolidation).toHaveBeenCalledTimes(1);
     expect(releaseMemoryConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("moves the earlier-turn record for Claude Sonnet 5.5 only", async () => {
+    const chatLib = await import("../../modules/chat/engine/index.js");
+    const userSettings = await import("../../modules/user/user.settings.js");
+    runLLMStream.mockResolvedValue({
+      fullText: "hi",
+      events: [{ type: "content", text: "hi" }],
+      citations: [],
+    });
+    for (const [model, expected] of [
+      ["claude-sonnet-5-5", true],
+      ["gemini-3.8-flash", false],
+      ["gpt-6.1-sol", false],
+      ["claude-opus-5-5", false],
+    ] as const) {
+      vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
+        legal_research_us: false,
+        web_search: DEFAULT_WEB_SEARCH_SETTINGS,
+        title_model: null,
+        memory_curator_model: null,
+        subagent_model: null,
+        subagent_reasoning: null,
+        last_selected_reasoning_level: null,
+        tabular_model: null,
+        last_selected_chat_model: null,
+        api_keys: { claude: "test-key", gemini: "test-key", openai: "test-key" },
+      });
+      const res = await request(app)
+        .post("/chat")
+        .set("Authorization", "Bearer test")
+        .send({ ...VALID_BODY, model });
+      expect(res.status, model).toBe(200);
+      // The same answer goes to both: the record's place and its explanation
+      // in the system prompt must not disagree.
+      expect(vi.mocked(chatLib.enrichWithPriorEvents).mock.calls.at(-1)![7], model).toBe(expected);
+      expect(vi.mocked(chatLib.buildMessages).mock.calls.at(-1)![8], model).toBe(expected);
+    }
   });
 
   it("gives the model the browser's time zone and today's date", async () => {
@@ -1416,12 +1461,24 @@ describe("POST /chat — streaming endpoint", () => {
         const doneIndex = res.text.indexOf("data: [DONE]");
         expect(errorIndex).toBeGreaterThanOrEqual(0);
         expect(doneIndex).toBeGreaterThan(errorIndex);
+        // The database's error is logged wrapped in the AppError that names
+        // the kind (and was reported first), not as a bare PostgREST object.
         expect(errorSpy).toHaveBeenCalledWith(
             "[chat/stream] failed to save assistant response",
             expect.objectContaining({
-                message: "terminal update failed (attempt 3)",
+                kind: "chat.message_save_failed",
+                cause: expect.objectContaining({
+                    message: "terminal update failed (attempt 3)",
+                }),
             }),
         );
+        const errorFrame = JSON.parse(
+            res.text
+                .split("\n")
+                .find((line) => line.includes("could not be saved"))!
+                .replace(/^data:\s*/, ""),
+        ) as { request_id?: string };
+        expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
         errorSpy.mockRestore();
     });
@@ -1452,14 +1509,18 @@ describe("POST /chat — streaming endpoint", () => {
         expect(errorSpy).toHaveBeenCalledWith(
             "[chat/stream] failed to reserve assistant message",
             expect.objectContaining({
-                message: "assistant reservation failed",
+                kind: "chat.message_reserve_failed",
+                cause: expect.objectContaining({
+                    message: "assistant reservation failed",
+                }),
             }),
         );
         errorSpy.mockRestore();
     });
 
     it("surfaces a stream failure as an in-stream error event, not an HTTP error", async () => {
-        runLLMStream.mockRejectedValue(new Error("upstream LLM failure"));
+        const original = new Error("upstream LLM failure");
+        runLLMStream.mockRejectedValue(original);
 
         const res = await request(app)
             .post("/chat")
@@ -1471,6 +1532,20 @@ describe("POST /chat — streaming endpoint", () => {
         expect(res.status).toBe(200);
         expect(res.text).toContain('"type":"error"');
         expect(res.text).toContain("[DONE]");
+        expect(isReported(original)).toBe(true);
+        expect(res.text).toContain('"reporting_owner":"backend"');
+        // The terminal frame carries the request id (the X-Request-ID header)
+        // so the user can quote the one handle that finds this failure.
+        const errorFrame = JSON.parse(
+            res.text
+                .split("\n")
+                .filter((line) => line.includes('"type":"error"'))
+                .at(-1)!
+                .replace(/^data:\s*/, ""),
+        ) as { message: string; request_id?: string; safe_to_display?: boolean };
+        expect(errorFrame.request_id).toBe(res.headers["x-request-id"]);
+        expect(errorFrame.request_id).toMatch(/^[0-9a-f-]{36}$/);
+        expect(errorFrame.safe_to_display).toBeUndefined();
 
         const metadata = JSON.parse(
             res.text
@@ -1548,6 +1623,127 @@ describe("POST /chat — streaming endpoint", () => {
       turn: { activityId: "activity-1" },
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    });
+
+    describe("stream deadline", () => {
+        const IDLE_MS = 30_000;
+        const occurrences = (text: string, needle: string) =>
+            text.split(needle).length - 1;
+        // Lets the route's late unwinding run without advancing fake time.
+        const settle = async () => {
+            for (let i = 0; i < 50; i += 1)
+                await new Promise((resolve) => setImmediate(resolve));
+        };
+
+        beforeEach(() => {
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            vi.stubEnv("STREAM_IDLE_TIMEOUT_MS", String(IDLE_MS));
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+            vi.unstubAllEnvs();
+        });
+
+        it("aborts a hung turn at the idle deadline with one timeout error and one [DONE]", async () => {
+            const { AssistantStreamAbortError } = await import("../../modules/chat/engine/index.js");
+            const { deadlineMessage, FINISHED_RUN_RETENTION_MS } = await import("../../lib/streamRuns.js");
+            let signal: AbortSignal | undefined;
+            const started = new Promise<void>((resolve) => {
+                runLLMStream.mockImplementation(
+                    async (params: { signal: AbortSignal }) => {
+                        signal = params.signal;
+                        resolve();
+                        await new Promise<void>((done) =>
+                            params.signal.addEventListener("abort", () => done(), {
+                                once: true,
+                            }),
+                        );
+                        throw new AssistantStreamAbortError("Partial", [
+                            { type: "content", text: "Partial" },
+                        ]);
+                    },
+                );
+            });
+
+            const response = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await started;
+            await vi.advanceTimersByTimeAsync(IDLE_MS - 1);
+            expect(signal?.aborted).toBe(false);
+            await vi.advanceTimersByTimeAsync(1);
+            const res = await response;
+
+            expect(signal?.aborted).toBe(true);
+            expect(occurrences(res.text, '"type":"error"')).toBe(1);
+            expect(res.text).toContain(JSON.stringify(deadlineMessage("idle")));
+            expect(res.text).not.toContain('"type":"cancelled"');
+            expect(occurrences(res.text, "data: [DONE]")).toBe(1);
+            expect(findAssistantUpdate()?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Partial" },
+                    {
+                        type: "error",
+                        message: deadlineMessage("idle"),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            // Deadline, grace and retention timers are all released.
+            await vi.advanceTimersByTimeAsync(FINISHED_RUN_RETENTION_MS);
+            expect(vi.getTimerCount()).toBe(0);
+        });
+
+        it("ends a turn that ignores the abort once, and stores its late completion as timed out", async () => {
+            const { deadlineMessage, STOPPED_RUN_GRACE_MS } = await import("../../lib/streamRuns.js");
+            let completeLate!: (value: unknown) => void;
+            const started = new Promise<void>((resolve) => {
+                runLLMStream.mockImplementation(() => {
+                    resolve();
+                    return new Promise((done) => {
+                        completeLate = done;
+                    });
+                });
+            });
+
+            const response = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await started;
+            await vi.advanceTimersByTimeAsync(IDLE_MS + STOPPED_RUN_GRACE_MS);
+            const res = await response;
+
+            expect(occurrences(res.text, '"type":"error"')).toBe(1);
+            expect(res.text).toContain(JSON.stringify(deadlineMessage("idle")));
+            expect(occurrences(res.text, "data: [DONE]")).toBe(1);
+            expect(findAssistantUpdate()).toBeUndefined();
+
+            completeLate({
+                fullText: "Late answer",
+                events: [{ type: "content", text: "Late answer" }],
+                citations: [],
+            });
+            await settle();
+
+            expect(findAssistantUpdate()?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Late answer" },
+                    {
+                        type: "error",
+                        message: deadlineMessage("idle"),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            expect(releaseMemoryConversationTurn).toHaveBeenCalled();
+        });
     });
 
     it.each([
@@ -3553,6 +3749,273 @@ describe("server-owned turns: resume, stop, concurrency", () => {
         held.release();
         expect((await firstDone).text).toContain("data: [DONE]");
         expect(runLLMStream).toHaveBeenCalledTimes(1);
+    });
+
+    describe("a stop while the finished answer is being saved", () => {
+        const answer = {
+            fullText: "Done",
+            events: [{ type: "content", text: "Done" }],
+            citations: [],
+        };
+        const appends = () =>
+            dbRpcCalls.filter(({ name }) => name.startsWith("append_chat_"));
+        const occurrences = (text: string, needle: string) =>
+            text.split(needle).length - 1;
+        let releaseSave: () => void = () => {};
+
+        beforeEach(() => {
+            dbControl.terminalUpdateAttempts = 0;
+            dbControl.terminalUpdateFailures = 0;
+            dbControl.terminalUpdateGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            runLLMStream.mockResolvedValue(answer);
+        });
+
+        afterEach(() => {
+            releaseSave();
+            dbControl.terminalUpdateGate = null;
+            dbControl.appendEventsGate = null;
+            vi.useRealTimers();
+        });
+
+        /** Starts a turn and waits until its answer is being saved. */
+        async function turnInSave() {
+            const response = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(dbControl.terminalUpdateAttempts).toBe(1);
+            });
+            const id = (findAssistantReservation()?.value as { id: string }).id;
+            return { response, id };
+        }
+
+        it.each([
+            ["user", { type: "content", text: "Cancelled by user." }, '"type":"cancelled"'],
+            ["idle", { type: "error", safe_to_display: true }, '"type":"error"'],
+        ] as const)(
+            "ends the turn as stopped (%s) and marks the saved answer, without consolidating memory",
+            async (reason, label, outcome) => {
+                const { getAssistantTurnRun } =
+                    await import("../../lib/assistantTurnRuns.js");
+                const { response, id } = await turnInSave();
+
+                getAssistantTurnRun(id)!.stop(reason);
+                releaseSave();
+                const text = (await response).text;
+
+                expect(text).toContain(outcome);
+                expect(occurrences(text, "data: [DONE]")).toBe(1);
+                // Saved once as the finished answer, then marked as stopped.
+                expect(
+                    dbUpdates.filter(({ table }) => table === "chat_messages"),
+                ).toHaveLength(1);
+                expect(appends()).toEqual([
+                    {
+                        name: "append_chat_assistant_events",
+                        args: expect.objectContaining({
+                            p_message_id: id,
+                            p_events: [expect.objectContaining(label)],
+                            p_citations: [],
+                        }),
+                    },
+                ]);
+                expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            },
+        );
+
+        it("audits a document the stopped turn edited once, with the turn marked cancelled", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            runLLMStream.mockResolvedValue({
+                ...answer,
+                events: [
+                    {
+                        type: "doc_edited",
+                        filename: "Lease.docx",
+                        document_id: "doc-1",
+                        version_id: "ver-2",
+                        version_number: 2,
+                        download_url: "",
+                        annotations: [],
+                    },
+                    ...answer.events,
+                ],
+            });
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            expect((await response).text).toContain('"type":"cancelled"');
+
+            const jobs = dbInserts.filter(({ table }) => table === "db_jobs");
+            expect(jobs).toHaveLength(1);
+            const { base, events } = (
+                jobs[0].value as { payload: { base: ChatTurnAuditBase; events: unknown[] } }
+            ).payload;
+            expect(chatTurnAuditEvents(base, events)).toEqual([
+                expect.objectContaining({ action: "chat.message", status: "cancelled" }),
+                expect.objectContaining({ action: "document.edited", documentId: "doc-1" }),
+            ]);
+        });
+
+        it("ends a turn stopped during a save that then fails as stopped, not as a save error", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            // The answer's three save attempts fail; the stop path's save succeeds.
+            dbControl.terminalUpdateFailures = 3;
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            const text = (await response).text;
+
+            expect(text).toContain('"type":"cancelled"');
+            expect(text).not.toContain("could not be saved");
+            expect(
+                dbUpdates.filter(({ table }) => table === "chat_messages").at(-1)?.value,
+            ).toMatchObject({
+                content: [
+                    { type: "content", text: "Done" },
+                    { type: "content", text: "Cancelled by user." },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
+
+        it("gives a turn stopped during its save no fallback title", async () => {
+            const { generateAssistantChatTitle } =
+                await import("../../modules/chat/chat.title.js");
+            // The title is still generating, so only the fallback could name it.
+            vi.mocked(generateAssistantChatTitle).mockImplementationOnce(
+                () => new Promise<string>(() => {}),
+            );
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            const { response, id } = await turnInSave();
+
+            getAssistantTurnRun(id)!.stop();
+            releaseSave();
+            expect((await response).text).toContain('"type":"cancelled"');
+            expect(
+                dbUpdates.filter(({ table }) => table === "chats"),
+            ).toEqual([]);
+        });
+
+        it("adds only the stop label to a continuation whose answer was already appended", async () => {
+            const { getAssistantTurnRun, getActiveAssistantTurn } =
+                await import("../../lib/assistantTurnRuns.js");
+            dbControl.assistantMessageRows = [
+                {
+                    id: "assistant-real",
+                    chat_id: "chat-1",
+                    role: "assistant",
+                    content: [
+                        {
+                            type: "ask_inputs",
+                            event_id: "ask-1",
+                            items: [
+                                {
+                                    id: "choice-1",
+                                    kind: "choice",
+                                    question: "Continue?",
+                                    options: [{ value: "Yes" }, { value: "No" }],
+                                    allow_other: false,
+                                    other_label: "Other",
+                                },
+                            ],
+                        },
+                    ],
+                    citations: null,
+                    author_user_id: "u1",
+                    created_at: "2026-01-01T00:00:00Z",
+                },
+            ];
+            dbControl.appendEventsGate = new Promise<void>((resolve) => {
+                releaseSave = resolve;
+            });
+            const eventAppends = () =>
+                appends().filter(({ name }) => name === "append_chat_assistant_events");
+
+            const response = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send({
+                    ...VALID_BODY,
+                    chat_id: "chat-1",
+                    ask_inputs_response: {
+                        assistant_message_id: "assistant-real",
+                        ask_event_id: "ask-1",
+                        responses: [
+                            {
+                                id: "choice-1",
+                                kind: "choice",
+                                question: "Continue?",
+                                answer: "Yes",
+                            },
+                        ],
+                    },
+                })
+                .then((res) => res);
+            await vi.waitFor(() => {
+                expect(eventAppends()).toHaveLength(1);
+            });
+            getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop();
+            releaseSave();
+            const text = (await response).text;
+
+            expect(text).toContain('"type":"cancelled"');
+            // The answer is appended once; the stop adds only its label.
+            expect(eventAppends().map(({ args }) => (args as { p_events: unknown }).p_events)).toEqual([
+                [{ type: "content", text: "Done" }],
+                [{ type: "content", text: "Cancelled by user." }],
+            ]);
+            expect(dbControl.assistantMessageRows?.[0].content).toEqual([
+                expect.objectContaining({ type: "ask_inputs" }),
+                expect.objectContaining({ type: "ask_inputs_response" }),
+                { type: "content", text: "Done" },
+                { type: "content", text: "Cancelled by user." },
+            ]);
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
+
+        it("stores an answer whose save outlasts the stop grace as stopped, as its readers were told", async () => {
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            const { deadlineMessage, STOPPED_RUN_GRACE_MS } =
+                await import("../../lib/streamRuns.js");
+            const { response, id } = await turnInSave();
+
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            getAssistantTurnRun(id)!.stop("idle");
+            await vi.advanceTimersByTimeAsync(STOPPED_RUN_GRACE_MS);
+            const text = (await response).text;
+
+            // Readers got the deadline from the registry while the save hung.
+            expect(occurrences(text, '"type":"error"')).toBe(1);
+            expect(text).toContain(JSON.stringify(deadlineMessage("idle")));
+            expect(occurrences(text, "data: [DONE]")).toBe(1);
+            expect(appends()).toEqual([]);
+
+            releaseSave();
+            await vi.waitFor(() => {
+                expect(appends()).toHaveLength(1);
+            });
+            expect(appends()[0].args).toMatchObject({
+                p_message_id: id,
+                p_events: [
+                    {
+                        type: "error",
+                        message: deadlineMessage("idle"),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
     });
 
     it.each(["idle", "max_lifetime"] as const)(

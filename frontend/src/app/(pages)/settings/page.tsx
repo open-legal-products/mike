@@ -4,7 +4,7 @@ import { ProfilePhotoSettings } from "@/app/components/settings/ProfilePhotoSett
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { PillButtonUI, GlassCardUI } from "@mike/ui";
 import { Modal } from "@/app/components/modals/Modal";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { SettingsTextInput } from "@/app/components/settings/SettingsTextInput";
@@ -26,7 +26,6 @@ import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 
@@ -228,7 +227,7 @@ export default function SettingsPage() {
     <div className="space-y-8">
       {/* Profile Settings */}
       <section className="space-y-3">
-        <SettingsHeading>Profile</SettingsHeading>
+        <SettingsHeading id="profile">Profile</SettingsHeading>
         <GlassCardUI>
           <SettingsRow layout="stacked">
             <div>
@@ -264,7 +263,7 @@ export default function SettingsPage() {
 
       {/* Email */}
       <section className="space-y-3">
-        <SettingsHeading>Email</SettingsHeading>
+        <SettingsHeading id="email">Email</SettingsHeading>
         <GlassCardUI>
           <SettingsRow layout="stacked">
             <div className="space-y-2">
@@ -323,7 +322,7 @@ export default function SettingsPage() {
 
       {/* Plan */}
       <section className="space-y-3">
-        <SettingsHeading>Usage Plan</SettingsHeading>
+        <SettingsHeading id="usage-plan">Usage Plan</SettingsHeading>
         <GlassCardUI>
           <SettingsRow layout="stacked">
             <p className="text-base font-medium text-gray-500 capitalize">
@@ -335,7 +334,7 @@ export default function SettingsPage() {
 
       {/* Danger Zone */}
       <section className="space-y-3">
-        <SettingsHeading tone="danger">Danger Zone</SettingsHeading>
+        <SettingsHeading id="danger-zone" tone="danger">Danger Zone</SettingsHeading>
         <GlassCardUI>
           <SettingsRow>
             <div className="min-w-0 space-y-1">

@@ -1,5 +1,7 @@
 import type { QuoteVerification } from "./types";
-import { normalizeWithMap } from "./tools/documentOps";
+import { sourceProviderFor } from "../../source-documents/sourceDocuments.service";
+import { quoteOccursVerbatim } from "./tools/externalSources";
+import { normalizeWithMap, type NormalizeOptions } from "./tools/documentOps";
 
 // Mirrors the frontend: cross-page quotes join two page segments with this
 // sentinel (see expandDocumentQuoteEntry in
@@ -29,6 +31,78 @@ type QuoteVerificationResult = QuoteVerification & {
   needs_correction: boolean;
 };
 
+// Tiers 2 and 3: whitespace + case, then also punctuation-tolerant.
+const CHEAP_TIERS: NormalizeOptions[] = [{}, { stripPunctuation: true }];
+// Tier 4: words hyphenated at a line end in the extracted text ("indem-",
+// newline, "nification"), quoted joined. Tried, and indexed, only after the
+// cheap tiers miss, and only for a source that has a line-end hyphen at all.
+const LINE_END_HYPHEN_TIERS: NormalizeOptions[] = [
+  { joinLineEndHyphens: "keep" },
+  { joinLineEndHyphens: "drop" },
+  { stripPunctuation: true, joinLineEndHyphens: "drop" },
+];
+const MAY_HAVE_LINE_END_HYPHEN = /[-\u2010\u2011\u00ad][^\S\n\r]*[\n\r]/;
+
+// Cached indexes are keyed by EVERY option: an index built with one join mode
+// served to another tier would match text that tier is meant to reject.
+const optionsKey = (opts: NormalizeOptions) =>
+  `${opts.stripPunctuation ? "strip" : "punct"}/${opts.joinLineEndHyphens ?? "nojoin"}`;
+
+type QuoteSource = {
+  source: string;
+  normalized: Map<string, ReturnType<typeof normalizeWithMap>>;
+  needles: Map<string, string>;
+  mayHaveLineEndHyphen?: boolean;
+};
+const prepareSource = (source: string): QuoteSource => ({ source, normalized: new Map(), needles: new Map() });
+
+function lineEndHyphenTiers(prepared: QuoteSource): NormalizeOptions[] {
+  prepared.mayHaveLineEndHyphen ??= MAY_HAVE_LINE_END_HYPHEN.test(prepared.source);
+  return prepared.mayHaveLineEndHyphen ? LINE_END_HYPHEN_TIERS : [];
+}
+
+/** Request-local reuse: text changes create a new index; nothing crosses users or turns. */
+export function createQuoteVerifier(source: string) {
+  const prepared = prepareSource(source);
+  return (quote: string) => verifyQuoteAgainstSource(source, quote, prepared);
+}
+
+type CaseSource = { opinions: CaseOpinionSource[]; completeCaseText: string };
+
+/**
+ * One fetch and one joined text per cluster for a whole verification pass.
+ * Several annotations citing the same case then share the string object, so
+ * the verifier cache hits by identity instead of rebuilding (and rehashing)
+ * the full opinion text per annotation.
+ */
+export function caseSourceCache(
+  getCaseOpinions: (clusterId: number) => Promise<CaseOpinionSource[]>,
+) {
+  const byCluster = new Map<number, Promise<CaseSource>>();
+  return (clusterId: number): Promise<CaseSource> => {
+    let source = byCluster.get(clusterId);
+    if (!source) {
+      source = getCaseOpinions(clusterId)
+        .catch(() => [] as CaseOpinionSource[])
+        .then((opinions) => ({
+          opinions,
+          completeCaseText: opinions.map((opinion) => opinion.text).join("\n"),
+        }));
+      byCluster.set(clusterId, source);
+    }
+    return source;
+  };
+}
+
+function verifierCache() {
+  const byText = new Map<string, ReturnType<typeof createQuoteVerifier>>();
+  return (source: string) => {
+    let verify = byText.get(source);
+    if (!verify) { verify = createQuoteVerifier(source); byText.set(source, verify); }
+    return verify;
+  };
+}
+
 /**
  * Locate `quote` inside `source`, returning the exact original substring
  * (`excerpt`) plus its char offsets into `source`. Tries progressively more
@@ -36,11 +110,13 @@ type QuoteVerificationResult = QuoteVerification & {
  *   1. exact substring
  *   2. whitespace + case normalized
  *   3. whitespace + case + punctuation normalized (tolerant/fuzzy)
+ *   4. as 2 and 3, with words hyphenated at a line end joined
  * Offsets index into the EXTRACTED source text, not the raw file bytes.
  */
 export function locateQuote(
   source: string,
   quote: string,
+  prepared = prepareSource(source),
 ): QuoteLocation | null {
   if (!source || !quote) return null;
 
@@ -50,49 +126,31 @@ export function locateQuote(
     return { start: exactIdx, end: exactIdx + quote.length, excerpt: quote };
   }
 
-  // Tier 2: whitespace + case. Tier 3: also punctuation-tolerant.
-  return (
-    locateNormalized(source, quote, {}) ??
-    locateNormalized(source, quote, { stripPunctuation: true })
-  );
+  for (const opts of [...CHEAP_TIERS, ...lineEndHyphenTiers(prepared)]) {
+    const location = locateNormalized(prepared, quote, opts);
+    if (location) return location;
+  }
+  return null;
 }
+
+const earliest = (locations: (QuoteLocation | null)[]) =>
+  locations.reduce<QuoteLocation | null>((first, candidate) =>
+    candidate && (!first || candidate.start < first.start) ? candidate : first, null);
 
 /** Locate a quote at or after `from`, preserving offsets into `source`. */
 function locateQuoteFrom(
-  source: string,
+  prepared: QuoteSource,
   quote: string,
   from: number,
 ): QuoteLocation | null {
+  const { source } = prepared;
   if (from >= source.length) return null;
   const offset = Math.max(0, from);
-  const suffix = source.slice(offset);
-  const candidates: QuoteLocation[] = [];
-  const exactIndex = suffix.indexOf(quote);
-  if (exactIndex >= 0) {
-    candidates.push({
-      start: exactIndex,
-      end: exactIndex + quote.length,
-      excerpt: quote,
-    });
-  }
-  const normalized = locateNormalized(suffix, quote, {});
-  if (normalized) candidates.push(normalized);
-  const punctuationTolerant = locateNormalized(suffix, quote, {
-    stripPunctuation: true,
-  });
-  if (punctuationTolerant) candidates.push(punctuationTolerant);
-  const location = candidates.reduce<QuoteLocation | null>(
-    (earliest, candidate) =>
-      !earliest || candidate.start < earliest.start ? candidate : earliest,
-    null,
-  );
-  return location
-    ? {
-        start: location.start + offset,
-        end: location.end + offset,
-        excerpt: location.excerpt,
-      }
-    : null;
+  const exactIndex = source.indexOf(quote, offset);
+  const exact = exactIndex >= 0 ? { start: exactIndex, end: exactIndex + quote.length, excerpt: quote } : null;
+  const at = (opts: NormalizeOptions) => locateNormalized(prepared, quote, opts, offset);
+  // Line-end hyphen indexes are built only when no cheap tier matches.
+  return earliest([exact, ...CHEAP_TIERS.map(at)]) ?? earliest(lineEndHyphenTiers(prepared).map(at));
 }
 
 /**
@@ -100,7 +158,7 @@ function locateQuoteFrom(
  * later occurrence of repeated text satisfy the complete chain.
  */
 function locateSegmentsInOrder(
-  source: string,
+  prepared: QuoteSource,
   segments: string[],
   maxGap: number,
 ): QuoteLocation[] | null {
@@ -116,7 +174,7 @@ function locateSegmentsInOrder(
     let cursor = from;
     while (attempts < MAX_LOCATE_ATTEMPTS) {
       attempts += 1;
-      const location = locateQuoteFrom(source, segments[index], cursor);
+      const location = locateQuoteFrom(prepared, segments[index], cursor);
       if (!location) return null;
       if (previousEnd !== null && location.start - previousEnd > maxGap) {
         return null;
@@ -135,22 +193,36 @@ function locateSegmentsInOrder(
 }
 
 function locateNormalized(
-  source: string,
+  prepared: QuoteSource,
   quote: string,
-  opts: { stripPunctuation?: boolean },
+  opts: NormalizeOptions,
+  from = 0,
 ): QuoteLocation | null {
-  const { norm, origIdx } = normalizeWithMap(source, opts);
-  const needle = normalizeWithMap(quote, opts).norm.trim();
+  const tier = optionsKey(opts);
+  let normalized = prepared.normalized.get(tier);
+  if (!normalized) {
+    normalized = normalizeWithMap(prepared.source, opts);
+    prepared.normalized.set(tier, normalized);
+  }
+  const { norm, origIdx } = normalized;
+  const key = `${tier}:${quote}`;
+  let needle = prepared.needles.get(key);
+  if (needle === undefined) {
+    needle = normalizeWithMap(quote, opts).norm.trim();
+    prepared.needles.set(key, needle);
+  }
   if (!needle) return null;
-  const pos = norm.indexOf(needle);
+  // Locate the normalized offset in O(log L), without rebuilding a suffix map.
+  let low = 0, high = origIdx.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (origIdx[mid] < from) low = mid + 1; else high = mid;
+  }
+  const pos = norm.indexOf(needle, low);
   if (pos < 0) return null;
-  const endNormPos = pos + needle.length;
   const start = origIdx[pos] ?? 0;
-  const end =
-    endNormPos - 1 < origIdx.length
-      ? origIdx[endNormPos - 1] + 1
-      : source.length;
-  return { start, end, excerpt: source.slice(start, end) };
+  const end = origIdx[pos + needle.length - 1] + 1;
+  return { start, end, excerpt: prepared.source.slice(start, end) };
 }
 
 /**
@@ -162,6 +234,7 @@ function locateNormalized(
 export function verifyQuoteAgainstSource(
   source: string,
   quote: string,
+  prepared = prepareSource(source),
 ): QuoteVerificationResult {
   if (!source || UNREADABLE_SOURCES.has(source)) {
     return { verified: false, needs_correction: false };
@@ -177,7 +250,7 @@ export function verifyQuoteAgainstSource(
     // Verify each segment independently (segments may contain ellipsis,
     // handled recursively by the ellipsis branch below).
     const verified = segments.map((seg) =>
-      verifyQuoteAgainstSource(source, seg),
+      verifyQuoteAgainstSource(source, seg, prepared),
     );
     if (verified.some((result) => !result.verified)) {
       return { verified: false, needs_correction: false };
@@ -194,7 +267,7 @@ export function verifyQuoteAgainstSource(
       return fragments.length > 0 ? fragments : [segment];
     });
     const anchors = locateSegmentsInOrder(
-      source,
+      prepared,
       anchorSegments,
       MAX_PAGE_BREAK_SPAN_CHARS,
     );
@@ -225,7 +298,7 @@ export function verifyQuoteAgainstSource(
     if (!segments.length) return { verified: false, needs_correction: false };
     const located = segments.map((segment) => ({
       segment,
-      location: locateQuote(source, segment),
+      location: locateQuote(source, segment, prepared),
     }));
     if (located.some(({ location }) => !location)) {
       return { verified: false, needs_correction: false };
@@ -241,7 +314,7 @@ export function verifyQuoteAgainstSource(
     };
   }
 
-  const loc = locateQuote(source, quote);
+  const loc = locateQuote(source, quote, prepared);
   if (!loc) return { verified: false, needs_correction: false };
   return {
     verified: true,
@@ -308,7 +381,9 @@ function caseQuoteOpinionId(quote: CaseQuoteEntry): number | null {
  */
 export async function verifyCaseCitationAnnotation(
   annotation: unknown,
-  getCaseOpinions: (clusterId: number) => Promise<CaseOpinionSource[]>,
+  /** One cluster's opinions and joined text, shared across a batch (caseSourceCache). */
+  caseSources: ReturnType<typeof caseSourceCache>,
+  verifierFor = verifierCache(),
 ): Promise<unknown> {
   const a = record(annotation);
   if (!a || a.kind !== "case") return annotation;
@@ -328,14 +403,7 @@ export async function verifyCaseCitationAnnotation(
     : [];
   if (!entries.length) return annotation;
 
-  let opinions: CaseOpinionSource[];
-  try {
-    opinions = await getCaseOpinions(clusterId);
-  } catch {
-    opinions = [];
-  }
-
-  const completeCaseText = opinions.map((opinion) => opinion.text).join("\n");
+  const { opinions, completeCaseText } = await caseSources(clusterId);
   const verifiedQuotes = entries.map((entry) => {
     const opinionId = caseQuoteOpinionId(entry);
     const source =
@@ -343,7 +411,7 @@ export async function verifyCaseCitationAnnotation(
         ? completeCaseText
         : (opinions.find((opinion) => opinion.opinion_id === opinionId)?.text ??
           "");
-    const result = verifyQuoteAgainstSource(source, entry.quote);
+    const result = verifierFor(source)(entry.quote);
     const { needs_correction, ...verification } = result;
     const quote =
       needs_correction && verification.source_excerpt
@@ -376,6 +444,7 @@ export async function verifyCaseCitationAnnotation(
 export async function verifyDocumentCitationAnnotation(
   annotation: unknown,
   getSourceText: (docId: string) => Promise<string>,
+  verifierFor = verifierCache(),
 ): Promise<unknown> {
   if (!annotation || typeof annotation !== "object") return annotation;
   const a = annotation as Record<string, unknown>;
@@ -397,8 +466,15 @@ export async function verifyDocumentCitationAnnotation(
     source = "";
   }
 
+  // A provider that verifies quotes exactly gets no fuzzy correction: a
+  // changed legal quotation must never be surfaced as the source's words.
+  const exact =
+    sourceProviderFor(String(record(a.document)?.document_id ?? ""))
+      ?.quoteVerification === "exact";
   const verifiedQuotes = entries.map((entry) => {
-    const result = verifyQuoteAgainstSource(source, entry.quote);
+    const result = exact
+      ? { verified: quoteOccursVerbatim(source, entry.quote), needs_correction: false }
+      : verifierFor(source)(entry.quote);
     const { needs_correction, ...verification } = result;
     // Swap the exact source text into the displayed quote when it drifted,
     // so a drifted quote is never surfaced as the source's words.
@@ -436,12 +512,14 @@ export async function verifyCitations(
   getSourceText: (docId: string) => Promise<string>,
   getCaseOpinions: (clusterId: number) => Promise<CaseOpinionSource[]>,
 ): Promise<unknown[]> {
+  const verifierFor = verifierCache();
+  const caseSources = caseSourceCache(getCaseOpinions);
   return Promise.all(
     annotations.map((annotation) => {
       const value = record(annotation);
       return value?.kind === "case"
-        ? verifyCaseCitationAnnotation(annotation, getCaseOpinions)
-        : verifyDocumentCitationAnnotation(annotation, getSourceText);
+        ? verifyCaseCitationAnnotation(annotation, caseSources, verifierFor)
+        : verifyDocumentCitationAnnotation(annotation, getSourceText, verifierFor);
     }),
   );
 }

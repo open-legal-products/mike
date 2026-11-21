@@ -53,6 +53,8 @@ concurrency:
 
 jobs:
   unit:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Desktop unit and upgrade tests
     runs-on: macos-15
     timeout-minutes: 20
@@ -96,6 +98,8 @@ jobs:
         run: MIKE_REQUIRE_LOCAL_STACK=1 npm test
 
   packaged:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Packaged app first run and returning user
     runs-on: macos-15
     timeout-minutes: 45
@@ -132,10 +136,13 @@ jobs:
         uses: actions/cache@v6
         with:
           path: desktop/local-stack/bin
-          key: local-stack-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/fetch-local-stack.sh', 'desktop/scripts/fetch-service-notices.mjs') }}
+          key: local-stack-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/fetch-local-stack.sh', 'desktop/scripts/fetch-service-notices.mjs', 'desktop/scripts/relocate-postgrest.mjs') }}
 
       - name: Fetch Postgres, PostgREST, GoTrue and their notices
         run: npm run local:fetch --prefix desktop
+
+      - name: Audit fetched PostgREST and test relocation
+        run: MIKE_NATIVE_BIN="$PWD/desktop/local-stack/bin" node --test desktop/src/local/postgrest-linkage.test.js
 
       # backend tsc + offline workflow bundle + Next standalone build, with the
       # same isolated environment the release build uses (env -i inside the
@@ -155,6 +162,12 @@ jobs:
         run: |
           npm run local:stage --prefix desktop
           npm run dist:local --prefix desktop
+
+      # Inspect the shipped binary itself, without repairing a test copy.
+      - name: Audit packaged PostgREST linkage
+        run: |
+          MAC_DIST_DIR=$(node -p 'process.arch === "arm64" ? "mac-arm64" : "mac"')
+          MIKE_NATIVE_BIN="$PWD/desktop/dist/$MAC_DIST_DIR/Mike.app/Contents/Resources/local-stack/bin" node --test --test-name-pattern='actual PostgREST input' desktop/src/local/postgrest-linkage.test.js
 
       - name: Packaged first-run + returning-user e2e
         run: npm run e2e:local --prefix desktop

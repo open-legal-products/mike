@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeError } from "@/shared/lib/userError";
+import { describeError } from "@mike/client";
+import { isReported } from "@/app/lib/errorReporting";
 import {
     AuthApiError,
     challengeAndVerifyMfa,
@@ -9,10 +10,12 @@ import {
     exchangeAuthCode,
     getAuthSession,
     getMfaAssurance,
+    getSignInOptions,
     listMfaFactors,
     login,
     logout,
     requestPasswordReset,
+    setupFirstAccount,
     signup,
     startGoogleOAuth,
     startSso,
@@ -21,6 +24,15 @@ import {
     updateAuthPassword,
     verifyMfa,
 } from "./authApi";
+
+const reporting = vi.hoisted(() => ({
+    reportApiFailure: vi.fn(),
+    reportNetworkFailure: vi.fn(),
+}));
+vi.mock("@/app/lib/errorReporting", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/errorReporting")>()),
+    ...reporting,
+}));
 
 const fetchMock = vi.fn();
 const user = {
@@ -40,6 +52,109 @@ describe("cookie auth client", () => {
 
     afterEach(() => {
         vi.unstubAllGlobals();
+        vi.clearAllMocks();
+    });
+
+    describe("reporting", () => {
+        it("reports a 5xx like the API client, with the route, code and request id", async () => {
+            fetchMock.mockResolvedValue(
+                new Response(
+                    JSON.stringify({ code: "internal_error", request_id: "req-1" }),
+                    { status: 500, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+
+            const error = await login(user.email, "nope").catch((e) => e);
+
+            expect(reporting.reportApiFailure).toHaveBeenCalledWith({
+                operation: "auth.signin",
+                path: "/api/auth/login",
+                method: "POST",
+                status: 500,
+                code: "internal_error",
+                requestId: "req-1",
+                error,
+                reportingOwner: undefined,
+            });
+        });
+
+        // MIK-125: the backend answers an unreachable GoTrue with 503
+        // upstream_unavailable and has already filed the one event for it.
+        it("does not report a 503 the backend already reported, and shows its fixed sentence", async () => {
+            fetchMock.mockResolvedValue(
+                new Response(
+                    JSON.stringify({
+                        code: "upstream_unavailable",
+                        reporting_owner: "backend",
+                        detail: "server text",
+                        request_id: "req-2",
+                    }),
+                    { status: 503, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+
+            const error = await getAuthSession().catch((e) => e);
+
+            expect(error).toMatchObject({
+                status: 503,
+                code: "upstream_unavailable",
+                requestId: "req-2",
+                message: "The server is temporarily unreachable. Please try again shortly.",
+            });
+            // reportApiFailure deduplicates only the explicit protocol owner.
+            expect(reporting.reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+                expect.objectContaining({ status: 503, code: "upstream_unavailable", reportingOwner: "backend", error }),
+            );
+        });
+
+        it("does not report a 4xx: it is the auth server's answer", async () => {
+            fetchMock.mockResolvedValue(
+                new Response(JSON.stringify({ code: "invalid_credentials" }), {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+
+            await login(user.email, "nope").catch(() => undefined);
+
+            expect(reporting.reportApiFailure).not.toHaveBeenCalled();
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
+        });
+
+        it("reports a request that never got a response as a network failure", async () => {
+            const failure = new TypeError("Failed to fetch");
+            fetchMock.mockRejectedValue(failure);
+
+            await expect(getMfaAssurance()).rejects.toBe(failure);
+
+            expect(reporting.reportNetworkFailure).toHaveBeenCalledWith(failure, {
+                method: "GET",
+                url: "/api/auth/mfa/assurance",
+            });
+        });
+
+        it("only marks a retry that never got a response, so the retry loop files nothing", async () => {
+            // AuthContext retries a session check with `report: false`: the
+            // first failure of the streak was already reported, and each
+            // retry must neither file a new event nor leave the error
+            // unmarked for a later notifyError to pick up.
+            const failure = new TypeError("Failed to fetch");
+            fetchMock.mockRejectedValue(failure);
+
+            await expect(getAuthSession({ report: false })).rejects.toBe(failure);
+
+            expect(reporting.reportNetworkFailure).not.toHaveBeenCalled();
+            expect(isReported(failure)).toBe(true);
+        });
+
+        it("reports an AbortError without an aborted caller signal", async () => {
+            const abort = new DOMException("The operation was aborted.", "AbortError");
+            fetchMock.mockRejectedValue(abort);
+
+            await expect(getMfaAssurance()).rejects.toBe(abort);
+
+            expect(reporting.reportNetworkFailure).toHaveBeenCalledWith(abort, { method: "GET", url: "/api/auth/mfa/assurance" });
+        });
     });
 
     it("carries the request id off an auth failure, body first", async () => {
@@ -110,6 +225,40 @@ describe("cookie auth client", () => {
         ).not.toHaveProperty("Authorization");
     });
 
+    it("reads the sign-in options with a bounded request", async () => {
+        const options = { google: false, sso: false, setupRequired: true, signup: false };
+        fetchMock.mockResolvedValue(
+            new Response(JSON.stringify(options), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+
+        await expect(getSignInOptions()).resolves.toEqual(options);
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/auth/options",
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+    });
+
+    it("creates the first account through first-run setup", async () => {
+        fetchMock.mockResolvedValue(
+            new Response(JSON.stringify({ user }), {
+                status: 201,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+
+        await expect(setupFirstAccount(user.email, "correct horse")).resolves.toEqual({ user });
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/auth/setup",
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({ email: user.email, password: "correct horse" }),
+            }),
+        );
+    });
+
     it("maps an expired cookie session to a signed-out state", async () => {
         fetchMock.mockResolvedValue(
             new Response(JSON.stringify({ detail: "expired" }), {
@@ -142,7 +291,7 @@ describe("cookie auth client", () => {
 
         await expect(getAuthSession()).rejects.toMatchObject({
             status: 503,
-            message: "Unavailable",
+            message: "Authentication could not be completed.",
         });
     });
 
@@ -357,4 +506,11 @@ describe("cookie auth client", () => {
         vi.stubGlobal("window", undefined);
         expect(() => clearLegacyBrowserAuthStorage()).not.toThrow();
     });
+});
+
+it("does not expose an unowned auth server's internal 5xx detail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "PRIVATE_DATABASE_FAILURE" }), { status: 500 })));
+    try {
+        await expect(login("test@example.test", "test")).rejects.toMatchObject({ message: "Authentication could not be completed.", reportingOwner: undefined });
+    } finally { vi.unstubAllGlobals(); }
 });

@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     AskInputsBlock,
     CourtListenerBlock,
+    DocCreatedBlock,
     DocDownloadBlock,
+    DocEditBlock,
+    DocFindBlock,
+    DocReadBlock,
+    DocReplicatedBlock,
     ReasoningBlock,
 } from "./EventBlocks";
 
@@ -152,6 +157,84 @@ describe("DocDownloadBlock", () => {
                 'img[src*="/icons/file-types/word.svg"]',
             ),
         ).toHaveClass("h-3.5", "w-3.5", "@md:h-4", "@md:w-4");
+    });
+});
+
+describe("document step labels", () => {
+    it("names a failed replication as a failure and drops the copy count", () => {
+        render(<DocReplicatedBlock filename="lease.docx" count={3} hasError />);
+        expect(screen.getByText("Replication failed")).toBeInTheDocument();
+        expect(screen.queryByText("Replicated")).not.toBeInTheDocument();
+        expect(screen.queryByText("3 times")).not.toBeInTheDocument();
+    });
+
+    it("keeps the copy count on a replication that succeeded", () => {
+        render(<DocReplicatedBlock filename="lease.docx" count={3} />);
+        expect(screen.getByText("Replicated")).toBeInTheDocument();
+        expect(screen.getByText("3 times")).toBeInTheDocument();
+    });
+
+    it.each([
+        ["a creation", <DocCreatedBlock key="c" filename="memo.docx" interrupted />, "Creation stopped", "Created"],
+        ["an edit", <DocEditBlock key="e" filename="memo.docx" interrupted />, "Edit stopped", "Edited"],
+        [
+            "a replication",
+            <DocReplicatedBlock key="r" filename="memo.docx" count={2} interrupted />,
+            "Replication stopped",
+            "Replicated",
+        ],
+    ])("shows %s the turn stopped before its result as stopped", (_label, block, stopped, done) => {
+        render(block);
+        expect(screen.getByText(stopped)).toBeInTheDocument();
+        expect(screen.queryByText(done)).not.toBeInTheDocument();
+    });
+});
+
+describe("stopped reads, finds and CourtListener calls", () => {
+    it("labels a stopped document read as stopped", () => {
+        render(<DocReadBlock filename="brief.docx" interrupted />);
+        expect(screen.getByText("Read stopped")).toBeInTheDocument();
+        expect(screen.queryByText("Read")).not.toBeInTheDocument();
+    });
+
+    it("labels a stopped document find as stopped, without a match count", () => {
+        render(<DocFindBlock filename="brief.docx" query="term" totalMatches={0} interrupted />);
+        expect(screen.getByText("Find stopped")).toBeInTheDocument();
+        expect(screen.queryByText(/0 matches/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the match count on a find that finished", () => {
+        render(<DocFindBlock filename="brief.docx" query="term" totalMatches={2} />);
+        expect(screen.getByText("Found")).toBeInTheDocument();
+        expect(screen.getByText(/2 matches/)).toBeInTheDocument();
+    });
+
+    it("gives a stopped CourtListener call a gray dot, not a green one", () => {
+        const { container } = render(
+            <CourtListenerBlock label="Case law search stopped" interrupted />,
+        );
+        expect(screen.getByText("Case law search stopped")).toBeInTheDocument();
+        expect(container.querySelector(".bg-gray-500")).not.toBeNull();
+        expect(container.querySelector(".bg-green-400")).toBeNull();
+    });
+});
+
+describe("CourtListenerBlock searches", () => {
+    const items = [
+        { caseName: "Roe v. Doe", citation: null, query: "damages", totalMatches: 2 },
+    ];
+
+    it("names the searches of a stopped call without claiming they ran", () => {
+        render(<CourtListenerBlock label="Stopped 1 search in 1 case" interrupted items={items} />);
+        fireEvent.click(screen.getByRole("button", { name: /Stopped 1 search in 1 case/ }));
+        expect(screen.getByText(/Search for "damages" in Roe v\. Doe/)).toBeInTheDocument();
+        expect(screen.queryByText(/Searched for/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the completed wording for searches that reported", () => {
+        render(<CourtListenerBlock label="Ran 1 search in 1 case" items={items} />);
+        fireEvent.click(screen.getByRole("button", { name: /Ran 1 search in 1 case/ }));
+        expect(screen.getByText(/Searched for "damages" in Roe v\. Doe \(2 matches\)/)).toBeInTheDocument();
     });
 });
 

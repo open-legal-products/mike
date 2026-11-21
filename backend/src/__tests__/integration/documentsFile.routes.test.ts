@@ -67,6 +67,13 @@ vi.mock("../../lib/storage", async (importOriginal) => ({
 import { documentsRouter } from "../../modules/documents/documents.routes";
 
 const app = express();
+// Sentry's http integration puts 4 'close' listeners on every production
+// response before the route runs (measured with the SDK loaded first, as
+// src/instrument.ts does); vitest loads http before any SDK could patch it.
+app.use((_req, res, next) => {
+  for (let i = 0; i < 4; i++) res.on("close", () => {});
+  next();
+});
 app.use("/single-documents", documentsRouter);
 
 describe("GET /single-documents/:documentId/file", () => {
@@ -121,6 +128,25 @@ describe("GET /single-documents/:documentId/file", () => {
       "documents/user-1/document-1/source.xlsx",
     );
     expect(mocks.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("streams without a MaxListenersExceededWarning on the response", async () => {
+    const warnings: Error[] = [];
+    const onWarning = (warning: Error) => {
+      if (warning.name === "MaxListenersExceededWarning") warnings.push(warning);
+    };
+    process.on("warning", onWarning);
+    try {
+      const response = await request(app)
+        .get("/single-documents/document-1/file")
+        .set("Authorization", "Bearer test");
+      expect(response.status).toBe(200);
+      // Node emits the warning on a later tick.
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off("warning", onWarning);
+    }
+    expect(warnings).toEqual([]);
   });
 
   it("does not read storage when the caller cannot access the document", async () => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { paneStorage } from "./paneStorage";
 import type { WordChatStorageMode } from "./wordChatTypes";
 
 // Re-exported so existing consumers keep their import path. The definition
@@ -39,7 +40,7 @@ export function useWordChatStoragePreference(ownerId: string | null): {
     }
     let cancelled = false;
     setLoading(true);
-    void OfficeRuntime.storage
+    void paneStorage
       .getItem(storageKey(ownerId))
       .then((stored) => {
         if (!cancelled && stored === "local") setModeState("local");
@@ -63,7 +64,7 @@ export function useWordChatStoragePreference(ownerId: string | null): {
   const setMode = useCallback(
     async (next: WordChatStorageMode) => {
       if (!ownerId) throw new Error("Sign in before changing chat storage.");
-      await OfficeRuntime.storage.setItem(storageKey(ownerId), next);
+      await paneStorage.setItem(storageKey(ownerId), next);
       setModeState(next);
     },
     [ownerId],
@@ -80,7 +81,7 @@ export function useWordEditApplyMode(): {
 
   useEffect(() => {
     let cancelled = false;
-    void OfficeRuntime.storage
+    void paneStorage
       .getItem(APPLY_MODE_KEY)
       .then((stored) => {
         if (!cancelled && stored === "direct") setModeState("direct");
@@ -98,7 +99,7 @@ export function useWordEditApplyMode(): {
     // The toggle must not lag on pane storage latency; persistence is
     // best-effort and the safe default covers a lost write.
     setModeState(next);
-    void OfficeRuntime.storage.setItem(APPLY_MODE_KEY, next).catch(() => {});
+    void paneStorage.setItem(APPLY_MODE_KEY, next).catch(() => {});
   }, []);
 
   return { mode, setMode };

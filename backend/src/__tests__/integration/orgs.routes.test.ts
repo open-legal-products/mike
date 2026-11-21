@@ -195,6 +195,9 @@ function query(table: string) {
         order: () => builder,
         limit: () => builder,
         range: () => builder,
+        // Keyset cursors: this fixture returns every match on each page and
+        // the pager stops when a page does not advance.
+        gt: () => builder,
         eq: (col: string, val: unknown) => {
             filters.push({ type: "eq", col, val });
             return builder;

@@ -13,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
+import { AppError } from "../../lib/appError";
 import {
   ALLOWED_DOCUMENT_TYPES,
   ALLOWED_DOCUMENT_TYPES_LABEL,
@@ -155,7 +156,11 @@ export type ParsedUploadSessionRequest = {
   files: UploadSessionFile[];
 };
 
-export class UploadSessionValidationError extends Error {
+/**
+ * The client's manifest was refused. `status` and `code` are what the route
+ * answers with; the AppError kind is what Sentry sees if one ever escapes.
+ */
+export class UploadSessionValidationError extends AppError {
   readonly status: number;
   readonly code: string;
 
@@ -163,8 +168,7 @@ export class UploadSessionValidationError extends Error {
     message: string,
     options: { status?: number; code?: string } = {},
   ) {
-    super(message);
-    this.name = "UploadSessionValidationError";
+    super("upload.session_invalid", message);
     this.status = options.status ?? 400;
     this.code = options.code ?? "invalid_upload_session";
   }

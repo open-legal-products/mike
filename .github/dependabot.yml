@@ -58,6 +58,13 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    ignore:
+      # TypeScript 7 runs the typecheck as `@typescript/native`. The plain
+      # `typescript` package stays on 5.x for typescript-eslint (which refuses
+      # to load under TS 7), next build and the architecture test, all of which
+      # need the compiler's JavaScript API that TS 7 no longer ships.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       priority-1-security-fixes:
         applies-to: security-updates

@@ -19,11 +19,13 @@ import {
 } from "lucide-react";
 import { AddDocButton } from "./AddDocButton";
 import { PlaybookPickerModal } from "../playbooks/PlaybookPickerModal";
-import { PlaybookPillUI } from "@/shared/ui/PlaybookPillUI";
+import {
+    PlaybookPillUI,
+    COMPOSER_SEND_BUTTON_CLASS,
+    ExcerptModalUI,
+    ExcerptPillUI,
+} from "@mike/ui";
 import { UploadOverlay } from "./UploadOverlay";
-import { COMPOSER_SEND_BUTTON_CLASS } from "@/shared/ui/ComposerSendButtonUI.styles";
-import { ExcerptModalUI } from "@/shared/ui/ExcerptModalUI";
-import { ExcerptPillUI } from "@/shared/ui/ExcerptPillUI";
 import { DocumentPill } from "../shared/DocumentPill";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
@@ -71,14 +73,8 @@ import {
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import {
-    serializeExcerpts,
-    type MessageExcerpt,
-} from "@/shared/lib/messageExcerpts";
+import { serializeExcerpts, type MessageExcerpt, type NoModelsReason } from "@mike/client";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
-import {
-    type NoModelsReason,
-} from "@/shared/lib/modelCatalog";
 
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;

@@ -1,3 +1,7 @@
+import { accessSync, constants, statSync } from "node:fs";
+import path from "node:path";
+import { extractionIsolated, extractionLauncher } from "./extraction/limits";
+
 function required(env: NodeJS.ProcessEnv, names: readonly string[]): string {
   for (const name of names) {
     const value = env[name]?.trim();
@@ -144,6 +148,20 @@ export function streamChunkTimeouts(env: NodeJS.ProcessEnv = process.env): {
   };
 }
 
+const PROVIDER_DATA_RETENTION_VALUES = ["deny", "allow"] as const;
+
+/**
+ * LLM_PROVIDER_DATA_RETENTION. "deny" (the default) asks every model provider
+ * that takes a per-request setting not to keep or train on prompts; "allow"
+ * sends none of those settings. Anything but "allow" denies, so a typo can
+ * only err on the private side (and validateRuntimeConfiguration rejects it).
+ */
+export function providerDataRetentionAllowed(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.LLM_PROVIDER_DATA_RETENTION?.trim().toLowerCase() === "allow";
+}
+
 function parsedUrl(value: string, name: string, errors: string[]): URL | null {
   try {
     const url = new URL(value);
@@ -191,6 +209,107 @@ export function authHandoffEncryptionSecret(
   return secret;
 }
 
+const LOOPBACK_HOST = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i;
+
+/**
+ * Why browsers on the deployment's public origin cannot PUT to the storage
+ * URLs this backend signs, or [] when nothing is visibly wrong. Uploads go
+ * straight from the browser to `R2_PUBLIC_ENDPOINT_URL` (falling back to
+ * `R2_ENDPOINT_URL`), so a value only this server can reach fails every
+ * upload with a bare "Failed to fetch" and nothing at boot says why
+ * (MIKE-FRONTEND-28, 3D, 2Z). A warning, not a boot failure: a reverse
+ * proxy may legitimately make an unusual value work.
+ *
+ * Checked only when FRONTEND_URL is a real host; a loopback front end
+ * (local development) has no such problem.
+ */
+export function storagePublicEndpointWarnings(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const frontendRaw = env.FRONTEND_URL?.trim();
+  const endpointRaw =
+    env.R2_PUBLIC_ENDPOINT_URL?.trim() || env.R2_ENDPOINT_URL?.trim();
+  if (!frontendRaw || !endpointRaw) return [];
+  let frontend: URL;
+  let endpoint: URL;
+  try {
+    frontend = new URL(frontendRaw);
+    endpoint = new URL(endpointRaw);
+  } catch {
+    return [];
+  }
+  if (LOOPBACK_HOST.test(frontend.hostname)) return [];
+  const name = env.R2_PUBLIC_ENDPOINT_URL?.trim()
+    ? "R2_PUBLIC_ENDPOINT_URL"
+    : "R2_ENDPOINT_URL";
+  if (LOOPBACK_HOST.test(endpoint.hostname)) {
+    return [
+      `${name} points at loopback while FRONTEND_URL does not: browsers will try to upload to their own machine. Set R2_PUBLIC_ENDPOINT_URL to the storage URL browsers can reach (docs/deployment.md).`,
+    ];
+  }
+  // A bare single-label host (`storage`, `minio`) is a container/service
+  // name that resolves only inside the server's network.
+  if (!endpoint.hostname.includes(".") && !endpoint.hostname.startsWith("[")) {
+    return [
+      `${name} is an internal service name that browsers cannot resolve. Set R2_PUBLIC_ENDPOINT_URL to the storage URL browsers can reach (docs/deployment.md).`,
+    ];
+  }
+  if (frontend.protocol === "https:" && endpoint.protocol === "http:") {
+    return [
+      `${name} uses http under an https FRONTEND_URL: browsers block the upload as mixed content. Serve storage over https (docs/deployment.md).`,
+    ];
+  }
+  return [];
+}
+
+/**
+ * Why the isolated document parser cannot be launched, or [] when it can. On
+ * Linux it runs through prlimit; an image without util-linux otherwise boots
+ * cleanly and then fails every extraction and DOCX upload with a bare ENOENT
+ * (MIKE-BACKEND-EC, EE). A warning, not a boot failure: a deployment that
+ * never processes documents still works.
+ */
+export function extractionLauncherWarnings(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const launcher = extractionIsolated(env) ? extractionLauncher(platform) : null;
+  if (!launcher || onPath(launcher, env.PATH)) return [];
+  return [
+    `${launcher} was not found on PATH: text extraction and DOCX uploads will fail. Install util-linux (the official backend image includes it; docs/deployment.md). Extraction recovers without a restart once it is on PATH.`,
+  ];
+}
+
+// Resolved the way spawn() will (no shell); empty entries are skipped rather
+// than read as the working directory.
+function onPath(name: string, pathValue = ""): boolean {
+  return pathValue.split(path.delimiter).some((dir) => {
+    if (!dir) return false;
+    try {
+      const file = path.join(dir, name);
+      accessSync(file, constants.X_OK);
+      return statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Every Supabase demo key is a JWT with `iss: "supabase-demo"`, signed with
+// the demo secret published in Supabase's own docs.
+function isSupabaseDemoKey(value: string | undefined): boolean {
+  const payload = value?.trim().split(".")[1];
+  if (!payload) return false;
+  try {
+    return (
+      JSON.parse(Buffer.from(payload, "base64url").toString("utf8"))?.iss ===
+      "supabase-demo"
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Fail before the HTTP listener starts when the authentication boundary is not
  * usable. This deliberately lives outside app.ts so unit tests can import the
@@ -212,6 +331,39 @@ export function validateRuntimeConfiguration(
 
   if (session.url) parsedUrl(session.url, "SUPABASE_URL", errors);
 
+  // The .env.example templates contain placeholder values that satisfy a
+  // non-emptiness check. A deployment that copies the template verbatim then
+  // runs with publicly known secrets: DOWNLOAD_SIGNING_SECRET signs download
+  // and blob capability tokens, and USER_API_KEYS_ENCRYPTION_SECRET derives
+  // the AES-256-GCM key that protects user-supplied provider API keys at
+  // rest. Reject the exact placeholders and anything too short to be a real
+  // secret. Production also requires a value before serving requests.
+  const secretChecks: Array<[string, string]> = [
+    ["DOWNLOAD_SIGNING_SECRET", "replace-with-a-random-32-byte-hex-string"],
+    ["USER_API_KEYS_ENCRYPTION_SECRET", "your-long-random-secret"],
+  ];
+  for (const [name, placeholder] of secretChecks) {
+    const rawValue = env[name];
+    if (!rawValue) {
+      if (env.NODE_ENV === "production") {
+        errors.push(
+          `${name} is required in production; generate a unique value (openssl rand -hex 32)`,
+        );
+      }
+      continue;
+    }
+    // Consumers use the raw value, so whitespace-only values are configured
+    // secrets, not the absent/empty values they reject on first use.
+    const value = rawValue.trim();
+    if (value === placeholder) {
+      errors.push(
+        `${name} is still set to the .env.example placeholder; generate a unique value (openssl rand -hex 32)`,
+      );
+    } else if (value.length < 32) {
+      errors.push(`${name} must contain at least 32 characters`);
+    }
+  }
+
   if (env.AUTH_HANDOFF_ENCRYPTION_SECRET?.trim()) {
     if (env.AUTH_HANDOFF_ENCRYPTION_SECRET.trim().length < 32) {
       errors.push(
@@ -221,6 +373,36 @@ export function validateRuntimeConfiguration(
   } else if (env.WORD_ADDIN_URL?.trim()) {
     errors.push(
       "AUTH_HANDOFF_ENCRYPTION_SECRET is required when WORD_ADDIN_URL is set",
+    );
+  }
+
+  if (env.NODE_ENV === "production") {
+    // docker-compose.yml and `supabase start` ship anon/service_role JWTs
+    // signed with Supabase's published demo secret. A server that accepts
+    // them accepts a service_role token anyone can mint, which bypasses
+    // row-level security on every document.
+    const supabaseKeyNames = [
+      "SUPABASE_SECRET_KEY",
+      env.SUPABASE_PUBLISHABLE_KEY?.trim()
+        ? "SUPABASE_PUBLISHABLE_KEY"
+        : "SUPABASE_ANON_KEY",
+    ];
+    for (const name of supabaseKeyNames) {
+      if (isSupabaseDemoKey(env[name])) {
+        errors.push(
+          `${name} is a published Supabase demo key; use your Supabase project's own keys in production (for a local run, set NODE_ENV=development; docs/deployment.md)`,
+        );
+      }
+    }
+  }
+
+  const retention = env.LLM_PROVIDER_DATA_RETENTION?.trim().toLowerCase();
+  if (
+    retention &&
+    !(PROVIDER_DATA_RETENTION_VALUES as readonly string[]).includes(retention)
+  ) {
+    errors.push(
+      'LLM_PROVIDER_DATA_RETENTION must be "deny" (the default) or "allow"',
     );
   }
 

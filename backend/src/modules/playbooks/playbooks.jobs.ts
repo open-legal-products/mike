@@ -10,6 +10,8 @@
 
 import { deleteFile, downloadFile } from "../../lib/storage";
 import { safeError } from "../../lib/safeError";
+import { AppError } from "../../lib/appError";
+import { reportError, setOperation } from "../../lib/observability/sentry";
 import { enqueueDbJob } from "../../lib/dbq/enqueue";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import {
@@ -20,31 +22,36 @@ import {
 } from "../../lib/dbq/types";
 import { createServerSupabase } from "../../lib/supabase";
 import {
-  beginPlaybookImport,
-  beginPlaybookReview,
-  compilePlaybookImport,
-  INTERRUPTED_IMPORT_ERROR,
-  INTERRUPTED_RUN_ERROR,
-  MAX_PLAYBOOK_IMPORT_BYTES,
-  playbookImportDocument,
-  playbookImportJobKey,
-  PlaybookRequestError,
-  playbookReviewJobKey,
-  playbookReviewWork,
-  playbookWorkAttended,
-  runPlaybookReview,
-  type PlaybookImport,
-  type PlaybookImportRequest,
-  type PlaybookImportWork,
-  type PlaybookReviewInput,
-  type PlaybookReviewRequest,
+    beginPlaybookImport,
+    beginPlaybookReview,
+    compilePlaybookImport,
+    INTERRUPTED_IMPORT_ERROR,
+    INTERRUPTED_RUN_ERROR,
+    MAX_PLAYBOOK_IMPORT_BYTES,
+    playbookImportDocument,
+    playbookImportJobKey,
+    PlaybookRequestError,
+    playbookReviewJobKey,
+    playbookReviewWork,
+    playbookWorkAttended,
+    runPlaybookReview,
 } from "./playbooks.operations";
+import {
+    type PlaybookImport,
+    type PlaybookImportRequest,
+    type PlaybookImportWork,
+    type PlaybookReviewInput,
+    type PlaybookReviewRequest,
+} from "./playbooks.types";
 import { isStagedPlaybookImportKey } from "./playbooks.staging";
 import { reportPlaybookFailure, type PlaybookJobKind } from "./playbooks.reporting";
 import {
   recordPlaybookImportAudit,
   recordPlaybookRunAudit,
 } from "./playbooks.audit";
+
+import { DocumentReviewRetryableError } from "../documents/documents.service";
+import { log } from "../../lib/log";
 
 export const PLAYBOOK_REVIEW_JOB = "playbook.review";
 export const PLAYBOOK_IMPORT_JOB = "playbook.import";
@@ -121,7 +128,13 @@ async function untilRecorded(
   try {
     await work();
   } catch (error) {
-    const row = await loadRow(db, table, id);
+    let row: Record<string, unknown> | null;
+    try { row = await loadRow(db, table, id); }
+    catch (readError) {
+      // Preserve the retry marker through a failed reconciliation read,
+      // especially for the inline dispatcher below.
+      throw error instanceof DocumentReviewRetryableError ? error : readError;
+    }
     if (!row || row.status !== "running") return;
     throw error;
   }
@@ -155,6 +168,7 @@ async function markFailed(
 }
 
 export async function handlePlaybookReview(db: Db, job: DbJob): Promise<void> {
+  setOperation("playbooks.review");
   const input = job.payload as unknown as PlaybookReviewInput;
   const row = await claimRow(db, "playbook_runs", input.runId, job);
   if (!row) return;
@@ -198,7 +212,7 @@ async function clearStagedImport(payload: PlaybookImportJobPayload) {
       jobKind: "playbook.import",
       ids: { import_id: payload.attemptId },
     });
-    console.warn("[playbooks] staged upload cleanup failed", {
+    log.warn("playbooks", "staged upload cleanup failed", {
       storageKey: payload.storageKey,
       error: safeError(error),
     });
@@ -232,6 +246,7 @@ async function readImportFile(
 }
 
 export async function handlePlaybookImport(db: Db, job: DbJob): Promise<void> {
+  setOperation("playbooks.import");
   const payload = job.payload as unknown as PlaybookImportJobPayload;
   const row = await claimRow(db, "playbook_imports", payload.attemptId, job);
   if (row)
@@ -306,11 +321,17 @@ async function dispatch(
             typeof payload.attemptId === "string" ? payload.attemptId : undefined,
         },
       });
-      console.warn("[playbooks] inline job failed", {
+      log.warn("playbooks", "inline job failed", {
         kind,
         error: safeError(error),
       });
-      await onFailure(db, job).catch(() => undefined);
+      // An inline transport fault has no automatic retry, but its RPC may
+      // still commit. Leave the run unresolved rather than racing it with
+      // a terminal failure. The history reader can report interrupted work.
+      if (error instanceof DocumentReviewRetryableError) return;
+      await onFailure(db, job).catch((hookError: unknown) =>
+        reportFailureHookCrash(hookError, kind),
+      );
     });
     return;
   }
@@ -322,9 +343,34 @@ async function dispatch(
       maxAttempts: PLAYBOOK_JOB_ATTEMPTS,
     });
   } catch (error) {
-    await onFailure(db, job).catch(() => undefined);
+    await onFailure(db, job).catch((hookError: unknown) =>
+      reportFailureHookCrash(hookError, kind),
+    );
     throw error;
   }
+}
+
+/**
+ * The failure hook could not record the row's outcome: the review or import
+ * stays "running" until it reads as interrupted. The original failure is
+ * already reported (or rethrown) by the caller, so this names the second,
+ * independent fault the runner would otherwise have been the only one to see.
+ */
+function reportFailureHookCrash(hookError: unknown, kind: string): void {
+  reportError(
+    new AppError(
+      "dbq.failure_hook_crashed",
+      "Playbook job failure hook crashed",
+      { cause: hookError },
+    ),
+    {
+      tags: { component: "playbooks", stage: "failure-hook", job_kind: kind },
+    },
+  );
+  log.warn("playbooks", "job failure hook crashed", {
+    kind,
+    error: safeError(hookError),
+  });
 }
 
 /**

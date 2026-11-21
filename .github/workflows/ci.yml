@@ -18,6 +18,10 @@ on:
   # Include stacked PRs whose base is another feature branch.
   pull_request:
 
+permissions:
+  contents: read
+
+
 # Don't pile up runs on rapid pushes to the same PR: a new push cancels the
 # superseded run so it stops holding job slots (the org's concurrent-job cap is
 # shared by every workflow). Pushes to main each get their own group (keyed by
@@ -28,6 +32,8 @@ concurrency:
 
 jobs:
   backend:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Backend build and tests
     runs-on: ubuntu-latest
     defaults:
@@ -49,6 +55,9 @@ jobs:
       # reason instead.
       - name: Validate package.json and lockfile parse
         run: node -e "for (const f of ['package.json','package-lock.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
+
+      - name: Image publication recovery tests
+        run: node --test ../scripts/publish-images.test.mjs
 
       - run: npm ci
 
@@ -74,6 +83,8 @@ jobs:
         run: bash scripts/test-google-workspace-db.sh
 
   frontend:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Frontend build and tests
     runs-on: ubuntu-latest
     defaults:

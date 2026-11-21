@@ -36,21 +36,26 @@ vi.mock("@sentry/nextjs", () => ({
 
 import * as Sentry from "@sentry/nextjs";
 import {
+    API_UNREACHABLE_WINDOW_MS,
     browserSentryOptions,
+    describeReportingDestination,
     isReported,
+    markErrorHandled,
     reportApiFailure,
     reportError,
+    reportGatewayLimit,
+    reportingDestination,
+    reportNetworkFailure,
+    resetApiUnreachableWindow,
     scrubEvent,
     serverSentryOptions,
     setReportingUser,
-    API_UNREACHABLE_WINDOW_MS,
-    markErrorHandled,
-    reportNetworkFailure,
-    resetApiUnreachableWindow,
     trackPendingRequest,
 } from "./errorReporting";
-import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
-import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
+import { MIKE_SENTRY_DSN } from "@mike/client";
+import { diagnosticEvent } from "@mike/client";
+import { MikeApiError, downloadDocumentsZip, updateWorkflow } from "./mikeApi";
+import { notifyError } from "./userFacingError";
 
 afterEach(() => {
     resetApiUnreachableWindow();
@@ -83,6 +88,49 @@ describe("reportError", () => {
             exception: { values: [{ mechanism: { type: "auto.core.capture_console" } }] },
         };
         expect(scrubEvent(consoleCopy, { originalException: error })).toBeNull();
+    });
+
+    it("reports a gateway limit as a warning tagged with its kind and route", () => {
+        state.enabled = false;
+        expect(reportGatewayLimit("stream-incomplete")).toBeNull();
+        expect(Sentry.captureException).not.toHaveBeenCalled();
+
+        state.enabled = true;
+        expect(
+            reportGatewayLimit("payload-too-large", {
+                path: "/projects/3f2b6c1e-9a4d-4c1b-8f7e-2d5a6b7c8d9e/chat",
+                method: "POST",
+                status: 413,
+                requestId: "req-413",
+            }),
+        ).toBe("exc-1");
+        const reported = vi.mocked(Sentry.captureException).mock.calls[0][0] as Error;
+        expect(reported.name).toBe("GatewayPayloadTooLargeError");
+        const scope = state.scopes[0];
+        expect(scope.setLevel).toHaveBeenCalledWith("warning");
+        expect(scope.setTag).toHaveBeenCalledWith("component", "gateway-limit");
+        expect(scope.setTag).toHaveBeenCalledWith("stage", "payload-too-large");
+        expect(scope.setTag).toHaveBeenCalledWith("http_status", 413);
+        // The route is normalised: no identifier reaches a tag.
+        const route = scope.setTag.mock.calls.find(([key]) => key === "http_route")?.[1];
+        expect(String(route)).not.toContain("3f2b6c1e");
+
+        // What survives the privacy boundary is what Sentry receives: the
+        // error type and the labels must still say which limit was hit.
+        const sent = diagnosticEvent({
+            level: "warning",
+            exception: { values: [{ type: reported.name, value: reported.message }] },
+            tags: Object.fromEntries(scope.setTag.mock.calls.filter(([, value]) => value != null)),
+        }) as { tags: Record<string, unknown>; exception: { values: Array<{ type: string }> }; fingerprint: string[] };
+        expect(sent.exception.values[0].type).toBe("GatewayPayloadTooLargeError");
+        expect(sent.tags).toMatchObject({ component: "gateway-limit", stage: "payload-too-large" });
+        expect(sent.fingerprint).toEqual(expect.arrayContaining(["gateway-limit", "payload-too-large"]));
+        expect(JSON.stringify(sent)).not.toContain("3f2b6c1e");
+
+        reportGatewayLimit("stream-incomplete");
+        const second = vi.mocked(Sentry.captureException).mock.calls[1][0] as Error;
+        expect(second.name).toBe("AssistantStreamIncompleteError");
+        expect(state.scopes[1].setTag).toHaveBeenCalledWith("stage", "stream-incomplete");
     });
 
     it("captures with tags, extra, level, and fingerprint when enabled", () => {
@@ -138,6 +186,58 @@ describe("markErrorHandled", () => {
     });
 });
 
+describe("API operation identity before capture", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("does not report a notice wrapper around an already reported cause", () => {
+        state.enabled = true;
+        const cause = new Error("original fault");
+        reportError(cause, { tags: { operation: "chat.turn" } });
+        const wrapper = new Error("delivery uncertain", { cause: new Error("wrapper", { cause }) });
+        notifyError(wrapper, { operation: "chat.turn" });
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+        expect(isReported(wrapper)).toBe(true);
+        expect(scrubEvent({ exception: { values: [{ mechanism: { handled: false } }] } }, { originalException: wrapper })).toBeNull();
+    });
+
+    it("reports ZIP request failures as POST with their operation", async () => {
+        state.enabled = true;
+        vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 500 })));
+        await expect(downloadDocumentsZip(["document-id"])).rejects.toBeInstanceOf(MikeApiError);
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("operation", "documents.directory");
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("http_method", "POST");
+        expect(state.scopes[0].setFingerprint).toHaveBeenCalledWith(["api-5xx", "POST", "/single-documents/download-zip", "500"]);
+    });
+
+    it("reports immediately and keeps its operation across a delayed screen handler", async () => {
+        vi.useFakeTimers();
+        state.enabled = true;
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "internal_error" }), {
+            status: 500, headers: { "x-request-id": "req-workflow" },
+        })));
+        const error = await updateWorkflow("workflow-id", { skill_md: "# Workflow" }).catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(MikeApiError);
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("operation", "workflows.run");
+        await vi.advanceTimersByTimeAsync(1000);
+        notifyError(error, { operation: "workflows.run" });
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+        expect(Sentry.captureMessage).not.toHaveBeenCalled();
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("request_id", "req-workflow");
+    });
+
+    it("does not require a screen to report and deduplicates the same API error", () => {
+        state.enabled = true;
+        const error = new Error("x");
+        const failure = { path: "/x", status: 500, error, operation: "new_feature.run" };
+        expect(reportApiFailure(failure)).toBe("exc-1");
+        expect(reportApiFailure(failure)).toBeNull();
+        expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+        expect(isReported(error)).toBe(true);
+    });
+});
+
 describe("reportApiFailure", () => {
     it("does nothing while disabled", () => {
         expect(reportApiFailure({ path: "/x", status: 500 })).toBeNull();
@@ -170,10 +270,9 @@ describe("reportApiFailure", () => {
         expect(scope.setTag).toHaveBeenCalledWith("request_id", "req-9");
         expect(scope.setTag).toHaveBeenCalledWith("error_code", "internal_error");
         expect(scope.setTag).toHaveBeenCalledWith("http_status", 502);
-        expect(scope.setExtra).toHaveBeenCalledWith(
-            "path",
-            "/projects/8f1c2a3e-1234-4bcd-9e0f-1234567890ab?x=1",
-        );
+        // The raw path (with its ids) is not offered to the event at all; the
+        // normalised route tag is what identifies the endpoint.
+        expect(scope.setExtra).not.toHaveBeenCalledWith("path", expect.anything());
     });
 
     it("marks the thrown error so the console bridge drops its later copy", () => {
@@ -184,6 +283,20 @@ describe("reportApiFailure", () => {
         };
         expect(scrubEvent(consoleCopy, { originalException: apiError })).toBeNull();
     });
+
+    it.each(["upstream_unavailable", "schema_out_of_date"])(
+        "only marks a %s 503 the server side already reported",
+        (code) => {
+            state.enabled = true;
+            const apiError = new Error("already reported");
+            expect(
+                reportApiFailure({ path: "/x", status: 503, code, error: apiError, reportingOwner: "backend" }),
+            ).toBeNull();
+            expect(Sentry.captureMessage).not.toHaveBeenCalled();
+            // Marked, so a screen's later notifyError does not file it either.
+            expect(isReported(apiError)).toBe(true);
+        },
+    );
 
     it("defaults the method to GET and omits absent tags", () => {
         state.enabled = true;
@@ -220,7 +333,7 @@ describe("browserSentryOptions", () => {
         expect(options.enabled).toBe(true);
         expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
         expect(options.environment).toBe("self-hosted");
-        expect(options.release).toBeUndefined();
+        expect(options.release).toBe("mike@0.0.0");
         expect(options.dataCollection).toEqual({
             userInfo: false,
             cookies: false,
@@ -237,17 +350,19 @@ describe("browserSentryOptions", () => {
         expect(options.tracesSampleRate).toBe(0);
         expect(options.beforeSend).toBe(scrubEvent);
         expect(options).not.toHaveProperty("replaysOnErrorSampleRate");
+        // Every envelope goes through the Next server, which applies the
+        // deployment's runtime opt-out and DSN (app/monitoring/route.ts).
+        expect(options.tunnel).toBe("/monitoring");
     });
 
-    it("reads the DSN, environment, release, and sample rate", () => {
+    it("reads the environment, release, and sample rate while leaving the destination to the tunnel", () => {
         const options = browserSentryOptions({
-            dsn: " https://k@o1.ingest.sentry.io/2 ",
             environment: "staging",
             release: "mike@1.0.0",
             tracesSampleRate: "0.25",
         });
         expect(options.enabled).toBe(true);
-        expect(options.dsn).toBe("https://k@o1.ingest.sentry.io/2");
+        expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
         expect(options.environment).toBe("staging");
         expect(options.release).toBe("mike@1.0.0");
         expect(options.tracesSampleRate).toBe(0.25);
@@ -264,10 +379,7 @@ describe("browserSentryOptions", () => {
         });
     });
 
-    it("is off with the disabled flag, and marks the official deployment", () => {
-        const off = browserSentryOptions({ disabled: "true", dsn: "https://k@o1.ingest.sentry.io/2" });
-        expect(off.enabled).toBe(false);
-        expect(off.dsn).toBeUndefined();
+    it("marks the official deployment", () => {
         const official = browserSentryOptions({ install: "official" });
         expect((official.initialScope as { tags: { install: string } }).tags.install).toBe("official");
     });
@@ -278,18 +390,53 @@ describe("browserSentryOptions", () => {
     });
 });
 
-describe("release tagging", () => {
-    it("falls back to the git sha for both the browser and the server options", () => {
-        expect(browserSentryOptions({ dsn: "https://k@o.ingest.sentry.io/1", gitSha: "abcdef1234567890" }).release).toBe(
-            "mike@abcdef123456",
+// MIKE-FRONTEND-2, 9, N, S: `next dev` checkouts reported to the Mike
+// project as environment=self-hosted, indistinguishable from installs.
+describe("development builds", () => {
+    const own = "https://k@o9.ingest.sentry.io/9";
+    const dev = (env: Record<string, string>) => ({ NODE_ENV: "development", ...env }) as unknown as NodeJS.ProcessEnv;
+
+    it("do not fall back to the Mike project; a DSN set on purpose still reports", () => {
+        expect(reportingDestination(dev({}))).toEqual({ dsn: "", source: "development" });
+        // The shipped example .env.local sets these to false: not an opt-in.
+        expect(reportingDestination(dev({ SENTRY_DISABLED: "false", NEXT_PUBLIC_SENTRY_DISABLED: "false" })).dsn).toBe("");
+        expect(serverSentryOptions("server", dev({})).enabled).toBe(false);
+        expect(reportingDestination(dev({ SENTRY_DSN: own }))).toEqual({ dsn: own, source: "runtime" });
+    });
+
+    it("say at boot that reporting is off because this is a development build", () => {
+        expect(describeReportingDestination(reportingDestination(dev({})))).toBe(
+            "[sentry] web app reports: off (development build; set SENTRY_DSN to report to your own project), browser included",
         );
+    });
+
+    it("report as environment development unless SENTRY_ENVIRONMENT says otherwise", () => {
+        expect(browserSentryOptions({ nodeEnv: "development" }).environment).toBe("development");
+        expect(serverSentryOptions("server", dev({ SENTRY_DSN: own })).environment).toBe("development");
+        expect(serverSentryOptions("server", dev({ SENTRY_DSN: own, SENTRY_ENVIRONMENT: "staging" })).environment).toBe("staging");
+        expect(browserSentryOptions({ nodeEnv: "development", environment: "staging" }).environment).toBe("staging");
+    });
+});
+
+describe("release tagging", () => {
+    it("builds mike@<version>+<sha12> for both the browser and the server options", () => {
+        expect(
+            browserSentryOptions({
+                version: "2.1.0",
+                gitSha: "abcdef1234567890",
+            }).release,
+        ).toBe("mike@2.1.0+abcdef123456");
+        expect(
+            browserSentryOptions({ gitSha: "abcdef1234567890" }).release,
+        ).toBe("mike@0.0.0+abcdef123456");
         expect(
             serverSentryOptions("server", {
                 NODE_ENV: "test",
                 SENTRY_DSN: "https://k@o.ingest.sentry.io/1",
+                MIKE_VERSION: "2.1.0",
                 GIT_SHA: "abcdef1234567890",
             } as NodeJS.ProcessEnv).release,
-        ).toBe("mike@abcdef123456");
+        ).toBe("mike@2.1.0+abcdef123456");
         expect(
             serverSentryOptions("server", {
                 NODE_ENV: "test",
@@ -297,6 +444,94 @@ describe("release tagging", () => {
                 GIT_SHA: "abcdef1234567890",
             } as NodeJS.ProcessEnv).release,
         ).toBe("mike@3.1.0");
+    });
+});
+
+describe("reportingDestination", () => {
+    const own = "https://k@o9.ingest.sentry.io/9";
+    const baked = "https://b@o8.ingest.sentry.io/8";
+
+    it("honours the fork image's baked opt-out for server and edge reporting", () => {
+        for (const runtime of ["server", "edge"] as const) {
+            for (const disabled of [undefined, ""]) {
+                const env = { NODE_ENV: "test", NEXT_PUBLIC_SENTRY_DISABLED: "true", SENTRY_DISABLED: disabled } as NodeJS.ProcessEnv;
+                expect(reportingDestination(env)).toEqual({ dsn: "", source: "disabled", disabledBy: "build" });
+                expect(serverSentryOptions(runtime, env).enabled).toBe(false);
+            }
+        }
+        expect(reportingDestination({
+            NODE_ENV: "test", NEXT_PUBLIC_SENTRY_DISABLED: "true", SENTRY_DISABLED: "false", SENTRY_DSN: own,
+        } as NodeJS.ProcessEnv)).toMatchObject({ source: "runtime", dsn: own });
+    });
+
+    it("is one rule for server and browser: disabled, runtime, build, default", () => {
+        expect(reportingDestination({ SENTRY_DISABLED: "true", SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: "",
+            source: "disabled",
+            disabledBy: "runtime",
+        });
+        expect(reportingDestination({ SENTRY_DSN: ` ${own} `, NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: own,
+            source: "runtime",
+        });
+        expect(reportingDestination({ NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: baked,
+            source: "build",
+        });
+        expect(reportingDestination({} as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: MIKE_SENTRY_DSN.frontend,
+            source: "default",
+        });
+    });
+
+    it("carries the runtime environment and install overrides", () => {
+        expect(
+            reportingDestination({ SENTRY_ENVIRONMENT: " production ", SENTRY_INSTALL: "official" } as unknown as NodeJS.ProcessEnv),
+        ).toMatchObject({ environment: "production", install: "official" });
+        expect(reportingDestination({ SENTRY_INSTALL: "other" } as unknown as NodeJS.ProcessEnv).install).toBe("community");
+    });
+
+    it("says which variable switched reporting off", () => {
+        expect(reportingDestination({ SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: "",
+            source: "disabled",
+            disabledBy: "runtime",
+        });
+        expect(reportingDestination({ NEXT_PUBLIC_SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv)).toEqual({
+            dsn: "",
+            source: "disabled",
+            disabledBy: "build",
+        });
+        expect(
+            describeReportingDestination(reportingDestination({ SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv)),
+        ).toContain("SENTRY_DISABLED=true at runtime");
+        expect(
+            describeReportingDestination(
+                reportingDestination({ NEXT_PUBLIC_SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv),
+            ),
+        ).toContain("set SENTRY_DISABLED=false to override");
+    });
+
+    it("shows ? for the project when the DSN has no path", () => {
+        expect(describeReportingDestination({ dsn: "https://k@host.example", source: "runtime" })).toContain("project ? (runtime)");
+    });
+
+    it("describes the rule for the boot log without leaking the DSN key", () => {
+        const line = describeReportingDestination(reportingDestination({ SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv));
+        expect(line).toContain("SENTRY_DSN project 9 (runtime)");
+        expect(line).not.toContain("k@");
+        expect(describeReportingDestination(reportingDestination({ NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv))).toContain(
+            "baked at build",
+        );
+        expect(describeReportingDestination(reportingDestination({ SENTRY_DISABLED: "true" } as unknown as NodeJS.ProcessEnv))).toContain("off");
+        expect(describeReportingDestination(reportingDestination({} as unknown as NodeJS.ProcessEnv))).toContain("community default");
+    });
+
+    it("drives the Next server's own SDK, so a baked DSN is honoured there too", () => {
+        expect(serverSentryOptions("server", { NEXT_PUBLIC_SENTRY_DSN: baked } as unknown as NodeJS.ProcessEnv).dsn).toBe(baked);
+        expect(
+            serverSentryOptions("server", { NEXT_PUBLIC_SENTRY_DSN: baked, SENTRY_DSN: own } as unknown as NodeJS.ProcessEnv).dsn,
+        ).toBe(own);
     });
 });
 
@@ -325,7 +560,7 @@ describe("serverSentryOptions", () => {
         );
         expect(options.enabled).toBe(true);
         expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
-        expect(options.release).toBeUndefined();
+        expect(options.release).toBe("mike@0.0.0");
         expect(options.environment).toBe("self-hosted");
         const withNodeEnv = serverSentryOptions("server", {
             NODE_ENV: "production",
@@ -616,4 +851,11 @@ describe("reportNetworkFailure while the page is being left", () => {
 
         expect(Sentry.captureEvent).toHaveBeenCalledOnce();
     });
+});
+
+it("reports an unowned 503 even with a recognized code, preserving the original Error", () => {
+    state.enabled = true;
+    const failure = new Error("private transport detail");
+    reportApiFailure({ path: "/chat", status: 503, code: "upstream_unavailable", error: failure });
+    expect(Sentry.captureException).toHaveBeenCalledWith(failure);
 });

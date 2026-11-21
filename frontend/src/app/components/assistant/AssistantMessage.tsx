@@ -1,7 +1,10 @@
 "use client";
 
-import { TextCardUI } from "@/shared/ui/TextCardUI";
-import { useRef, useState, type ReactNode } from "react";
+import { useLatestRef } from "@/app/hooks/useLatestRef";
+import { useMarkdownCheckpoint } from "./message/markdownCheckpoint";
+import { createCitationPreprocessor } from "./message/citationPreprocessor";
+import { TextCardUI } from "@mike/ui";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import type { WebSource } from "@mike/contracts";
 import { Check, Copy } from "lucide-react";
 import type {
@@ -55,6 +58,8 @@ import {
     WorkflowAppliedBlock,
     type CourtListenerBlockItem,
 } from "./message/EventBlocks";
+
+const EMPTY_CITATIONS: Citation[] = [];
 
 interface Props {
     events?: AssistantEvent[];
@@ -134,13 +139,13 @@ interface Props {
     resolvedEditStatuses?: Record<string, "accepted" | "rejected">;
 }
 
-export function AssistantMessage({
+function AssistantMessageImpl({
     events,
     isStreaming = false,
     awaitingInput = false,
     isError = false,
     errorMessage,
-    citations = [],
+    citations = EMPTY_CITATIONS,
     citationStatus,
     activeCitation,
     onCitationClick,
@@ -236,6 +241,9 @@ export function AssistantMessage({
         isStreaming && contentIsTail,
     );
 
+    const {richText, plainTail} = useMarkdownCheckpoint(smoothedLastText, isStreaming && contentIsTail);
+    const processCitations = useMemo(() => createCitationPreprocessor(preprocessCitations), []);
+
     // Pre-process citations for all content events. Each [N] marker resolves
     // to exactly one citation (models are instructed to use shared refs
     // only for cross-page continuations via the [[PAGE_BREAK]] sentinel).
@@ -259,11 +267,7 @@ export function AssistantMessage({
             }
             processedTexts.push(
                 event.type === "content"
-                    ? preprocessCitations(
-                          i === lastContentIdx ? smoothedLastText : event.text,
-                          citations,
-                          inlineCitationTargets,
-                      )
+                    ? processCitations(i, i === lastContentIdx ? richText : event.text, citations, inlineCitationTargets)
                     : "",
             );
         }
@@ -472,15 +476,17 @@ export function AssistantMessage({
         }
         if (event.type === "mcp_tool_call") {
             const isError = event.status === "error";
-            const label = event.connector_name
-                ? `${event.connector_name}: ${connectorToolLabel(event.tool_name, event.tool_title)}`
-                : toolCallLabel(event.openai_tool_name);
+            const label = event.interrupted
+                ? "Connector call stopped"
+                : event.connector_name
+                  ? `${event.connector_name}: ${connectorToolLabel(event.tool_name, event.tool_title)}`
+                  : toolCallLabel(event.openai_tool_name);
             return (
                 <EventBlock
                     key={globalIdx}
                     showConnector={showConnector}
                     isStreaming={event.isStreaming}
-                    dotColor={isError ? "red" : "green"}
+                    dotColor={isError ? "red" : event.interrupted ? "gray" : "green"}
                 >
                     <span className="flex min-w-0 items-center gap-1.5 font-medium">
                         <ConnectorSkeuoIcon
@@ -508,6 +514,7 @@ export function AssistantMessage({
                     key={globalIdx}
                     filename={event.filename}
                     isStreaming={event.isStreaming}
+                    interrupted={!!event.interrupted}
                     onClick={
                         !event.isStreaming &&
                         event.document_id &&
@@ -530,15 +537,18 @@ export function AssistantMessage({
         }
         if (event.type === "doc_search") {
             return <DocSearchBlock key={globalIdx} event={event}
-                isStreaming={event.isStreaming} showConnector={showConnector} />;
+                isStreaming={event.isStreaming} interrupted={!!event.interrupted}
+                showConnector={showConnector} />;
         }
         if (event.type === "web_search") {
             return <WebSearchBlock key={globalIdx} event={event}
-                isStreaming={event.isStreaming} showConnector={showConnector} />;
+                isStreaming={event.isStreaming} interrupted={!!event.interrupted}
+                showConnector={showConnector} />;
         }
         if (event.type === "web_read") {
             return <WebReadBlock key={globalIdx} event={event}
-                isStreaming={event.isStreaming} showConnector={showConnector} />;
+                isStreaming={event.isStreaming} interrupted={!!event.interrupted}
+                showConnector={showConnector} />;
         }
         if (event.type === "doc_find") {
             return (
@@ -548,6 +558,7 @@ export function AssistantMessage({
                     query={event.query}
                     totalMatches={event.total_matches}
                     isStreaming={!!event.isStreaming}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     onClick={
                         !event.isStreaming &&
@@ -572,6 +583,7 @@ export function AssistantMessage({
                     key={globalIdx}
                     filename={event.filename}
                     isStreaming={event.isStreaming}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     onClick={
                         !event.isStreaming &&
@@ -602,6 +614,7 @@ export function AssistantMessage({
                     copies={event.copies}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     onOpenCopy={
                         !event.isStreaming && onOpenDocument
@@ -624,6 +637,7 @@ export function AssistantMessage({
                     filename={event.filename}
                     isStreaming={event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     onClick={
                         !event.isStreaming &&
@@ -669,7 +683,8 @@ export function AssistantMessage({
         }
         if (event.type === "courtlistener_search_case_law") {
             const count = event.result_count ?? 0;
-            const detail = event.isStreaming
+            // A stopped search reported no results: show its query, not "0 results".
+            const detail = event.isStreaming || event.interrupted
                 ? event.query
                     ? `for "${event.query}"`
                     : undefined
@@ -684,11 +699,14 @@ export function AssistantMessage({
                             ? "Searching case law"
                             : event.error
                               ? "Case law search failed"
-                              : "Searched case law"
+                              : event.interrupted
+                                ? "Case law search stopped"
+                                : "Searched case law"
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                 />
             );
@@ -721,11 +739,14 @@ export function AssistantMessage({
                             ? `Fetching ${displayLabel}`
                             : event.error
                               ? "Case fetch failed"
-                              : `Fetched ${displayLabel}`
+                              : event.interrupted
+                                ? `Fetch of ${displayLabel} stopped`
+                                : `Fetched ${displayLabel}`
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     items={items.length > 0 ? items : undefined}
                 />
@@ -751,7 +772,7 @@ export function AssistantMessage({
                 const searchLabel = `${searches.length} ${
                     searches.length === 1 ? "search" : "searches"
                 } in ${caseCount} ${caseCount === 1 ? "case" : "cases"}`;
-                const detail = event.isStreaming
+                const detail = event.isStreaming || event.interrupted
                     ? undefined
                     : event.error
                       ? event.error
@@ -766,7 +787,10 @@ export function AssistantMessage({
                                 : null),
                         url: null,
                         query: search.query,
-                        totalMatches: search.total_matches ?? 0,
+                        // A stopped search has no match count to show.
+                        totalMatches: event.interrupted
+                            ? undefined
+                            : (search.total_matches ?? 0),
                         hasError: !!search.error,
                     }),
                 );
@@ -778,11 +802,14 @@ export function AssistantMessage({
                                 ? `Running ${searchLabel}`
                                 : event.error
                                   ? "Case searches failed"
-                                  : `Ran ${searchLabel}`
+                                  : event.interrupted
+                                    ? `Stopped ${searchLabel}`
+                                    : `Ran ${searchLabel}`
                         }
                         detail={detail}
                         isStreaming={!!event.isStreaming}
                         hasError={!!event.error}
+                        interrupted={!!event.interrupted}
                         showConnector={showConnector}
                         items={items.length > 0 ? items : undefined}
                     />
@@ -792,7 +819,7 @@ export function AssistantMessage({
             const caseLabel =
                 [event.case_name, event.citation].filter(Boolean).join(", ") ||
                 (event.cluster_id ? `cluster ${event.cluster_id}` : "case");
-            const detail = event.isStreaming
+            const detail = event.isStreaming || event.interrupted
                 ? event.query
                     ? `for "${event.query}" in ${caseLabel}`
                     : caseLabel
@@ -807,11 +834,14 @@ export function AssistantMessage({
                             ? "Searching case"
                             : event.error
                               ? "Case search failed"
-                              : "Searched case"
+                              : event.interrupted
+                                ? "Case search stopped"
+                                : "Searched case"
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                 />
             );
@@ -821,7 +851,7 @@ export function AssistantMessage({
             const caseLabel =
                 [event.case_name, event.citation].filter(Boolean).join(", ") ||
                 "case";
-            const detail = event.isStreaming
+            const detail = event.isStreaming || event.interrupted
                 ? undefined
                 : event.error
                   ? event.error
@@ -836,11 +866,14 @@ export function AssistantMessage({
                             ? `Reading case ${caseLabel}`
                             : event.error
                               ? `Case read failed ${caseLabel}`
-                              : `Read case ${caseLabel}`
+                              : event.interrupted
+                                ? `Case read stopped ${caseLabel}`
+                                : `Read case ${caseLabel}`
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                 />
             );
@@ -849,7 +882,7 @@ export function AssistantMessage({
             const citations = event.citation_count ?? 0;
             const matches = event.match_count ?? 0;
             const citationLabel = `${citations} ${citations === 1 ? "citation" : "citations"}`;
-            const detail = event.isStreaming
+            const detail = event.isStreaming || event.interrupted
                 ? undefined
                 : event.error
                   ? event.error
@@ -875,11 +908,14 @@ export function AssistantMessage({
                             ? `Verifying ${citationLabel}`
                             : event.error
                               ? "Citation verification failed"
-                              : `Verified ${citationLabel}`
+                              : event.interrupted
+                                ? `Verification of ${citationLabel} stopped`
+                                : `Verified ${citationLabel}`
                     }
                     detail={detail}
                     isStreaming={!!event.isStreaming}
                     hasError={!!event.error}
+                    interrupted={!!event.interrupted}
                     showConnector={showConnector}
                     items={items.length > 0 ? items : undefined}
                 />
@@ -970,6 +1006,7 @@ export function AssistantMessage({
                                                     : undefined
                                             }
                                         />
+                                        {isLastContent && plainTail && <span className="whitespace-pre-wrap font-serif">{plainTail}</span>}
                                     </div>
                                 );
                             }
@@ -1288,4 +1325,32 @@ export function AssistantMessage({
             </div>
         </div>
     );
+}
+
+const MemoAssistantMessage = memo(AssistantMessageImpl);
+/** Stable event dispatchers keep completed messages memoized without stale closures. */
+export function AssistantMessage(props: Props) {
+    const latest = useLatestRef(props);
+    const handlers = useMemo(() => ({
+        onCitationClick: ((...args) => latest.current.onCitationClick?.(...args)) as NonNullable<Props["onCitationClick"]>,
+        onOpenCitationSource: ((...args) => latest.current.onOpenCitationSource?.(...args)) as NonNullable<Props["onOpenCitationSource"]>,
+        onCaseClick: ((...args) => latest.current.onCaseClick?.(...args)) as NonNullable<Props["onCaseClick"]>,
+        onWorkflowClick: ((...args) => latest.current.onWorkflowClick?.(...args)) as NonNullable<Props["onWorkflowClick"]>,
+        onEditViewClick: ((...args) => latest.current.onEditViewClick?.(...args)) as NonNullable<Props["onEditViewClick"]>,
+        onOpenDocument: ((...args) => latest.current.onOpenDocument?.(...args)) as NonNullable<Props["onOpenDocument"]>,
+        onEditResolveStart: ((...args) => latest.current.onEditResolveStart?.(...args)) as NonNullable<Props["onEditResolveStart"]>,
+        onEditResolved: ((...args) => latest.current.onEditResolved?.(...args)) as NonNullable<Props["onEditResolved"]>,
+        onEditError: ((...args) => latest.current.onEditError?.(...args)) as NonNullable<Props["onEditError"]>,
+    }), [latest]);
+    return <MemoAssistantMessage {...props}
+        onCitationClick={props.onCitationClick ? handlers.onCitationClick : undefined}
+        onOpenCitationSource={props.onOpenCitationSource ? handlers.onOpenCitationSource : undefined}
+        onCaseClick={props.onCaseClick ? handlers.onCaseClick : undefined}
+        onWorkflowClick={props.onWorkflowClick ? handlers.onWorkflowClick : undefined}
+        onEditViewClick={props.onEditViewClick ? handlers.onEditViewClick : undefined}
+        onOpenDocument={props.onOpenDocument ? handlers.onOpenDocument : undefined}
+        onEditResolveStart={props.onEditResolveStart ? handlers.onEditResolveStart : undefined}
+        onEditResolved={props.onEditResolved ? handlers.onEditResolved : undefined}
+        onEditError={props.onEditError ? handlers.onEditError : undefined}
+    />;
 }

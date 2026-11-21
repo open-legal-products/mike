@@ -24,6 +24,7 @@ const {
     beginMemoryConversationTurn,
     releaseMemoryConversationTurn,
     scheduleMemoryConsolidation,
+    generateChatTitle,
 } = vi.hoisted(() => ({
     ensureReviewAccess: vi.fn(),
     checkProjectAccess: vi.fn(),
@@ -44,6 +45,8 @@ const {
         job_id: "job-1",
         generation: 1,
     }),
+    // A chat's first exchange is titled by a model call; no title by default.
+    generateChatTitle: vi.fn().mockResolvedValue(null),
 }));
 
 // ---------------------------------------------------------------------------
@@ -66,6 +69,7 @@ let supabaseState: {
     tables: Record<string, QueryResult | QueryResult[]>;
     inserts: { table: string; payload: unknown }[];
     updates: { table: string; payload: unknown }[];
+    assistantInsertGate: Promise<void> | null;
 };
 
 function resetSupabaseState() {
@@ -76,6 +80,7 @@ function resetSupabaseState() {
         tables: {},
         inserts: [],
         updates: [],
+        assistantInsertGate: null,
     };
 }
 resetSupabaseState();
@@ -125,8 +130,12 @@ function makeQuery(table: string) {
     "contains",
     ];
     for (const m of chain) q[m] = vi.fn(() => q);
+    let assistantInsert = false;
     q.insert = vi.fn((payload: unknown) => {
         supabaseState.inserts.push({ table, payload });
+        assistantInsert =
+            table === "tabular_review_chat_messages" &&
+            (payload as { role?: unknown }).role === "assistant";
         return q;
     });
     // Update payloads are recorded alongside inserts: what a route writes on
@@ -141,7 +150,14 @@ function makeQuery(table: string) {
   q.then = (
     resolve: (v: unknown) => unknown,
     reject?: (e: unknown) => unknown,
-  ) => Promise.resolve(resultForTable(table)).then(resolve, reject);
+  ) => {
+    // A test can hold the assistant answer's insert open to land a Stop
+    // while the turn is being saved.
+    const gate = assistantInsert ? supabaseState.assistantInsertGate : null;
+    return (gate ?? Promise.resolve())
+      .then(() => resultForTable(table))
+      .then(resolve, reject);
+  };
     return q;
 }
 
@@ -188,6 +204,13 @@ vi.mock("../../modules/tabular/tabular.extractRow", async (importOriginal) => ({
         typeof import("../../modules/tabular/tabular.extractRow")
     >()),
     extractRowColumns: (...args: unknown[]) => extractRowColumns(...args),
+}));
+
+vi.mock("../../modules/tabular/tabular.extract", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("../../modules/tabular/tabular.extract")
+    >()),
+    generateChatTitle: (...args: unknown[]) => generateChatTitle(...args),
 }));
 
 vi.mock("../../lib/memory/schedule", () => ({
@@ -610,7 +633,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
             supabaseState.tables.project_subfolders = {
-                data: [{ id: "f1", name: "Contracts", parent_folder_id: null }],
+                data: [{ id: "f1", name: "Contracts", parent_folder_id: null, project_id: "p1" }],
                 error: null,
             };
             supabaseState.tables.tabular_review_rows = {
@@ -2138,6 +2161,72 @@ describe("tabular.routes", () => {
             expect(extractRowColumns).not.toHaveBeenCalled();
         });
 
+        it("owns a terminal generation failure once in the final envelope and the error frame", async () => {
+            const Sentry = await import("@sentry/node");
+            const { resetSentryForTests, scrubEvent } = await import("../../lib/observability/sentry.js");
+            const { privacyBoundaryIntegration } = await import("../../lib/observability/sentryPrivacy.js");
+            const sent: import("@sentry/node").Event[] = [];
+            resetSentryForTests("official", { initialized: true });
+            Sentry.init({
+                dsn: "https://test@sentry.invalid/1", defaultIntegrations: false,
+                integrations: [Sentry.linkedErrorsIntegration(), privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
+                beforeSend: scrubEvent,
+                transport: () => ({ send: async envelope => {
+                    for (const [header, payload] of envelope[1]) if (header.type === "event") sent.push(payload as import("@sentry/node").Event);
+                    return { statusCode: 200 };
+                }, flush: async () => true }),
+            });
+            try {
+                const original = new TypeError("PRIVATE_SOURCE_DOCUMENT");
+                original.stack = "TypeError: PRIVATE_SOURCE_DOCUMENT\n    at extractRow (backend/src/modules/tabular/tabular.extractRow.ts:42:7)";
+                extractRowColumns.mockRejectedValueOnce(original);
+                const res = await startGeneration();
+                expect(res.status).toBe(200);
+                expect(res.text).toContain('"reporting_owner":"backend"');
+                expect(res.text).toContain("data: [DONE]");
+                expect(res.text).not.toContain("PRIVATE_SOURCE_DOCUMENT");
+                await Sentry.flush(2000);
+                expect(sent).toHaveLength(1);
+                expect(sent[0]?.tags).toMatchObject({ operation: "tabular.generate", stage: "generation-stream" });
+                expect(sent[0]?.exception?.values?.some(value => value.stacktrace?.frames?.some(frame => frame.lineno === 42))).toBe(true);
+                expect(JSON.stringify(sent)).not.toContain("PRIVATE_SOURCE_DOCUMENT");
+            } finally {
+                await Sentry.close();
+                resetSentryForTests();
+            }
+        });
+
+        it("tells the grid a rejected key is the key, using the provider layer's real error", async () => {
+            const { APICallError } = await import("ai");
+            const { toProviderStreamError } = await import("../../lib/llm/providerErrors.js");
+            const rejected = toProviderStreamError(
+                new APICallError({
+                    message: "PRIVATE provider text: invalid x-api-key",
+                    url: "https://api.example.test/v1/messages",
+                    requestBodyValues: {},
+                    statusCode: 401,
+                }),
+                { label: "Anthropic", modelId: "claude-sonnet-5-5", keySource: "user" },
+            );
+            extractRowColumns.mockImplementationOnce(async (raw: unknown) => {
+                const args = raw as ExtractArgs;
+                return { processed: args.columns, received: new Set<number>(), missing: [0], error: rejected };
+            });
+
+            const res = await startGeneration();
+
+            expect(res.status).toBe(200);
+            const errorRecord = records(res.text).find((record) => record.includes('"type":"error"'));
+            expect(errorRecord).toBeDefined();
+            expect(JSON.parse(errorRecord!.slice(errorRecord!.indexOf("data: ") + 6))).toMatchObject({
+                type: "error",
+                message: rejected.message,
+                safe_to_display: true,
+                code: "invalid_api_key",
+            });
+            expect(res.text).not.toContain("PRIVATE provider text");
+        });
+
         it("keeps extracting after the requesting socket closes, and a reload attaches from where it left off", async () => {
             const held = heldExtraction();
             const first = startGeneration();
@@ -2214,6 +2303,110 @@ describe("tabular.routes", () => {
             expect(resumed.text).not.toContain('"status":"generating"');
             expect(resumed.text).toContain('"status":"done"');
             await firstDone;
+        });
+
+        // Review access is not document access: GET /tabular-review/:id
+        // hides a row whose source document the caller cannot open. A
+        // run's frames are the starter's, so a co-editor attaching to it
+        // must get the same narrowing, or the replay hands them text
+        // extracted from a document they cannot open.
+        describe("replay narrowed to the attaching viewer's documents", () => {
+            /** row-1 reads d1, row-2 reads d2; both extract until released. */
+            function startTwoRowRun() {
+                supabaseState.tables.tabular_review_rows = {
+                    data: ["d1", "d2"].map((documentId, index) => ({
+                        id: `row-${index + 1}`,
+                        review_id: "r1",
+                        label: `${documentId}.pdf`,
+                        row_type: "document",
+                        folder_id: null,
+                        library_folder_id: null,
+                        document_id: documentId,
+                        sort_index: index,
+                    })),
+                    error: null,
+                };
+                let release = () => {};
+                const gate = new Promise<void>((done) => {
+                    release = done;
+                });
+                let generating = 0;
+                let bothGenerating = () => {};
+                const started = new Promise<void>((done) => {
+                    bothGenerating = done;
+                });
+                extractRowColumns.mockImplementation(async (raw: unknown) => {
+                    const args = raw as ExtractArgs;
+                    await args.sink.generating(args.row.id, 0);
+                    if (++generating === 2) bothGenerating();
+                    await gate;
+                    await args.sink.done(args.row.id, 0, {
+                        value: `extracted from ${args.row.id}`,
+                    });
+                    return {
+                        processed: args.columns,
+                        received: new Set([0]),
+                        missing: [],
+                    };
+                });
+                const run = startGeneration().then((res) => res);
+                return { run, started, release };
+            }
+
+            const attach = () =>
+                request(app)
+                    .get("/tabular-review/r1/generate/stream?from=1")
+                    .set(...AUTH);
+
+            it("drops frames for rows whose documents the viewer cannot open", async () => {
+                const { run, started, release } = startTwoRowRun();
+                await started;
+
+                // From here on the caller is a co-editor who can open d1
+                // but not d2: the same inputs under which the review read
+                // returns row-1 only.
+                ensureReviewAccess.mockResolvedValue({
+                    ok: true,
+                    isCreator: false,
+                    orgRole: null,
+                    projectRole: "editor",
+                });
+                filterAccessibleDocumentIds.mockImplementation(
+                    async (ids: string[]) => ids.filter((id) => id !== "d2"),
+                );
+                const read = await request(app)
+                    .get("/tabular-review/r1")
+                    .set(...AUTH);
+                expect(read.body.rows.map((row: { id: string }) => row.id)).toEqual(["row-1"]);
+
+                const tail = attach();
+                setTimeout(release, 30);
+                const viewer = records((await tail).text);
+                const starter = records((await run).text);
+
+                expect(viewer.join("\n")).not.toContain("row-2");
+                // Everything else arrives, in the run's order, with the
+                // run's own sequence numbers.
+                expect(viewer).toEqual(
+                    starter.filter((record) => !record.includes("row-2")),
+                );
+                expect(viewer.join("\n")).toContain("extracted from row-1");
+                expect(viewer.at(-1)).toMatch(/data: \[DONE\]$/);
+            });
+
+            it("still replays every frame, in order, to a viewer who can open every document", async () => {
+                const { run, started, release } = startTwoRowRun();
+                await started;
+
+                const tail = attach();
+                setTimeout(release, 30);
+                const viewer = records((await tail).text);
+                const starter = records((await run).text);
+
+                expect(viewer).toEqual(starter);
+                expect(viewer.join("\n")).toContain("extracted from row-1");
+                expect(viewer.join("\n")).toContain("extracted from row-2");
+            });
         });
 
         it("stops a run through the endpoint: readers see cancelled then [DONE], cells go back to pending", async () => {
@@ -2475,6 +2668,11 @@ describe("tabular.routes", () => {
                     memoryProjectId: "p1",
                     memorySharedAudience: true,
                 }),
+            );
+            const streamed = runLLMStream.mock.calls[0][0];
+            expect(streamed.nonce).toMatch(/^[0-9a-f]{32}$/);
+            expect(streamed.apiMessages[0].content).toContain(
+                `<untrusted-content nonce="${streamed.nonce}">`,
             );
             const userInsert = supabaseState.inserts.find(
                 ({ table, payload }) =>
@@ -2811,6 +3009,125 @@ describe("tabular.routes", () => {
             held.release();
             expect((await firstDone).text).toContain("data: [DONE]");
             expect(runLLMStream).toHaveBeenCalledTimes(1);
+        });
+
+        it("stores a stream that returns after Stop as stopped, not as a completed answer", async () => {
+            const started = new Promise<StreamParams>((resolve) => {
+                runLLMStream.mockImplementation(async (raw: unknown) => {
+                    const params = raw as StreamParams;
+                    resolve(params);
+                    await new Promise<void>((done) =>
+                        params.signal?.addEventListener("abort", () => done(), {
+                            once: true,
+                        }),
+                    );
+                    // Ignores the abort and returns the whole answer anyway.
+                    return {
+                        fullText: "Late answer",
+                        events: [{ type: "content", text: "Late answer" }],
+                    };
+                });
+            });
+            const firstDone = send().then((res) => res);
+            await started;
+            const turnId = await activeTurnId();
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            getAssistantTurnRun(turnId, "tabular")!.stop();
+
+            const text = (await firstDone).text;
+            expect(text).toContain('"type":"cancelled"');
+            expect(assistantInsert()).toMatchObject({
+                content: [
+                    { type: "content", text: "Late answer" },
+                    { type: "content", text: "Cancelled by user." },
+                ],
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+        });
+
+        describe("a Stop that lands after the answer is generated", () => {
+            /**
+             * Runs a first exchange (so the chat would be titled) whose answer
+             * is already generated, holds the given step open, presses Stop
+             * during it, then lets the step finish.
+             */
+            async function stopDuring(step: "save" | "title") {
+                supabaseState.tables.tabular_review_chats = {
+                    data: { ...CHAT_ROW, title: null },
+                    error: null,
+                };
+                let release!: () => void;
+                const held = new Promise<void>((resolve) => {
+                    release = resolve;
+                });
+                let reached = false;
+                if (step === "save") {
+                    supabaseState.assistantInsertGate = held.then(() => {});
+                } else {
+                    generateChatTitle.mockImplementationOnce(async () => {
+                        reached = true;
+                        await held;
+                        return "A title";
+                    });
+                }
+                runLLMStream.mockResolvedValue({
+                    fullText: "Done",
+                    events: [{ type: "content", text: "Done" }],
+                });
+                const response = send().then((res) => res);
+                await vi.waitFor(() => {
+                    expect(step === "save" ? assistantInsert() : reached).toBeTruthy();
+                });
+                const turnId = await activeTurnId();
+                const { getAssistantTurnRun } =
+                    await import("../../lib/assistantTurnRuns.js");
+                getAssistantTurnRun(turnId, "tabular")!.stop();
+                release();
+                return (await response).text;
+            }
+
+            const stoppedUpdates = () =>
+                supabaseState.updates.filter(
+                    ({ table }) => table === "tabular_review_chat_messages",
+                );
+            const assistantInsertCount = () =>
+                supabaseState.inserts.filter(
+                    ({ table, payload }) =>
+                        table === "tabular_review_chat_messages" &&
+                        (payload as { role?: unknown }).role === "assistant",
+                ).length;
+
+            it("ends a turn stopped while its answer is saved as stopped: stored once, labelled, untitled, not curated", async () => {
+                const text = await stopDuring("save");
+
+                expect(text).toContain('"type":"cancelled"');
+                expect(text.split("data: [DONE]").length - 1).toBe(1);
+                // Inserted once as the finished answer, then marked as stopped.
+                expect(assistantInsertCount()).toBe(1);
+                expect(stoppedUpdates()).toEqual([
+                    {
+                        table: "tabular_review_chat_messages",
+                        payload: expect.objectContaining({
+                            content: [
+                                { type: "content", text: "Done" },
+                                { type: "content", text: "Cancelled by user." },
+                            ],
+                        }),
+                    },
+                ]);
+                expect(generateChatTitle).not.toHaveBeenCalled();
+                expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            });
+
+            it("ends a turn stopped while its title is generated as stopped, and does not curate it", async () => {
+                const text = await stopDuring("title");
+
+                expect(text).toContain('"type":"cancelled"');
+                expect(assistantInsertCount()).toBe(1);
+                expect(stoppedUpdates()).toHaveLength(1);
+                expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            });
         });
 
         it.each(["user", "idle", "max_lifetime"] as const)(

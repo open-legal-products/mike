@@ -15,6 +15,8 @@ import type {
   ConnectorApprovalItem,
   McpToolEvent,
 } from "@mike/contracts";
+import { AppError } from "../../../../lib/appError";
+import { reportError } from "../../../../lib/observability/sentry";
 import type { Db } from "../../../../lib/supabase";
 import type { ConnectorOwner } from "../../../../lib/connectorOwner";
 import type { ConnectorCallPlan } from "../../../../lib/mcp/types";
@@ -25,7 +27,14 @@ import {
 import {
   executeApprovedMcpToolCall,
   planMcpToolCall,
+  type McpToolCallResult,
 } from "../../../../lib/mcpConnectors";
+import type { ExternalSource } from "../../../../lib/sourceDocuments";
+import {
+  externalSourceFromMcpCall,
+  mcpResultCharsFor,
+} from "../../../source-documents/sourceDocuments.service";
+import { externalSourceReference } from "./externalSources";
 import {
   executeApprovedGoogleWorkspaceCall,
   isGoogleWorkspaceTool,
@@ -99,6 +108,12 @@ export async function runApprovedConnectorActions(args: {
   askEventId: string;
   userId: string;
   orgId?: string | null;
+  /**
+   * Receives a complete source document carried in an approved result, for
+   * the resumed request to register. Delivered in memory only: the stored
+   * event keeps its truncated result, never the document.
+   */
+  onExternalSource?: (source: ExternalSource) => void;
 }): Promise<McpToolEvent[]> {
   const { db, chatId, messageId, askEventId, userId } = args;
   const row = await loadAssistantMessage(db, chatId, messageId);
@@ -130,19 +145,24 @@ export async function runApprovedConnectorActions(args: {
   const events: McpToolEvent[] = [];
   for (const item of ask.items.filter(isApprovalItem)) {
     if (!approved.has(item.id)) continue;
-    const { content: result, event } =
-      item.binding.type === "google"
-        ? item.binding.provider === "google-drive"
-          ? await executeApprovedGoogleDriveCall(owner, item, db)
-          : await executeApprovedGoogleWorkspaceCall(owner, item, db)
-        : await executeApprovedMcpToolCall(owner, item, db);
+    const execution = await executeApprovedItem(owner, item, db);
+    const { content: result, event } = execution;
+    const source =
+      event.status === "ok" && execution.call
+        ? externalSourceFromMcpCall(execution.call)
+        : null;
+    if (source) args.onExternalSource?.(source);
     // These events are stored and streamed outside runLLMStream, so apply its
-    // rule here: the user never sees a connector's raw error text.
+    // rule here: the user never sees a connector's raw error text. A result
+    // that carried a source document is stored as its reference only: the
+    // resumed request receives the text in memory above, and the provider's
+    // text is never written into chat history.
+    const stored = source ? externalSourceReference(source.document) : result;
     events.push({
       ...event,
       ...(event.error ? { error: TOOL_ERROR_MESSAGE } : {}),
       approval_id: item.id,
-      result: result.slice(0, MAX_APPROVAL_RESULT_CHARS),
+      result: stored.slice(0, MAX_APPROVAL_RESULT_CHARS),
     });
   }
   if (events.length) {
@@ -156,6 +176,53 @@ export async function runApprovedConnectorActions(args: {
     );
   }
   return events;
+}
+
+/**
+ * Runs one approved item and always returns its outcome. Items before it may
+ * already have written to an external service, and the append that made them
+ * single-use is spent, so a throw here (a failed token or tool lookup) becomes
+ * this item's error result instead of discarding the whole batch's record.
+ */
+async function executeApprovedItem(
+  owner: ConnectorOwner,
+  item: ConnectorApprovalItem,
+  db: Db,
+): Promise<McpToolCallResult> {
+  try {
+    if (item.binding.type === "mcp")
+      return await executeApprovedMcpToolCall(owner, item, db, {
+        maxResultChars: mcpResultCharsFor,
+      });
+    return item.binding.provider === "google-drive"
+      ? await executeApprovedGoogleDriveCall(owner, item, db)
+      : await executeApprovedGoogleWorkspaceCall(owner, item, db);
+  } catch (error) {
+    const failure = new AppError(
+      "chat.approved_action_failed",
+      "Approved connector action failed",
+      { cause: error },
+    );
+    reportError(failure, { tags: { component: "chat-stream" } });
+    console.error("[connector-approvals] approved action failed", {
+      toolName: item.tool_name,
+      reported: failure,
+    });
+    return {
+      content: JSON.stringify({ ok: false, error: TOOL_ERROR_MESSAGE }),
+      event: {
+        type: "mcp_tool_call",
+        connector_id:
+          item.binding.type === "mcp" ? item.binding.connector_id : "",
+        connector_name: item.connector_name,
+        tool_name: item.tool_name,
+        tool_title: item.title,
+        openai_tool_name: item.tool_name,
+        status: "error",
+        error: TOOL_ERROR_MESSAGE,
+      },
+    };
+  }
 }
 
 /** Streams approved-action results the same way live connector calls stream. */

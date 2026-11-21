@@ -26,14 +26,17 @@ echo "==> frontend (next build, standalone, local reporting disabled)"
   npm run build -- --webpack)
 
 # Standalone output does not include static assets or public/ — the server
-# expects them beside it (Next's documented deployment step).
+# expects them beside it (Next's documented deployment step). The output is
+# traced from the repository root, so the server and its .next/ live under
+# standalone/frontend/.
+STANDALONE_APP=frontend/.next/standalone/frontend
 echo "==> staging static assets into the standalone server"
-rm -rf frontend/.next/standalone/.next/static frontend/.next/standalone/public
-cp -R frontend/.next/static frontend/.next/standalone/.next/static
-[ -d frontend/public ] && cp -R frontend/public frontend/.next/standalone/public
+rm -rf "$STANDALONE_APP/.next/static" "$STANDALONE_APP/public"
+cp -R frontend/.next/static "$STANDALONE_APP/.next/static"
+[ -d frontend/public ] && cp -R frontend/public "$STANDALONE_APP/public"
 # Next may trace a developer's local env file into standalone output. The
 # downloaded app receives its complete configuration from the supervisor.
-for file in frontend/.next/standalone/.env frontend/.next/standalone/.env.*; do
+for file in "$STANDALONE_APP"/.env "$STANDALONE_APP"/.env.*; do
   [ ! -f "$file" ] || rm "$file"
 done
 

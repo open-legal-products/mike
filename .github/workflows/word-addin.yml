@@ -21,7 +21,6 @@ on:
     branches: [main]
     paths:
       - "word-addin/**"
-      - "frontend/src/shared/**"
       - "frontend/public/icons/**"
       - "packages/**"
       - ".github/workflows/word-addin.yml"
@@ -32,6 +31,10 @@ on:
   schedule:
     - cron: "17 4 * * *"
 
+permissions:
+  contents: read
+
+
 # Don't pile up runs on rapid pushes to the same PR; pushes to main each get
 # their own group (keyed by sha) and are never cancelled.
 concurrency:
@@ -40,12 +43,13 @@ concurrency:
 
 jobs:
   streaming-development:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
     name: Development stress (chromium + webkit)
     # ~18-24 min against ~8 for the production job, so it stays off the PR
     # path: it runs on push to main, nightly, on manual dispatch, and on PRs
     # labelled `stress` (takes effect on the next push; see e2e.yml for why
     # there is no `labeled` trigger).
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'stress')
+    if: (github.repository == 'open-legal-products/mike' || github.event.repository.fork) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'stress'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
@@ -76,6 +80,8 @@ jobs:
           if-no-files-found: ignore
 
   playwright:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: Typecheck and Playwright (chromium + webkit)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -106,6 +112,11 @@ jobs:
       # Covers both the app bundle (tsconfig.json) and the e2e suite +
       # playwright.config.ts (tsconfig.e2e.json).
       - run: npm run typecheck
+
+      # server.mjs is the production host (word-addin/Dockerfile); the
+      # Playwright suite serves dist/ with a different static server, so its
+      # headers and proxy are only covered here.
+      - run: npm run test:server
 
       # Both engines: webkit is the browser the assertions were written for
       # (see header), chromium guards the honours-overflow-anchor path.

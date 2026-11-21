@@ -1,0 +1,20 @@
+{
+  "name": "@mike/ui",
+  "version": "0.0.0",
+  "private": true,
+  "description": "React primitives shared by the Mike web app and the Word add-in.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles/*": "./styles/*"
+  },
+  "sideEffects": false,
+  "peerDependencies": {
+    "@mike/client": "*",
+    "@radix-ui/react-dropdown-menu": "^2.2.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.58.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^3.7.0"
+  }
+}

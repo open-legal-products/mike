@@ -61,3 +61,27 @@ export async function readStoredDocumentText(db: Db, args: {
   if (error) throw error;
   return data as StoredDocumentText | null;
 }
+
+/**
+ * The cheap half of readStoredDocumentText: is the actor still allowed to read
+ * this document, and is the version still live at `revision`? A ready text row
+ * is keyed by its source revision, so "same revision" means "same text" and a
+ * caller holding that text from earlier in the turn may serve it again without
+ * transferring it. Same authorization function as read_document_text.
+ */
+export async function storedDocumentTextCurrent(db: Db, args: {
+  userId: string; userEmail?: string | null; documentId: string; versionId: string; revision: string;
+}): Promise<boolean> {
+  const [access, version] = await Promise.all([
+    db.rpc("document_text_access", {
+      p_document_id: args.documentId, p_user_id: args.userId, p_user_email: args.userEmail ?? null,
+    }),
+    db.from("document_versions").select("text_revision")
+      .eq("id", args.versionId).eq("document_id", args.documentId).is("deleted_at", null)
+      .maybeSingle(),
+  ]);
+  if (access.error) throw access.error;
+  if (version.error) throw version.error;
+  return access.data === true
+    && (version.data as { text_revision?: string | null } | null)?.text_revision === args.revision;
+}

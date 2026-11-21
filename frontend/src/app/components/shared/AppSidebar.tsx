@@ -23,8 +23,7 @@ import {
     PERSONAL_WORKSPACE,
     useWorkspace,
 } from "@/app/contexts/WorkspaceContext";
-import { workspaceName } from "@/shared/lib/workspaceSelection";
-import { WorkspaceMenuUI } from "@/shared/ui/WorkspaceMenuUI";
+import { workspaceName } from "@mike/client";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { SidebarChatItem } from "@/app/components/shared/SidebarChatItem";
@@ -33,7 +32,8 @@ import {
     DropdownContent,
     DropdownItem,
     DropdownTrigger,
-} from "@/shared/ui/dropdown";
+    WorkspaceMenuUI,
+} from "@mike/ui";
 import { SidebarHeading } from "@/app/components/shared/SidebarHeading";
 import { SidebarLogo } from "@/app/components/shared/SidebarLogo";
 import { SidebarProjectItem } from "@/app/components/shared/SidebarProjectItem";

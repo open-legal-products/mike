@@ -56,3 +56,6 @@ export {
 } from "./projects.folders";
 
 export { listProjectChats } from "./projects.chats";
+
+export { deleteProjectsByIds } from "./projects.lifecycle";
+export { buildProjectExportManifest, projectManifestFilename } from "./projects.export";

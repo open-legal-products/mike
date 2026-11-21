@@ -1,15 +1,15 @@
 import React, { useState } from "react";
 import { useAuth } from "./useAuth";
-import { InputUI } from "@mike/input-ui";
-import { Label } from "../../shared/ui/label";
-import { WordAddinLogo } from "../components/shell/WordAddinLogo";
-import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
-import { GoogleIconUI } from "@mike/google-icon-ui";
-import { AuthDividerUI as AuthDivider } from "@mike/auth-divider-ui";
 import {
+  InputUI,
+  PillButtonUI as PillButton,
+  GoogleIconUI,
+  AuthDividerUI as AuthDivider,
   authGlassCardUIClassName,
   authInputUIClassName,
-} from "@mike/auth-styles-ui";
+} from "@mike/ui";
+import { Label } from "../../shared/ui/label";
+import { WordAddinLogo } from "../components/shell/WordAddinLogo";
 import { WEB_APP_URL, openExternalUrl } from "../lib/openExternalUrl";
 
 function openWebAuthPage(

@@ -56,7 +56,13 @@ export function makeFakeDb(spec: FakeDbSpec = {}): FakeDb {
 
     function from(table: string) {
         const state: RecordedCall = { table, op: "select", filters: {} };
+        // A keyset continuation (`.gt(key, last)`) asks for the page after
+        // the seeded rows: a seeded result is the WHOLE answer, so the next
+        // page is empty, and it does not consume the table's next seed.
+        let continuation = false;
         const settle = () => {
+            if (continuation && state.op === "select")
+                return Promise.resolve({ data: [], error: null });
             calls.push({ ...state, filters: { ...state.filters } });
             return Promise.resolve(resultFor(table));
         };
@@ -91,6 +97,10 @@ export function makeFakeDb(spec: FakeDbSpec = {}): FakeDb {
             is: filter,
             not: filter,
             or: () => builder,
+            gt: () => {
+                continuation = true;
+                return builder;
+            },
             order: () => builder,
             limit: () => builder,
             range: () => builder,

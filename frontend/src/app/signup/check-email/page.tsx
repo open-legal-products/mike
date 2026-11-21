@@ -4,9 +4,8 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { authGlassCardUIClassName } from "@/shared/ui/AuthStylesUI";
+import { authGlassCardUIClassName, pillButtonUIClassName } from "@mike/ui";
 import { SiteLogo } from "@/app/components/site-logo";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import { useAuth } from "@/app/contexts/AuthContext";
 
 export default function SignupCheckEmailPage() {

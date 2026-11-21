@@ -1,33 +1,33 @@
 "use client";
 
-import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
-import caseLaw from "../../../../public/icons/legal-sources/case-law.svg";
-import legislation from "../../../../public/icons/legal-sources/legislation.svg";
 import { useEffect, useState } from "react";
 import { Download, ExternalLink, SquarePen } from "lucide-react";
 import { downloadDocumentFile } from "@/app/lib/downloadDocument";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
-import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
+import { TextButtonUI, textButtonUIClassName } from "@mike/ui";
 import { WarningPopup } from "../popups/WarningPopup";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { DocumentVersionPicker } from "./DocumentVersionPicker";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { VersionChip } from "./VersionChip";
 import type { PanelDocument } from "./types";
+import { documentCapabilities } from "./documentCapabilities";
+import { LegalSourceIcon } from "./LegalSourceIcon";
 import type { DocxSaveState } from "./views/DocxRenderer.types";
 import { DocxSaveErrorPopup } from "./views/DocxSaveErrorPopup";
 
-type ExternalSourceLink = {
-    href: string;
-    label: string;
-    title: string;
-};
+function isSafeSourceUrl(value: string): boolean {
+    try {
+        const url = new URL(value);
+        return url.protocol === "https:" && !url.username && !url.password;
+    } catch {
+        return false;
+    }
+}
 
 export function DocumentTitleRow({
     document,
     isReloading,
-    compactActions,
     onDownload,
     saveState,
     onVersionChange,
@@ -36,7 +36,6 @@ export function DocumentTitleRow({
 }: {
     document: PanelDocument;
     isReloading: boolean;
-    compactActions: boolean;
     /** Export live editor bytes when available; undefined falls back to the server version. */
     onDownload?: () => Promise<void> | undefined;
     saveState?: DocxSaveState | null;
@@ -44,10 +43,17 @@ export function DocumentTitleRow({
     toolbarVisible?: boolean;
     onToggleToolbar?: () => void;
 }) {
+    const { external, legalIcon } = documentCapabilities(document);
+    // Versions and the file download belong to uploads only.
     const isFile =
-        document.type === "docx" ||
-        document.type === "pdf" ||
-        document.type === "spreadsheet";
+        !external &&
+        (document.type === "docx" ||
+            document.type === "pdf" ||
+            document.type === "spreadsheet");
+    // A provider's links are shown only when credential-free HTTPS.
+    const actions = (document.actions ?? []).filter(
+        (action) => !external || isSafeSourceUrl(action.url),
+    );
     const versionNumber = document.version_number;
 
     return (
@@ -57,19 +63,8 @@ export function DocumentTitleRow({
             <div className="flex items-center gap-3">
                 <div className="flex min-w-0 flex-1 items-center gap-2">
                     <span className="shrink-0">
-                        {document.type === "case" ||
-                        document.type === "legislation" ? (
-                            <SvgAssetIcon
-                                src={
-                                    document.type === "case"
-                                        ? caseLaw
-                                        : legislation
-                                }
-                                aria-hidden="true"
-                                width={14}
-                                height={14}
-                                className="h-3.5 w-3.5 shrink-0 object-contain"
-                            />
+                        {legalIcon ? (
+                            <LegalSourceIcon kind={legalIcon} />
                         ) : (
                             <FileTypeIcon
                                 fileType={document.title}
@@ -135,7 +130,7 @@ export function DocumentTitleRow({
                             onDownload={onDownload}
                         />
                     )}
-                    {(document.actions ?? []).map((action, index) =>
+                    {actions.map((action, index) =>
                         action.type === "download" ? (
                             <UrlDownloadButton
                                 key={`${action.type}:${action.url}:${index}`}
@@ -144,12 +139,7 @@ export function DocumentTitleRow({
                         ) : (
                             <ExternalSourceLinkButton
                                 key={`${action.type}:${action.url}:${index}`}
-                                link={{
-                                    href: action.url,
-                                    label: action.label,
-                                    title: action.title ?? action.label,
-                                }}
-                                compact={compactActions}
+                                href={action.url}
                             />
                         ),
                     )}
@@ -244,28 +234,20 @@ function UrlDownloadButton({
     );
 }
 
-function ExternalSourceLinkButton({
-    link,
-    compact,
-}: {
-    link: ExternalSourceLink;
-    compact: boolean;
-}) {
+/** Icon-only, like the download action: the name is fixed, not per source. */
+function ExternalSourceLinkButton({ href }: { href: string }) {
     return (
         <a
-            href={link.href}
+            href={href}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={link.title}
-            title={link.title}
+            aria-label="Open link"
+            title="Open link"
             className={textButtonUIClassName({
-                size: compact ? "icon-xs" : "sm",
+                size: "icon-xs",
             })}
         >
             <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
-            <span className={compact ? "sr-only" : undefined}>
-                {link.label}
-            </span>
         </a>
     );
 }

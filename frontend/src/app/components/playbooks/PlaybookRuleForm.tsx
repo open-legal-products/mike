@@ -6,8 +6,7 @@ import { ModalSelect } from "@/app/components/modals/ModalSelect";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
+import { PillButtonUI, TextButtonUI } from "@mike/ui";
 import {
   PlaybookField as Field,
   PLAYBOOK_HELP_CLASS,

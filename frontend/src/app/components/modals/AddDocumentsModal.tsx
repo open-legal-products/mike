@@ -25,6 +25,10 @@ import {
 } from "@/app/lib/documentUploadValidation";
 import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
 import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    settleBulkRequests,
+    type BulkRequestOutcome,
+} from "@/app/lib/bulkRequests";
 
 interface Props {
     open: boolean;
@@ -231,30 +235,22 @@ function AddDocumentsModalForWorkspace({
         carry: Document[],
     ) {
         setUploading(true);
-        let results: PromiseSettledResult<Document>[];
+        let outcome: BulkRequestOutcome<Document, Document>;
         try {
-            results = await Promise.allSettled(
-                toAssign.map((d) => addDocumentToProject(targetProjectId, d.id)),
+            outcome = await settleBulkRequests(toAssign, (d) =>
+                addDocumentToProject(targetProjectId, d.id),
             );
         } finally {
             setUploading(false);
         }
-        const assigned = results.flatMap((result) =>
-            result.status === "fulfilled" ? [result.value] : [],
-        );
-        const failed = toAssign.filter(
-            (_, index) => results[index]?.status === "rejected",
-        );
+        const { values: assigned, failed, firstError } = outcome;
         if (failed.length === 0) {
             onSelect([...carry, ...assigned], targetProjectId);
             onClose();
             return;
         }
-        const firstFailure = results.find(
-            (result) => result.status === "rejected",
-        ) as PromiseRejectedResult | undefined;
         const names = failed.map((d) => d.filename).join(", ");
-        notifyError(firstFailure?.reason, {
+        notifyError(firstError, {
             action:
                 failed.length === 1
                     ? `add ${names} to this project`

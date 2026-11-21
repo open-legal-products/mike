@@ -181,7 +181,7 @@ describe("not-configured degradation (shared policy)", () => {
     expect(adapter.deleteFile).not.toHaveBeenCalled();
   });
 
-  it("logs and swallows adapter failures on download and signing", async () => {
+  it("throws adapter failures on download and signing once, without logging them", async () => {
     const adapter = fakeAdapter({
       downloadFile: vi.fn(async () => {
         throw new Error("boom");
@@ -196,12 +196,19 @@ describe("not-configured degradation (shared policy)", () => {
     storage.setStorageAdapter(adapter);
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    await expect(storage.downloadFile("k")).resolves.toBeNull();
-    await expect(storage.getSignedUrl("k")).resolves.toBeNull();
+    // The caller's handler reports each of these with the cause; a log line
+    // here filed the same failure a second time.
+    await expect(storage.downloadFile("k")).rejects.toMatchObject({
+      kind: "storage.download_failed",
+      operation: "download",
+    });
+    await expect(storage.getSignedUrl("k")).rejects.toMatchObject({
+      kind: "storage.signed_url_failed",
+    });
     await expect(
       storage.getSignedUploadUrl("k", "text/plain", 1),
-    ).resolves.toBeNull();
-    expect(log).toHaveBeenCalledTimes(3);
+    ).rejects.toMatchObject({ kind: "storage.signed_url_failed" });
+    expect(log).not.toHaveBeenCalled();
     log.mockRestore();
   });
 
@@ -247,6 +254,27 @@ describe("not-configured degradation (shared policy)", () => {
       "Object storage download failed",
     );
     log.mockRestore();
+  });
+
+  it("gives up on a streamed read that stalls, and releases the store", async () => {
+    vi.stubEnv("STORAGE_DOWNLOAD_TIMEOUT_MS", "20");
+    let storeSignal: AbortSignal | undefined;
+    const adapter = fakeAdapter({
+      openReadStream: vi.fn(async (_key, options) => {
+        storeSignal = options?.signal;
+        return (async function* () {
+          yield new Uint8Array([1]);
+          // A store that never answers again (and ignores the abort).
+          await new Promise(() => undefined);
+        })();
+      }),
+    });
+    storage.setStorageAdapter(adapter);
+
+    const stream = await storage.openFileStream("k");
+    await expect(collect(stream)).rejects.toThrow("Object storage download failed");
+    expect(storeSignal?.aborted).toBe(true);
+    vi.unstubAllEnvs();
   });
 
   it("names delete failures and skips keys that name no object", async () => {

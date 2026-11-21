@@ -10,14 +10,62 @@ vi.mock("../../../lib/convert", () => ({ docxToPdf: mocks.convert }));
 vi.mock("../../../lib/spreadsheet", () => ({ spreadsheetToLLMText: mocks.sheet }));
 vi.mock("../../../lib/officeText", () => ({ extractPresentationText: mocks.slides }));
 vi.mock("mammoth", () => ({ extractRawText: mocks.mammoth }));
+import { processClaimedJob } from "../../../lib/dbq/runner";
+import { ExtractionLimitError, withBackgroundExtraction } from "../../../lib/extraction/isolated";
+const sentry = vi.hoisted(() => ({ reportError: vi.fn(), setOperation: vi.fn() }));
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/observability/sentry")>();
+  sentry.reportError.mockImplementation(actual.reportError);
+  return { ...actual, reportError: sentry.reportError, setOperation: sentry.setOperation };
+});
+import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { extractDocumentText, handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText, processDocumentTextInline } from "../documents.indexing";
 const job = { id: "job", kind: "document.extract_text", payload: { versionId: "v1", revision: "r1" }, status: "pending", attempts: 0, max_attempts: 3, run_at: "", claimed_at: null, finished_at: null, last_error: null, dedupe_key: null, result: null, created_at: "" } satisfies DbJob;
 const bytes = new TextEncoder().encode("source bytes").buffer;
 const version = { id: "v1", storage_path: "source", file_type: "docx", text_revision: "r1" };
 beforeEach(() => { vi.resetAllMocks(); mocks.download.mockResolvedValue(bytes); mocks.docx.mockResolvedValue("Complete clause\n\nAnother clause"); });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 describe("version text extraction", () => {
+  it("returns a busy claim to Postgres without download, terminal failure, or spending its last attempt", async () => {
+    let release!: () => void;
+    const held = withBackgroundExtraction({}, () => new Promise<void>((resolve) => { release = resolve; }));
+    const fake = scriptedDb([{ table: "db_jobs", op: "update" }]);
+    vi.useFakeTimers();
+    const claimed = { ...job, status: "running" as const, attempts: 3, claimed_at: "2026-10-27T00:00:00Z" };
+    try {
+      const processing = processClaimedJob(fake.db, { "document.extract_text": handleDocumentExtractText }, claimed);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await processing;
+      expect(mocks.download).not.toHaveBeenCalled();
+      expect(fake.calls[0].payload).toMatchObject({ status: "pending", attempts: 2 });
+      expect(fake.calls[0].filters).toEqual(expect.arrayContaining([
+        ["eq", "id", "job"], ["eq", "status", "running"], ["eq", "attempts", 3], ["eq", "claimed_at", claimed.claimed_at],
+      ]));
+      fake.done();
+    } finally { release(); await held; }
+  });
+  it("waits for busy inline work and publishes it without a later sweep", async () => {
+    vi.stubEnv("DB_JOBS_ENABLED", "false");
+    let release!: () => void;
+    const held = withBackgroundExtraction({}, () => new Promise<void>((resolve) => { release = resolve; }));
+    const fake = scriptedDb([
+      { table: "db_jobs", data: [job] },
+      { table: "document_versions", data: version },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { rpc: "publish_document_text", data: true },
+      { table: "db_jobs", op: "update" },
+    ]);
+    const processing = processDocumentTextInline(fake.db);
+    try {
+      await Promise.resolve();
+      expect(mocks.download).not.toHaveBeenCalled();
+    } finally { release(); await held; }
+    await processing;
+    expect(mocks.download).toHaveBeenCalledOnce();
+    expect(fake.calls[4].payload).toMatchObject({ status: "done" });
+    fake.done();
+  });
   it("publishes complete text against the revision and source hash, removing only unsupported NUL", async () => {
     mocks.docx.mockResolvedValue("Full\0 text\n" + "x".repeat(100000));
     const fake = scriptedDb([{ table: "document_versions", data: version }, { table: "document_version_texts", op: "update", data: { version_id: "v1" } }, { rpc: "publish_document_text", data: true }]);
@@ -50,10 +98,95 @@ describe("version text extraction", () => {
     expect(fake.calls[0].filters).toContainEqual(["eq", "source_revision", "r1"]);
     expect(fake.calls[0].payload).toMatchObject({ status: "failed", error_code: "extraction_failed" }); fake.done();
   });
-  it("propagates extraction failure for queue retries", async () => {
-    mocks.docx.mockRejectedValue(new Error("invalid document"));
-    const fake = scriptedDb([{ table: "document_versions", data: version }, { table: "document_version_texts", op: "update", data: { version_id: "v1" } }]);
-    await expect(handleDocumentExtractText(fake.db, job)).rejects.toThrow("invalid document"); fake.done();
+  it("fails a file over the download backstop terminally without downloading it", async () => {
+    const fake = scriptedDb([{ table: "document_versions", data: { ...version, file_type: "xlsx", size_bytes: 200 * 1024 * 1024 } }, { table: "document_version_texts", op: "update" }]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.sheet).not.toHaveBeenCalled();
+    expect(fake.calls[1].payload).toMatchObject({ status: "failed", error_code: "too_large" }); fake.done();
+  });
+  it("fails a file that hits an extraction limit terminally instead of retrying", async () => {
+    mocks.sheet.mockImplementation(() => { throw new ExtractionLimitError("took longer than 180s"); });
+    const fake = scriptedDb([{ table: "document_versions", data: { ...version, file_type: "xlsx", size_bytes: 65 * 1024 * 1024 } }, { table: "document_version_texts", op: "update", data: { version_id: "v1" } }, { table: "document_version_texts", op: "update" }]);
+    await handleDocumentExtractText(fake.db, job);
+    expect(fake.calls[2].payload).toMatchObject({ status: "failed", error_code: "too_large" }); fake.done();
+  });
+  // The other half of that pair: a converter that could not start says
+  // nothing about the bytes. The next attempt may find it, so the job keeps
+  // its retries instead of failing a valid document on its first attempt.
+  it("retries a document whose converter failed to start", async () => {
+    const { AppError } = await import("../../../lib/appError.js");
+    const spawnFailure = Object.assign(new Error("spawn soffice ENOENT"), { code: "ENOENT", syscall: "spawn soffice" });
+    mocks.convert.mockRejectedValue(new AppError("conversion.unavailable", "LibreOffice could not be started", { cause: spawnFailure }));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, file_type: "doc" } },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "db_jobs", op: "update" },
+    ]);
+    await processClaimedJob(
+      fake.db,
+      { "document.extract_text": handleDocumentExtractText },
+      { ...job, status: "running", attempts: 1 },
+      { "document.extract_text": markDocumentTextFailed },
+    );
+    expect(fake.calls[2].payload).toMatchObject({ status: "pending" });
+    expect(fake.calls[2].payload).not.toMatchObject({ status: "failed" });
+    fake.done();
+    expect(diagnosticErrorTags(sentry.reportError.mock.calls[0]![0])).toMatchObject({ error_kind: "conversion.unavailable", failure_code: "ENOENT" });
+  });
+  // The source hash already matched, so a parser rejection repeats on every
+  // attempt: max_attempts=3 used to parse the same corrupt file three times.
+  it("fails an unreadable document once instead of spending its retries", async () => {
+    // JSZip's own rejection of a .docx that is not a ZIP container.
+    mocks.docx.mockRejectedValue(new Error("Can't find end of central directory : is this a zip file ?"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "document_versions", data: version },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "db_jobs", op: "update" },
+      { table: "document_version_texts", op: "update" },
+    ]);
+    await processClaimedJob(
+      fake.db,
+      { "document.extract_text": handleDocumentExtractText },
+      { ...job, status: "running", attempts: 1 },
+      { "document.extract_text": markDocumentTextFailed },
+    );
+    expect(fake.calls[2].payload).toMatchObject({ status: "failed", last_error: "document_text_unreadable" });
+    expect(fake.calls[3].payload).toMatchObject({ status: "failed", error_code: "extraction_failed" });
+    fake.done();
+    // The user's own file, and nothing in Mike can read it: logged on the
+    // server, not sent to Sentry.
+    expect(sentry.setOperation).toHaveBeenCalledWith("documents.extract");
+    expect(sentry.reportError).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith("[dbq] job permanently failed", expect.objectContaining({ kind: "document.extract_text", message: "document_text_unreadable" }));
+  });
+  // The counterexample: the same pdf_parse_failed kind, but pdf.js itself
+  // could not load. That is the deployment, not the file, so it keeps its
+  // retries and its report.
+  it("still reports a PDF whose parser could not load", async () => {
+    const { AppError } = await import("../../../lib/appError.js");
+    const missing = Object.assign(new Error("Cannot find module 'pdfjs-dist'"), { code: "ERR_MODULE_NOT_FOUND" });
+    mocks.pdf.mockRejectedValue(new AppError("extraction.pdf_parse_failed", "document_text_pdf_unreadable", {
+      cause: new AppError("extraction.failed", "pdf.js could not be loaded", { cause: missing }),
+    }));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "document_versions", data: { ...version, file_type: "pdf" } },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "db_jobs", op: "update" },
+    ]);
+    await processClaimedJob(
+      fake.db,
+      { "document.extract_text": handleDocumentExtractText },
+      { ...job, status: "running", attempts: 1 },
+      { "document.extract_text": markDocumentTextFailed },
+    );
+    expect(fake.calls[2].payload).toMatchObject({ status: "pending" });
+    fake.done();
+    expect(sentry.reportError).toHaveBeenCalledOnce();
+    expect(sentry.reportError.mock.calls[0]![1]).toMatchObject({ level: "warning", tags: { job_kind: "document.extract_text", terminal: false } });
   });
   it.each(["xlsx", "xlsm", "xls"])("uses the full spreadsheet reader for %s", async (type) => {
     mocks.sheet.mockReturnValue("Sheet and cell addresses");
@@ -79,5 +212,52 @@ describe("version text extraction", () => {
     await processDocumentTextInline(fake.db, ["v1"]);
     expect(fake.calls[0].filters).toContainEqual(["in", "payload->>versionId", ["v1"]]);
     expect(fake.calls[4].payload).toMatchObject({ status: "done" }); fake.done();
+  });
+  // The inline path has no runner above it: a failure was logged through
+  // safeError and reached Sentry (if at all) as a context-free console line.
+  // It is now reported once, named after the job, with the extractor's error
+  // as the cause, and the console line carries the same object.
+  it("reports an inline extraction failure once, named after the job", async () => {
+    vi.stubEnv("DB_JOBS_ENABLED", "false");
+    const cause = Object.assign(new Error("PRIVATE_NAME.docx is corrupt"), { code: "ENOENT" });
+    mocks.docx.mockRejectedValue(cause);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "db_jobs", data: [job] },
+      { table: "document_versions", data: version },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "document_version_texts", op: "update" },
+      { table: "db_jobs", op: "update" },
+    ]);
+    await processDocumentTextInline(fake.db, ["v1"]);
+    expect(fake.calls[4].payload).toMatchObject({ status: "failed", last_error: "extraction_failed" }); fake.done();
+
+    expect(sentry.reportError).toHaveBeenCalledOnce();
+    const [reported, context] = sentry.reportError.mock.calls[0]!;
+    // An errno is the environment, not the bytes: the extractor's own error
+    // stays the cause, unwrapped, and the job keeps its retries.
+    expect(diagnosticErrorTags(reported)).toEqual({ error_kind: "extraction.failed", failure_code: "ENOENT" });
+    expect((reported as Error).cause).toBe(cause);
+    expect(context).toMatchObject({ tags: { job_kind: "document.extract_text" }, extra: { job_id: "job" } });
+    expect(JSON.stringify(context)).not.toContain("PRIVATE_NAME");
+    expect(log).toHaveBeenCalledWith(expect.any(String), reported);
+    log.mockRestore();
+  });
+  it("keeps an extractor's own kind when the inline path reports it", async () => {
+    vi.stubEnv("DB_JOBS_ENABLED", "false");
+    const { AppError } = await import("../../../lib/appError.js");
+    mocks.pdf.mockRejectedValue(new AppError("extraction.pdf_parse_failed", "document_text_pdf_unreadable"));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fake = scriptedDb([
+      { table: "db_jobs", data: [job] },
+      { table: "document_versions", data: { ...version, file_type: "pdf" } },
+      { table: "document_version_texts", op: "update", data: { version_id: "v1" } },
+      { table: "document_version_texts", op: "update" },
+      { table: "db_jobs", op: "update" },
+    ]);
+    await processDocumentTextInline(fake.db, ["v1"]);
+    fake.done();
+    const [reported] = sentry.reportError.mock.calls[0]!;
+    expect(diagnosticErrorTags(reported)).toEqual({ error_kind: "extraction.pdf_parse_failed" });
   });
 });

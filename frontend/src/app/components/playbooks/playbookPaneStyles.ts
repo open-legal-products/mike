@@ -15,8 +15,6 @@ export const PLAYBOOK_PANE_BODY_CLASS =
 export const PLAYBOOK_SIDE_HEADER_CLASS =
   `pl-4 pr-2 md:pl-5 md:pr-3 ${PLAYBOOK_PANE_HEADER_RHYTHM_CLASS}`;
 
-export const PLAYBOOK_SIDE_BODY_CLASS = "px-4 pb-4 pt-2 md:px-5";
-
 // Rows already have px-2 and py-1.5, so their text lands on the header's
 // inset and 8px below it, like the side body.
 export const PLAYBOOK_SIDE_LIST_CLASS = "px-2 pb-2 pt-0.5 md:px-3";

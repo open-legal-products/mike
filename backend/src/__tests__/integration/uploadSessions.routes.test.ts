@@ -9,6 +9,12 @@ const mocks = vi.hoisted(() => ({
   checkWorkflowAccess: vi.fn(),
   /** The row the `documents` read answers with. */
   documentRow: { data: null as unknown, error: null as unknown },
+  setOperation: vi.fn(),
+}));
+
+vi.mock("../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/observability/sentry")>()),
+  setOperation: mocks.setOperation,
 }));
 
 vi.mock("../../middleware/auth", () => ({
@@ -118,6 +124,8 @@ describe("upload session routes", () => {
     expect(response.body.files[0].upload.headers).not.toHaveProperty(
       "Content-Length",
     );
+    // Every event this request produces is tagged with the session flow.
+    expect(mocks.setOperation).toHaveBeenCalledWith("upload_session.control");
   });
 
   it("rejects more than 50 files without touching the database or storage", async () => {

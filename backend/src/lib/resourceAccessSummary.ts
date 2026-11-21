@@ -1,3 +1,4 @@
+import { queryFailureCause, selectInBatches } from "./batchedQuery";
 import type { Db } from "./supabase";
 
 type ResourceKind = "project" | "workflow";
@@ -73,16 +74,32 @@ export async function ensureResourceAccessSummaries<T extends AccessSummaryRow>(
   );
 
   const accessScopesComplete = rows.every(hasCompleteAccessScope);
+  // A page is up to 100 resources: past the gateway's id-list limit, so
+  // each lookup goes in 50-id batches (a failed batch is the same failure
+  // result as before, carrying the database error).
+  const batched = async (
+    label: string,
+    query: (batch: string[]) => PromiseLike<{ data: unknown[] | null; error: unknown }>,
+  ): Promise<{ data: unknown[]; error: unknown }> => {
+    try {
+      return { data: await selectInBatches(label, ids, query), error: null };
+    } catch (error) {
+      return { data: [], error: queryFailureCause(error) };
+    }
+  };
   const [resourceResult, grantResult, overrideResult] = await Promise.all([
     accessScopesComplete
       ? Promise.resolve({ data: [], error: null })
-      : db.from(resourceTable).select("id, org_id").in("id", ids),
-    db.from(grantTable).select(grantResourceKey).in(grantResourceKey, ids),
+      : batched("access summary resources", (batch) =>
+          db.from(resourceTable).select("id, org_id").in("id", batch)),
+    batched("access summary grants", (batch) =>
+      db.from(grantTable).select(grantResourceKey).in(grantResourceKey, batch)),
     sharedInAnOrganization
-      ? db
-          .from(overrideTable)
-          .select(`${grantResourceKey}, role`)
-          .in(grantResourceKey, ids)
+      ? batched("access summary overrides", (batch) =>
+          db
+            .from(overrideTable)
+            .select(`${grantResourceKey}, role`)
+            .in(grantResourceKey, batch))
       : Promise.resolve({ data: [], error: null }),
   ]);
   if (resourceResult.error) return { rows, error: resourceResult.error };

@@ -39,6 +39,74 @@ describe("ZIP export limits", () => {
     );
   });
 
+  it("preserves path-like and normalized-collision document names as distinct leaf entries", async () => {
+    const requested = [
+      "Agreement.pdf", "../Agreement.pdf", "./Agreement.pdf",
+      "folder/../Agreement.pdf", "folder\\..\\Agreement.pdf",
+      "folder_.._Agreement.pdf", " .._Agreement.pdf ",
+      "bad\u0000name.pdf", "bad_name.pdf",
+    ];
+    const expected = [
+      "Agreement.pdf", ".._Agreement.pdf", "._Agreement.pdf",
+      "folder_.._Agreement.pdf", "folder_.._Agreement (2).pdf",
+      "folder_.._Agreement (3).pdf", ".._Agreement (2).pdf",
+      "bad_name.pdf", "bad_name (2).pdf",
+    ];
+    const zip = new JSZip();
+    const usedNames = new Set<string>();
+    requested.forEach((name, index) => {
+      zip.file(uniqueArchiveFilename(name, usedNames), `original-${index}`);
+    });
+
+    const reopened = await JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
+
+    expect(Object.keys(reopened.files)).toEqual(expected);
+    expect(Object.values(reopened.files).every(entry => !entry.dir)).toBe(true);
+    for (const [index, name] of expected.entries()) {
+      expect(await reopened.file(name)!.async("string")).toBe(`original-${index}`);
+    }
+  });
+
+  it("preserves dot-only names and replacement-name collisions after reopening the archive", async () => {
+    const requested = [".", "..", " . ", " .. ", "_", "_ (2)", "...", ".env"];
+    const expected = ["_", "_ (2)", "_ (3)", "_ (4)", "_ (5)", "_ (2) (2)", "...", ".env"];
+    const zip = new JSZip();
+    const usedNames = new Set<string>();
+    requested.forEach((name, index) => {
+      zip.file(uniqueArchiveFilename(name, usedNames), `original-${index}`);
+    });
+
+    const reopened = await JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
+
+    expect(Object.keys(reopened.files)).toEqual(expected);
+    expect(Object.values(reopened.files).every(entry => !entry.dir)).toBe(true);
+    for (const [index, name] of expected.entries()) {
+      expect(await reopened.file(name)!.async("string")).toBe(`original-${index}`);
+    }
+  });
+
+  it.each([
+    ["case", "Agreement.pdf", "agreement.pdf", "agreement (2).pdf"],
+    ["Unicode normalisation", "Résumé.pdf", "Résumé.pdf", "Résumé (2).pdf"],
+  ])("suffixes names that differ only by %s, which extract to one file", async (_, first, second, suffixed) => {
+    const usedNames = new Set<string>();
+    const zip = new JSZip();
+    zip.file(uniqueArchiveFilename(first, usedNames), "first");
+    zip.file(uniqueArchiveFilename(second, usedNames), "second");
+
+    const reopened = await JSZip.loadAsync(await zip.generateAsync({ type: "nodebuffer" }));
+
+    expect(Object.keys(reopened.files)).toEqual([first, suffixed]);
+    expect(await reopened.file(suffixed)!.async("string")).toBe("second");
+  });
+
+  it("writes a name nothing folds onto in its own case and Unicode form", () => {
+    const usedNames = new Set<string>();
+
+    expect(uniqueArchiveFilename("NDA - ACME.pdf", usedNames)).toBe("NDA - ACME.pdf");
+    expect(uniqueArchiveFilename("Résumé.PDF", usedNames)).toBe("Résumé.PDF");
+  });
+
   it("consumes streamed ZIP entries one at a time", async () => {
     let firstStarted = false;
     let secondStarted = false;

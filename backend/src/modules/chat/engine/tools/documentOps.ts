@@ -1,24 +1,20 @@
+import { loadVersionTextState, cachedTextForModel } from "../../../../lib/documentTextCache";
 import {
   applyTrackedEditsToDocument,
   createDocumentVersion,
   loadCurrentVersionBytes,
   readStoredDocumentText,
+  storedDocumentTextCurrent,
 } from "../../../documents/documents.service";
 
 // Tracked-change editing lives in the documents module; the tool dispatcher
 // keeps calling it by its tool-facing name.
 export { applyTrackedEditsToDocument as runEditDocument, loadCurrentVersionBytes };
-import {
-  downloadFile,
-  extractedTextKey,
-  generatedDocKey,
-  uploadFile,
-} from "../../../../lib/storage";
+import { downloadFileIfAvailable, extractedTextKey, generatedDocKey, uploadFile } from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import { enqueueDbJob } from "../../../../lib/dbq/enqueue";
 import type { Db } from "../../../../lib/supabase";
-import { extractDocxBodyText } from "../../../../lib/docxTrackedChanges";
 import { buildDownloadUrl } from "../../../../lib/downloadTokens";
 import {
   contentSha256,
@@ -38,8 +34,11 @@ import {
   requiresLibreOfficeTextExtraction,
   shouldConvertToPdf,
 } from "../../../../lib/documentTypes";
-import { extractPresentationText } from "../../../../lib/officeText";
-import { spreadsheetToLLMText } from "../../../../lib/spreadsheet";
+import {
+  ExtractionLimitError,
+  ExtractionBusyError,
+  withExtractionRequest,
+} from "../../../../lib/extraction/isolated";
 
 
 export function citationReminder(
@@ -64,10 +63,6 @@ export function citationReminder(
 }
 
 export { extractPdfText, extractLegacyOfficeText } from "../../../../lib/pdfText";
-import {
-  extractPdfTextForModel,
-  extractLegacyOfficeText,
-} from "../../../../lib/pdfText";
 
 export async function generateDocx(
   title: string,
@@ -1125,6 +1120,17 @@ export async function getTurnReadIdentity(params: {
   if (!docInfo) return null;
 
   const documentId = docIndex?.[docLabel]?.document_id;
+  if (docInfo.external_source) {
+    // A provider-backed source has no stored version or file: within the
+    // request it is identified by the provider's document id alone.
+    return {
+      key: `external:${docInfo.external_source.document_id}`,
+      docLabel,
+      filename: docInfo.filename,
+      documentId,
+      storagePath: "",
+    };
+  }
   if (docInfo.search_source) {
     const indexed = docIndex?.[docLabel];
     return {
@@ -1139,7 +1145,7 @@ export async function getTurnReadIdentity(params: {
     if (active?.storage_path) {
       return {
         // A reused version keeps its id but moves to a new file.
-        key: `${documentId}:${active.id}:${active.storage_path}`,
+        key: `${documentId}:${active.id}:${active.storage_path}:${active.text_revision ?? ""}`,
         docLabel,
         filename: docInfo.filename,
         documentId,
@@ -1196,6 +1202,9 @@ export function clearTurnReadsForDocument(
   }
 }
 
+// Lifetime is one turn's DocStore; retain only the latest read per label.
+const turnDocumentTexts = new WeakMap<DocStore, Map<string, { key: string; text: string }>>();
+
 export async function readDocumentContent(
   docLabel: string,
   docStore: DocStore,
@@ -1224,9 +1233,7 @@ export async function readDocumentContent(
   const documentId = docIndex?.[docLabel]?.document_id;
   const readIdentity =
     opts?.readIdentity ??
-    (emitEvents
-      ? await getTurnReadIdentity({ docLabel, docStore, docIndex, db })
-      : null);
+    await getTurnReadIdentity({ docLabel, docStore, docIndex, db });
   const versionId =
     readIdentity?.versionId ?? docIndex?.[docLabel]?.version_id ?? null;
   const versionNumber =
@@ -1266,6 +1273,16 @@ export async function readDocumentContent(
       return docInfo.inline_text;
     }
 
+    const cached = turnDocumentTexts.get(docStore)?.get(docLabel);
+    const remember = (text: string) => {
+      if (readIdentity) {
+        const texts = turnDocumentTexts.get(docStore) ?? new Map();
+        texts.set(docLabel, { key: readIdentity.key, text });
+        turnDocumentTexts.set(docStore, texts);
+      }
+      return text;
+    };
+
     // Search results are bound to a content revision, not just a mutable
     // version id. Recheck access before serving persisted text or any bytes.
     if (docInfo.search_source) {
@@ -1273,10 +1290,21 @@ export async function readDocumentContent(
         emitDocRead();
         return "Document could not be read.";
       }
-      const stored = await readStoredDocumentText(db, {
+      const actor = {
         userId: docInfo.search_source.userId, userEmail: docInfo.search_source.userEmail,
         documentId, versionId,
-      });
+      };
+      // A repeat read in the same turn rechecks access and revision, but does
+      // not transfer the (up to 16 MB) text again: the ready text for an
+      // unchanged revision is the text already held.
+      if (readIdentity && cached?.key === readIdentity.key) {
+        const current = await storedDocumentTextCurrent(db, {
+          ...actor, revision: docInfo.search_source.revision,
+        });
+        emitDocRead();
+        return current ? cached.text : "Document could not be read.";
+      }
+      const stored = await readStoredDocumentText(db, actor);
       if (!stored || stored.revision !== docInfo.search_source.revision || stored.status !== "ready") {
         emitDocRead();
         return "Document could not be read.";
@@ -1285,154 +1313,163 @@ export async function readDocumentContent(
       const notice = stored.textless_page_count
         ? `[${stored.textless_page_count} page(s) have no text layer and need OCR. Search coverage is incomplete.]\n\n`
         : "";
-      return notice + (stored.text ?? "");
+      return remember(notice + (stored.text ?? ""));
     }
 
-    // Prefer the current tracked-changes version (if any) so read_document
-    // reflects accepted/pending edits rather than the original upload.
-    let raw: ArrayBuffer | null = null;
-    let sourcePath = docInfo.storage_path;
-    if (documentId && db) {
-      const current = await loadCurrentVersionBytes(documentId, db, versionId);
-      if (current) {
-        raw = current.bytes.buffer.slice(
-          current.bytes.byteOffset,
-          current.bytes.byteOffset + current.bytes.byteLength,
-        ) as ArrayBuffer;
-        sourcePath = current.storage_path;
-        devLog(
-          `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
-        );
-      } else {
-        devLog(
-          `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
-        );
-      }
-    }
-    if (!raw) {
-      raw = await downloadFile(docInfo.storage_path);
-      if (raw) {
-        devLog(
-          `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
-        );
-      }
-    }
-    if (!raw) {
-      devLog(
-        `[read_document] FAILED to download any bytes for docLabel="${docLabel}" (tried path="${sourcePath}")`,
-      );
+    if (readIdentity && cached?.key === readIdentity.key) {
       emitDocRead();
-      return "Document could not be read.";
+      return cached.text;
     }
-    // Log the first 8 bytes so we can identify real file format regardless
-    // of the declared file_type. Valid .docx starts with "PK\x03\x04"
-    // (zip). Legacy .doc starts with "\xD0\xCF\x11\xE0" (OLE/CFB).
-    // %PDF-1 is a PDF even if mislabeled. Truncated uploads show as all-zero.
-    {
-      const head = Buffer.from(raw).subarray(0, 8);
-      const hex = head.toString("hex");
-      const ascii = head.toString("binary").replace(/[^\x20-\x7e]/g, ".");
-      devLog(
-        `[read_document] magic bytes hex=${hex} ascii="${ascii}" for filename="${docInfo.filename}"`,
-      );
-    }
-    let text: string;
-    const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
-    if (fileType === "pdf") {
-      text = await extractPdfTextForModel(raw);
-      devLog(
-        `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (fileType === "docx") {
-      // Use the same flattening as the edit_document matcher so the
-      // LLM sees exactly the characters it can anchor against.
-      text = await extractDocxBodyText(Buffer.from(raw));
-      devLog(
-        `[read_document] docx extractDocxBodyText length=${text.length} for filename="${docInfo.filename}"`,
-      );
-      if (!text) {
-        devLog(
-          `[read_document] docx accepted-view extractor returned empty, falling back to mammoth for filename="${docInfo.filename}"`,
-        );
-        const mammoth = await import("mammoth");
-        const result = await mammoth.extractRawText({
-          buffer: Buffer.from(raw),
-        });
-        text = result.value;
-        devLog(
-          `[read_document] docx mammoth fallback length=${text.length} for filename="${docInfo.filename}"`,
-        );
+    if (db && documentId && versionId) {
+      const stored = await loadVersionTextState(db, documentId, versionId, readIdentity?.storagePath);
+      if (stored?.text !== null && stored?.text !== undefined) {
+        emitDocRead();
+        return remember(cachedTextForModel(stored));
       }
-    } else if (isSpreadsheetDocumentType(fileType)) {
-      // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
-      // cell-addressed markdown view with Excel-formatted values.
-      text = spreadsheetToLLMText(Buffer.from(raw));
-      devLog(
-        `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (fileType === "pptx") {
-      text = await extractPresentationText(Buffer.from(raw));
-      devLog(
-        `[read_document] presentation extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    } else if (
-      isPresentationDocumentType(fileType) ||
-      isWordDocumentType(fileType)
-    ) {
-      // This branch is the only one that shells out to LibreOffice — every
-      // other type has an in-process reader above — so it is the only one
-      // worth caching. The cached object is written by the
-      // document.precompute_text job, keyed on the immutable version id.
-      const cacheKey =
-        versionId && requiresLibreOfficeTextExtraction(fileType)
-          ? extractedTextKey(versionId)
-          : null;
-      const cached = cacheKey ? await downloadFile(cacheKey) : null;
-      if (cached) {
-        text = Buffer.from(cached).toString("utf8");
-        devLog(
-          `[read_document] legacy Office text served from cache key="${cacheKey}" length=${text.length} for filename="${docInfo.filename}"`,
-        );
-      } else {
-        devLog(
-          `[read_document] legacy Office file_type="${fileType}" for filename="${docInfo.filename}", converting to pdf for text extraction`,
-        );
-        text = await extractLegacyOfficeText(raw);
-        devLog(
-          `[read_document] legacy Office PDF extraction length=${text.length} for filename="${docInfo.filename}"`,
-        );
-        // Warm the cache for the next read of this version. Fire-and-forget
-        // and deduped: several tool calls in one turn queue one job, and a
-        // failure here must never affect the text we just produced.
-        if (cacheKey && db) {
-          void enqueueDbJob(db, {
-            kind: "document.precompute_text",
-            payload: { versionId, storagePath: sourcePath, fileType },
-            dedupeKey: `precompute:${versionId}`,
-            maxAttempts: 3,
-          }).catch((err) =>
-            devLog(`[read_document] precompute enqueue failed`, err),
+    }
+
+    return await withExtractionRequest(async (extract) => {
+      // Prefer the current tracked-changes version (if any) so read_document
+      // reflects accepted/pending edits rather than the original upload.
+      let raw: ArrayBuffer | null = null;
+      let sourcePath = docInfo.storage_path;
+      if (documentId && db) {
+        const current = await loadCurrentVersionBytes(documentId, db, versionId);
+        if (current) {
+          raw = current.bytes.buffer.slice(
+            current.bytes.byteOffset,
+            current.bytes.byteOffset + current.bytes.byteLength,
+          ) as ArrayBuffer;
+          sourcePath = current.storage_path;
+          devLog(
+            `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
+          );
+        } else {
+          devLog(
+            `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
           );
         }
       }
-    } else {
+      if (!raw) {
+        raw = await downloadFileIfAvailable(docInfo.storage_path);
+        if (raw) {
+          devLog(
+            `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
+          );
+        }
+      }
+      if (!raw) {
+        devLog(
+          `[read_document] FAILED to download any bytes for docLabel="${docLabel}" (tried path="${sourcePath}")`,
+        );
+        emitDocRead();
+        return "Document could not be read.";
+      }
+      // Log the first 8 bytes so we can identify real file format regardless
+      // of the declared file_type. Valid .docx starts with "PK\x03\x04"
+      // (zip). Legacy .doc starts with "\xD0\xCF\x11\xE0" (OLE/CFB).
+      // %PDF-1 is a PDF even if mislabeled. Truncated uploads show as all-zero.
+      {
+        const head = Buffer.from(raw).subarray(0, 8);
+        const hex = head.toString("hex");
+        const ascii = head.toString("binary").replace(/[^\x20-\x7e]/g, ".");
+        devLog(
+          `[read_document] magic bytes hex=${hex} ascii="${ascii}" for filename="${docInfo.filename}"`,
+        );
+      }
+      let text: string;
+      const fileType = docInfo.file_type?.toLowerCase?.() ?? "";
+      // Parsing runs in a bounded process, while downloads may overlap.
+      const source = raw;
+      const readIsolated = (
+        op:
+          | "pdfForModel"
+          | "docxText"
+          | "spreadsheet"
+          | "presentation"
+          | "legacyOfficeText"
+          | "rawText",
+      ) => extract(op, source);
+      if (fileType === "pdf") {
+        text = await readIsolated("pdfForModel");
+        devLog(
+          `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (fileType === "docx") {
+        // Use the same flattening as the edit_document matcher so the
+        // LLM sees exactly the characters it can anchor against.
+        // (falls back to mammoth when the accepted view comes back empty)
+        text = await readIsolated("docxText");
+        devLog(
+          `[read_document] docx extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (isSpreadsheetDocumentType(fileType)) {
+        // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
+        // cell-addressed markdown view with Excel-formatted values.
+        text = await readIsolated("spreadsheet");
+        devLog(
+          `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (fileType === "pptx") {
+        text = await readIsolated("presentation");
+        devLog(
+          `[read_document] presentation extracted length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      } else if (
+        isPresentationDocumentType(fileType) ||
+        isWordDocumentType(fileType)
+      ) {
+        // This branch is the only one that shells out to LibreOffice — every
+        // other type has an in-process reader above — so it is the only one
+        // worth caching. The cached object is written by the
+        // document.precompute_text job, keyed on the immutable version id.
+        const cacheKey =
+          versionId && requiresLibreOfficeTextExtraction(fileType)
+            ? extractedTextKey(versionId)
+            : null;
+        const cached = cacheKey ? await downloadFileIfAvailable(cacheKey) : null;
+        if (cached) {
+          text = Buffer.from(cached).toString("utf8");
+          devLog(
+            `[read_document] legacy Office text served from cache key="${cacheKey}" length=${text.length} for filename="${docInfo.filename}"`,
+          );
+        } else {
+          devLog(
+            `[read_document] legacy Office file_type="${fileType}" for filename="${docInfo.filename}", converting to pdf for text extraction`,
+          );
+          text = await readIsolated("legacyOfficeText");
+          devLog(
+            `[read_document] legacy Office PDF extraction length=${text.length} for filename="${docInfo.filename}"`,
+          );
+          // Warm the cache for the next read of this version. Fire-and-forget
+          // and deduped: several tool calls in one turn queue one job, and a
+          // failure here must never affect the text we just produced.
+          if (cacheKey && db) {
+            void enqueueDbJob(db, {
+              kind: "document.precompute_text",
+              payload: { versionId, storagePath: sourcePath, fileType },
+              dedupeKey: `precompute:${versionId}`,
+              maxAttempts: 3,
+            }).catch((err) =>
+              devLog(`[read_document] precompute enqueue failed`, err),
+            );
+          }
+        }
+      } else {
+        devLog(
+          `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
+        );
+        text = await readIsolated("rawText");
+        devLog(
+          `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
+        );
+      }
       devLog(
-        `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
+        `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
       );
-      const mammoth = await import("mammoth");
-      const result = await mammoth.extractRawText({
-        buffer: Buffer.from(raw),
-      });
-      text = result.value;
-      devLog(
-        `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
-      );
-    }
-    devLog(
-      `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
-    );
-    emitDocRead();
-    return text;
+      emitDocRead();
+      return remember(text);
+    });
   } catch (err) {
     devLog(
       `[read_document] THREW for docLabel="${docLabel}" filename="${docInfo.filename}":`,
@@ -1448,8 +1485,20 @@ export async function readDocumentContent(
           version_number: versionNumber,
         })}\n\n`,
       );
-    return "Document could not be read.";
+    if (err instanceof ExtractionBusyError) return "Document processing is busy. Try again shortly.";
+    return err instanceof ExtractionLimitError
+      ? "Document is too large to read."
+      : "Document could not be read.";
   }
+}
+
+/** A hyphen, dash or minus sign directly between two digits. */
+function isDashBetweenDigits(text: string, i: number): boolean {
+  return (
+    /[\p{Pd}\u2212]/u.test(text[i]) &&
+    /\p{N}/u.test(text[i - 1] ?? "") &&
+    /\p{N}/u.test(text[i + 1] ?? "")
+  );
 }
 
 /** A character is "punctuation" for tolerant matching if it is not a letter,
@@ -1458,6 +1507,11 @@ export async function readDocumentContent(
 function isPunctuation(ch: string): boolean {
   return !/[\p{L}\p{N}\s]/u.test(ch);
 }
+
+export type NormalizeOptions = {
+  stripPunctuation?: boolean;
+  joinLineEndHyphens?: "keep" | "drop";
+};
 
 /**
  * Build a whitespace-collapsed, lowercased copy of `text`, plus a map from
@@ -1470,26 +1524,51 @@ function isPunctuation(ch: string): boolean {
  * normalized form too, making matching tolerant of punctuation drift (e.g. a
  * model that adds a stray comma or drops a period). The index map still points
  * back at the surviving original characters so the recovered excerpt is exact.
+ *
+ * With `joinLineEndHyphens`, a word hyphenated at the end of a line (PDF text
+ * "indem-", newline, "nification") is joined with the next line: "keep" keeps
+ * the hyphen ("1998-", newline, "2001" -> "1998-2001"), "drop" removes it
+ * ("indemnification"). See `lineEndHyphenJoin` for exactly what counts.
  */
 export function normalizeWithMap(
   text: string,
-  opts: { stripPunctuation?: boolean } = {},
+  opts: NormalizeOptions = {},
 ): { norm: string; origIdx: number[] } {
   const stripPunctuation = opts.stripPunctuation ?? false;
+  const join = opts.joinLineEndHyphens;
+  // A stripped hyphen disappears even in "keep" mode, so it joins only letters.
+  const hyphenVanishes = join === "drop" || stripPunctuation;
   const norm: string[] = [];
   const origIdx: number[] = [];
   let prevSpace = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (/\s/.test(ch)) {
+    const joinTo = join ? lineEndHyphenJoin(text, i, hyphenVanishes) : null;
+    if (joinTo !== null) {
+      if (!hyphenVanishes) {
+        norm.push(ch);
+        origIdx.push(i);
+      }
+      // Skip the line break and indentation; the next word continues here.
+      i = joinTo - 1;
+    } else if (/\s/.test(ch)) {
       if (!prevSpace) {
         norm.push(" ");
         origIdx.push(i);
         prevSpace = true;
       }
     } else if (stripPunctuation && isPunctuation(ch)) {
-      // Drop punctuation without disturbing the space-collapsing state so
-      // "foo, bar" -> "foo bar" but "U.S." -> "us".
+      // A dash between two digits belongs to a number range or identifier
+      // ("pp. 3-7", "No. 21-1234"); deleting it would make "pp. 3-7" equal
+      // "pp. 37". Keep one canonical hyphen there instead, so "3-7" still
+      // matches "3–7" but never "37".
+      if (isDashBetweenDigits(text, i)) {
+        norm.push("-");
+        origIdx.push(i);
+        prevSpace = false;
+      }
+      // Drop other punctuation without disturbing the space-collapsing state
+      // so "foo, bar" -> "foo bar" but "U.S." -> "us".
       continue;
     } else {
       norm.push(ch.toLowerCase());
@@ -1498,6 +1577,63 @@ export function normalizeWithMap(
     }
   }
   return { norm: norm.join(""), origIdx };
+}
+
+// "-", Unicode hyphen, non-breaking hyphen, soft hyphen.
+const LINE_END_HYPHENS = new Set(["-", "\u2010", "\u2011", "\u00ad"]);
+const LETTER = /\p{L}/u;
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+const COMBINING_MARK = /\p{M}/u;
+// Whitespace that does not end a line: spaces, tabs, no-break spaces.
+const HORIZONTAL_SPACE = /[^\S\n\r\f\v\u0085\u2028\u2029]/;
+
+/**
+ * When `text[i]` is a hyphen that ends a line inside a word, the index of the
+ * word's continuation on the next line; otherwise null. A real line-end
+ * hyphenation needs all of:
+ *   - a letter or digit before the hyphen (combining accents skipped), and a
+ *     letter or digit starting the next line;
+ *   - exactly one line break (`\n`, `\r\n` or `\r`) after it, with only
+ *     spaces or tabs around that break. A blank line is a paragraph or page
+ *     break, not hyphenation, so "2024-", blank line, "Renewal" stays apart;
+ *   - letters on BOTH sides when the hyphen will vanish (`hyphenVanishes`).
+ *     Joining "3-", newline, "7" into "37" would turn a page range into a
+ *     different number, so digits are only ever joined with the hyphen kept.
+ */
+function lineEndHyphenJoin(
+  text: string,
+  i: number,
+  hyphenVanishes: boolean,
+): number | null {
+  if (!LINE_END_HYPHENS.has(text[i])) return null;
+  const wordChar = hyphenVanishes ? LETTER : LETTER_OR_DIGIT;
+  let before = i - 1;
+  while (before >= 0 && COMBINING_MARK.test(text[before])) before--;
+  if (before < 0 || !wordChar.test(text[before])) return null;
+  let j = i + 1;
+  while (j < text.length && HORIZONTAL_SPACE.test(text[j])) j++;
+  if (text[j] === "\r") j += text[j + 1] === "\n" ? 2 : 1;
+  else if (text[j] === "\n") j++;
+  else return null;
+  while (j < text.length && HORIZONTAL_SPACE.test(text[j])) j++;
+  return j < text.length && wordChar.test(text[j]) ? j : null;
+}
+
+type NormalizedText = ReturnType<typeof normalizeWithMap>;
+const normalizedByHolder = new WeakMap<object, { text: string; value: NormalizedText }>();
+
+/**
+ * The search form of `text`, built once per holder object and reused while
+ * the holder still carries the same text. Holders are turn-scoped (a DocStore
+ * entry, a cached case opinion), so nothing outlives the turn or crosses
+ * users; a changed text (an edit mid-turn) rebuilds it.
+ */
+export function normalizedTextFor(holder: object, text: string): NormalizedText {
+  const cached = normalizedByHolder.get(holder);
+  if (cached && cached.text === text) return cached.value;
+  const value = normalizeWithMap(text);
+  normalizedByHolder.set(holder, { text, value });
+  return value;
 }
 
 function normalizeQuery(q: string): string {
@@ -1516,9 +1652,11 @@ export function findTextMatches(params: {
   maxResults: number;
   contextChars: number;
   startIndex?: number;
+  /** Precomputed `normalizeWithMap(text)`, e.g. from `normalizedTextFor`. */
+  normalized?: NormalizedText;
 }): { hits: TextMatch[]; totalMatches: number } {
   const { text, query, maxResults, contextChars, startIndex = 0 } = params;
-  const { norm, origIdx } = normalizeWithMap(text);
+  const { norm, origIdx } = params.normalized ?? normalizeWithMap(text);
   const needle = normalizeQuery(query);
   const hits: TextMatch[] = [];
   let totalMatches = 0;
@@ -1648,11 +1786,13 @@ export async function findInDocumentContent(params: {
     });
   }
 
+  // Probes are short and many by design; normalize the text once per turn.
   const { hits, totalMatches } = findTextMatches({
     text,
     query,
     maxResults,
     contextChars,
+    normalized: normalizedTextFor(docInfo, text),
   });
 
   write(

@@ -196,6 +196,30 @@ function findSoffice() {
 
 // --- The boot sequence ------------------------------------------------------
 
+/**
+ * The backend runs on Electron's bundled Node (ELECTRON_RUN_AS_NODE), not on
+ * a Node the user installs, so its engines floor is checked against that
+ * Node before the backend is spawned. Without this, an Electron downgrade or
+ * major change below backend/package.json's floor would crash the backend at boot
+ * inside undici (MIKE-BACKEND-3R). The backend's own check script (staged
+ * next to its package.json) runs on the same binary and flags the backend
+ * will get, so the rule lives in one place and the Node checked is the Node
+ * the backend runs on. It runs as a child process rather than a require():
+ * its path is only known at run time (repo checkout or app bundle).
+ * `env` is merged over process.env (tests use it to fake the version).
+ */
+function assertBackendNodeSupported(backendDir, env = {}) {
+  const check = spawnSync(
+    process.execPath,
+    [path.join(backendDir, "scripts", "check-node-version.cjs")],
+    { cwd: backendDir, env: { ...process.env, ...env, ELECTRON_RUN_AS_NODE: "1" }, encoding: "utf8" },
+  );
+  if (check.status !== 0) {
+    const problem = (check.stderr || "").trim() || String(check.error || `exit ${check.status}`);
+    throw new Error(`This build runs the backend on Electron's Node. ${problem}`);
+  }
+}
+
 async function startLocalStack(app, status = () => {}) {
   if (running) return { frontendUrl: FRONTEND_URL };
   if (booting) throw new Error("local stack is already starting");
@@ -310,6 +334,7 @@ async function startLocalStack(app, status = () => {}) {
     // 6. Backend — Electron's own binary in Node mode, so no separate
     // runtime ships with the app.
     status("Starting Mike services…");
+    assertBackendNodeSupported(paths.backendDir);
     const soffice = findSoffice();
     spawnService("backend", process.execPath,
       [path.join(paths.backendDir, "dist", "index.js")], {
@@ -419,6 +444,7 @@ function localStackActive() {
 }
 
 module.exports = {
+  assertBackendNodeSupported,
   startLocalStack,
   stopLocalStack,
   localStackRunning,

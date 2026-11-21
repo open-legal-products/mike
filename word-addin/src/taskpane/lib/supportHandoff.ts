@@ -13,7 +13,7 @@
  * user is told what actually happened; when both fail the block is put on
  * screen to copy by hand.
  */
-import { SUPPORT_EMAIL, supportDetailLines, type UserFacingError } from "@mike/user-error";
+import { SUPPORT_EMAIL, supportDetailLines, type UserFacingError } from "@mike/client";
 
 export type SupportErrorFields = Pick<
   UserFacingError,

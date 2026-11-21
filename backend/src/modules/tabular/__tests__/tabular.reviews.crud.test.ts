@@ -220,9 +220,8 @@ describe("createTabularReview", () => {
             columns_config: [],
             model: "claude-sonnet-5",
         });
-        expect(result).toMatchObject({ ok: false, kind: "status", status: 500 });
-        expect(result.ok === false && result.kind === "status" && result.body)
-            .toEqual({ detail: "rows exploded" });
+        // An internal failure: the database's message is not sent to the client.
+        expect(result).toMatchObject({ ok: false, kind: "error" });
         expect(callTo(calls, "tabular_reviews", 1)).toMatchObject({
             op: "delete",
             filters: { id: "rev-1" },
@@ -463,6 +462,32 @@ describe("getTabularReviewDetail", () => {
         expect(result.data.review).not.toHaveProperty(
             "generation_lease_expires_at",
         );
+    });
+
+    it("cache regression: returns changed cell bodies and removes deleted or inaccessible cells", async () => {
+        const rows = [{ id: "visible" }, { id: "revoked" }];
+        loadReviewRows.mockResolvedValue(rows);
+        const cell = (id: string, row_id = "visible", cache_revision = "first") =>
+            ({ id, row_id, cache_revision, content: id });
+        const initial = [cell("keep"), cell("edit"), cell("delete"), cell("private", "revoked")];
+        const current = [cell("keep"), cell("edit", "visible", "second"), cell("added"), cell("private", "revoked")];
+        const fake = makeFakeDb({ tables: {
+            tabular_reviews: { data: { id: "review", document_ids: [] }, error: null },
+            tabular_cells: [initial, current, [current[1], current[2]], current].map(data => ({ data, error: null })),
+        } });
+        const args = { reviewId: "review", ...WHO };
+        const first = await getTabularReviewDetail(fake.db, args);
+        expect(first.ok).toBe(true);
+        if (!first.ok) throw Error("missing detail");
+        expect(first.data.cell_revision).toEqual(expect.any(String));
+        loadReviewRows.mockResolvedValue([rows[0]]);
+        const delta = await getTabularReviewDetail(fake.db, { ...args, cellRevision: first.data.cell_revision });
+        expect(delta.ok && delta.data.cells.map(cell => cell.id)).toEqual(["edit", "added"]);
+        expect(delta.ok && delta.data.removed_cell_ids).toEqual(["delete", "private"]);
+        expect(callTo(fake.calls, "tabular_cells", 2)?.filters.id).toEqual(["edit", "added"]);
+        const other = await getTabularReviewDetail(fake.db, { ...args, userId: "other", cellRevision: first.data.cell_revision });
+        expect(other.ok && other.data.removed_cell_ids).toBeUndefined();
+        expect(other.ok && other.data.cells.map(cell => cell.id)).toEqual(["keep", "edit", "added"]);
     });
 
     it("parses each cell's stored content", async () => {
@@ -978,12 +1003,11 @@ describe("updateTabularReview", () => {
         expect(calls.some(call => ["tabular_review_rows", "tabular_cells"].includes(call.table))).toBe(false);
     });
 
+    // A changed document set is applied row by row (tabular.rowSync.test.ts);
+    // only a grouping change rebuilds the whole grid.
     it.each([
-        { document_ids: ["d1", "d2", "d3"] },
-        { document_ids: ["d1"] },
-        { document_ids: ["d1", "d3"] },
         { document_grouping: "folder" },
-    ])("rebuilds rows for a changed document set or grouping: %j", async body => {
+    ])("rebuilds rows for a changed grouping: %j", async body => {
         filterAccessibleDocumentIds.mockResolvedValue(["d1", "d2", "d3"]);
         const { db, calls } = seeded({
             user_id: "user-1", document_ids: ["d1", "d1", "d2"], document_grouping: "document",

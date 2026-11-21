@@ -2,7 +2,7 @@ import {
     LIQUID_GLASS_FLAT_CLASS,
     LIQUID_GLASS_FLOAT_CLASS,
     LIQUID_GLASS_SUBTLE_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";
 
 export const TABLE_SURFACE_CLASS = "table-surface";
 
@@ -32,4 +32,4 @@ export {
     LIQUID_GLASS_SUBTLE_CLASS,
     LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS,
     LIQUID_GLASS_TRANSLUCENT_CLASS,
-} from "@/shared/ui/LiquidGlassUI";
+} from "@mike/ui";

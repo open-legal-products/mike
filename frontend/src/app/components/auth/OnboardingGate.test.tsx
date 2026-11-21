@@ -51,7 +51,7 @@ describe("OnboardingGate", () => {
         );
     });
 
-    it.each(["/onboarding/profile", "/onboarding/practice", "/onboarding/invitations"])("allows incomplete users to use %s", (path) => {
+    it.each(["/onboarding/profile", "/onboarding/practice", "/onboarding/invitations", "/onboarding/models"])("allows incomplete users to use %s", (path) => {
         state.pathname = path;
         render(
             <OnboardingGate>

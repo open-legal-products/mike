@@ -17,11 +17,17 @@ on:
     paths:
       - scripts/stack.sh
       - scripts/stack.test.sh
+      - scripts/e2e-local-stack.sh
+      - scripts/lib/local-secrets.sh
+      - scripts/local-secrets.test.sh
       - .github/workflows/stack-script.yml
   pull_request:
     paths:
       - scripts/stack.sh
       - scripts/stack.test.sh
+      - scripts/e2e-local-stack.sh
+      - scripts/lib/local-secrets.sh
+      - scripts/local-secrets.test.sh
       - .github/workflows/stack-script.yml
   workflow_dispatch:
 
@@ -34,6 +40,8 @@ permissions:
 
 jobs:
   gc-regression:
+    # Runs here and in forks; skipped in copies such as the Vercel Deploy button makes (docs/vercel.md).
+    if: github.repository == 'open-legal-products/mike' || github.event.repository.fork
     name: gc fixture test
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -42,3 +50,6 @@ jobs:
 
       - name: Run the fixture test
         run: bash scripts/stack.test.sh
+
+      - name: Run the local-secrets test
+        run: bash scripts/local-secrets.test.sh

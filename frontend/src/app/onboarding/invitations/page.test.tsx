@@ -36,46 +36,46 @@ describe("OnboardingInvitationsPage", () => {
         mocks.completeOnboarding.mockResolvedValue(true);
     });
 
-    it("waits for invitations and acceptance before completing the third step", async () => {
+    it("waits for invitations and acceptance before continuing to the model step", async () => {
         let finishLoading!: (invitations: unknown[]) => void;
         mocks.list.mockReturnValue(new Promise((resolve) => { finishLoading = resolve; }));
         let finishAccepting!: (result: unknown) => void;
         mocks.accept.mockReturnValue(new Promise((resolve) => { finishAccepting = resolve; }));
         const user = userEvent.setup();
         render(<OnboardingInvitationsPage />);
-        expect(screen.getByText("Step 3 of 3")).toBeVisible();
+        expect(screen.getByText("Step 3 of 4")).toBeVisible();
         expect(screen.getByRole("heading", { name: "Organization invitations" })).toBeVisible();
         expect(screen.queryByRole("textbox", { name: "Name" })).not.toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Finish" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
         await act(async () => finishLoading([invitation]));
         await user.click(await screen.findByRole("button", { name: "Accept Example LLP" }));
-        expect(screen.getByRole("button", { name: "Finish" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
         expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
         await act(async () => finishAccepting({ org_id: "org", role: "member" }));
         expect(window.localStorage.getItem("mike.activeWorkspace.user-1")).toBe("org");
+        await user.click(screen.getByRole("button", { name: "Continue" }));
+        expect(mocks.push).toHaveBeenCalledWith("/onboarding/models");
+        // Setup is completed on the last step, not here.
         expect(mocks.completeOnboarding).not.toHaveBeenCalled();
-        await user.click(screen.getByRole("button", { name: "Finish" }));
-        expect(mocks.completeOnboarding).toHaveBeenCalledExactlyOnceWith();
-        expect(mocks.replace).toHaveBeenCalledWith("/assistant");
+        expect(mocks.replace).not.toHaveBeenCalled();
     });
 
-    it("lets users finish without accepting an invitation", async () => {
+    it("lets users continue without accepting an invitation", async () => {
         const user = userEvent.setup();
         render(<OnboardingInvitationsPage />);
         await screen.findByRole("button", { name: "Accept Example LLP" });
-        await user.click(screen.getByRole("button", { name: "Finish" }));
+        await user.click(screen.getByRole("button", { name: "Continue" }));
         expect(mocks.accept).not.toHaveBeenCalled();
-        expect(mocks.completeOnboarding).toHaveBeenCalledOnce();
-        expect(mocks.replace).toHaveBeenCalledWith("/assistant");
+        expect(mocks.push).toHaveBeenCalledWith("/onboarding/models");
     });
 
-    it("lets users finish when they have no pending invitations", async () => {
+    it("lets users continue when they have no pending invitations", async () => {
         mocks.list.mockResolvedValue([]);
         const user = userEvent.setup();
         render(<OnboardingInvitationsPage />);
         expect(await screen.findByText(/You have no pending invitations/)).toBeVisible();
-        await user.click(screen.getByRole("button", { name: "Finish" }));
-        expect(mocks.replace).toHaveBeenCalledWith("/assistant");
+        await user.click(screen.getByRole("button", { name: "Continue" }));
+        expect(mocks.push).toHaveBeenCalledWith("/onboarding/models");
     });
 
     it("allows returning to practice without completing onboarding", async () => {
@@ -85,19 +85,5 @@ describe("OnboardingInvitationsPage", () => {
         await user.click(screen.getByRole("button", { name: "Back" }));
         expect(mocks.push).toHaveBeenCalledWith("/onboarding/practice");
         expect(mocks.completeOnboarding).not.toHaveBeenCalled();
-    });
-
-    it("allows retrying completion without losing an accepted invitation", async () => {
-        mocks.completeOnboarding.mockResolvedValueOnce(false);
-        const user = userEvent.setup();
-        render(<OnboardingInvitationsPage />);
-        await user.click(await screen.findByRole("button", { name: "Accept Example LLP" }));
-        await user.click(screen.getByRole("button", { name: "Finish" }));
-        expect(await screen.findByRole("alert")).toHaveTextContent("Unable to finish setup");
-        expect(screen.getByText("Joined as Member")).toBeVisible();
-        expect(mocks.replace).not.toHaveBeenCalled();
-        await user.click(screen.getByRole("button", { name: "Finish" }));
-        expect(mocks.accept).toHaveBeenCalledOnce();
-        expect(mocks.replace).toHaveBeenCalledWith("/assistant");
     });
 });

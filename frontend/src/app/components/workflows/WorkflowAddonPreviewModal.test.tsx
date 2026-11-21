@@ -33,8 +33,19 @@ vi.mock("../shared/views/PdfView", () => ({
 }));
 
 vi.mock("../shared/views/SpreadsheetView", () => ({
-  SpreadsheetView: ({ displayUrl }: { displayUrl: string }) => (
-    <div data-testid="spreadsheet-view">{displayUrl}</div>
+  SpreadsheetView: ({
+    displayUrl,
+    fileActions,
+  }: {
+    displayUrl: string;
+    fileActions?: boolean;
+  }) => (
+    <div
+      data-testid="spreadsheet-view"
+      data-file-actions={String(fileActions ?? true)}
+    >
+      {displayUrl}
+    </div>
   ),
 }));
 
@@ -165,6 +176,34 @@ describe("WorkflowAddonPreviewModal", () => {
       expect(screen.getByText(filename)).toBeVisible();
     },
   );
+
+  it("tells the spreadsheet preview the modal has no download or upload", async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkflowAddonPreviewModal
+        addon={addon([
+          {
+            id: "reference-1",
+            filename: "Model.xlsx",
+            file_type: "xlsx",
+            size_bytes: 42,
+            created_at: "2026-08-28T00:00:00.000Z",
+          },
+        ])}
+        importing={false}
+        onClose={vi.fn()}
+        onImport={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Assets" }));
+    await user.click(screen.getByRole("button", { name: /Model\.xlsx/ }));
+
+    expect(screen.getByTestId("spreadsheet-view")).toHaveAttribute(
+      "data-file-actions",
+      "false",
+    );
+  });
 
   it("hides the assets tab when an assistant add-on has no assets", () => {
     render(

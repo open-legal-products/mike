@@ -14,7 +14,8 @@
 # `migrate.sh up`.
 #
 # Environment: DB and MIGRATIONS_DIR as in db-init, and MIGRATE_SH, the path
-# of backend/scripts/migrate.sh (default /migrate.sh).
+# of backend/scripts/migrate.sh (default: beside this script's copy in the
+# backend image, /app/scripts/migrate.sh).
 set -uo pipefail
 
 FIRST_REPLAYED=20260823_01
@@ -44,4 +45,4 @@ for name in $replayed; do
   fi
 done
 
-bash "${MIGRATE_SH:-/migrate.sh}" baseline "$LAST_REPLAYED"
+bash "${MIGRATE_SH:-/app/scripts/migrate.sh}" baseline "$LAST_REPLAYED"

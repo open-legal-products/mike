@@ -1,7 +1,7 @@
 # Backend architecture
 
 The Express backend in `backend/` is organized as **domain modules over a
-shared kernel**. This page is the reference for that layout: what goes where,
+shared kernel, with application services for cross-domain workflows**. This page is the reference for that layout: what goes where,
 the rules that keep the layers honest, and the test that enforces them.
 
 ```
@@ -11,6 +11,7 @@ backend/src/
 ├── workerRuntime.ts       queue workers entrypoint (imports modules through facades)
 ├── middleware/            request plumbing (auth, trusted origin) — depends on lib/ only
 ├── modules/<domain>/      one directory per HTTP surface (see "Module anatomy")
+├── application/           account, purge and export orchestration; called by entrypoints
 ├── lib/                   shared kernel: infrastructure + cross-domain primitives
 ├── workers/, jobs/        queue consumers and scheduled jobs — reach modules via facades
 └── __tests__/             cross-cutting suites, incl. architecture.test.ts
@@ -173,7 +174,29 @@ for response headers. Provider clocks stop at the end of each provider step,
 so local tool execution is governed by its own timeout and the run limits.
 Model output refreshes idle even while tabular JSON is buffered; transport
 keep-alives do not. Deadline errors are preserved in history and replay, while
-an explicit Stop remains a cancellation. A resume has to reach the replica
+an explicit Stop remains a cancellation. Once a turn's signal fires, the tool
+dispatcher starts none of the batch's remaining server tools (and no write
+that was still waiting on a document lock, connector planning or a source
+download), tools that already finished keep their events in the stored turn
+(also when a later call of the batch rejects, or is still pending when the
+model adapter ends the stream on the stop; a rejection after the stop ends
+the turn as stopped),
+and a chat, project-chat, Word chat or tabular chat route whose `runLLMStream` returns anyway (a
+provider or tool that ignored the abort) takes its stop path: the turn is
+stored with its stop
+outcome, and is neither saved as a completed answer, given a fallback title,
+nor scheduled for memory curation. A stop that lands while the finished answer
+is being saved (or while its title is awaited) is checked again before the
+fallback title and memory curation (in chat, project chat and Word chat): the
+saved answer then gets only the stop label added, so it is stored once, ends with the outcome readers were
+sent, and is neither given a fallback title nor curated.
+Tabular chat checks again after saving the finished answer and after awaiting
+its title. A stop during either step marks the already-saved row as stopped
+instead of inserting it again, and skips memory curation. A stop during the
+save also skips title generation; a title already being generated is retained.
+A route that unwinds after the grace period
+has already ended the run writes no more frames, because the run is finished.
+A resume has to reach the replica
 that is generating: run one replica, or route by session, until the buffer is moved
 to shared storage. `lib/assistantSse.ts` (`openAssistantSse`) survives only
 for the one case that cannot be a run: a tabular review chat whose
@@ -208,21 +231,28 @@ new code uses the shared one.
 
 ## The rules
 
-1. **`lib/` never imports from `modules/`.** The kernel does not know which
+1. **`lib/` never imports from `modules/` or `application/`.** The kernel does not know which
    domains exist. There are no dependency exceptions.
 2. **A module is reached from outside only through its facade.** Another
    module, a worker, a job, `app.ts` — none may import a module's topic files.
-   The facade is where a module decides what it exposes.
+   The facade is where a module decides what it exposes. Module implementations
+   import siblings directly, never their own facade.
 3. **Inside a module, only `*.routes.ts` may import `express`.** Everything
    else is HTTP-agnostic and testable with a fake `db`.
 4. **Route files do not query the database.** Every `db.from(...)` /
    `db.rpc(...)` belongs to a service function with a name and a typed result.
 5. **Facades re-export by name.** `export *` hides what a module exposes and
    invites accidental coupling.
-6. **`middleware/` depends on `lib/`, not on modules.** Request plumbing must
+6. **`middleware/` depends on `lib/`, not on modules or application workflows.** Request plumbing must
    not pull a domain into every request.
 7. **`src/routes/` does not exist.** A new HTTP surface is a new module.
 8. **Document version writes belong to `modules/documents/`.** Creation, activation, replacement, and deletion go through its facade. The architecture test also rejects direct lifecycle RPC calls from other modules.
+
+9. **Domain implementations and facades cannot import `application/`.** Routes
+   are entrypoints and may call workflows. Application services are HTTP-agnostic
+   and reach domains through their facades.
+10. **Source dependencies are acyclic, including erased type references.** Shared
+    contracts belong below their consumers, not in the calling orchestrator.
 
 ## Enforcement
 
@@ -230,7 +260,13 @@ new code uses the shared one.
 reads its imports, and fails on a violation of any rule above. It runs with the
 normal unit suite (`npm test --prefix backend`), so a layering regression fails
 CI the same way a broken assertion does. It needs no lint plugin: a directory
-walk and an import regex are enough.
+walk and the Babel syntax parser resolve imports, re-exports, literal dynamic
+imports, `require` and type references, including configured path aliases.
+`dependencyCycles.test.ts` checks all production source in backend, web, Word and
+desktop, the shared `packages/` sources, and every local file they reach for
+strongly connected components; type-only edges and declaration files are
+included, so the gate is stronger than runtime-cycle detection. Nonliteral and unresolved local
+imports fail explicitly rather than silently escaping the graph.
 
 Each rule has an explicit allowlist in the test. Adding an entry is a reviewed
 decision and needs a comment saying why; the ratchet for rule 4 records the
@@ -248,7 +284,8 @@ remaining inline queries per routes file and only ever goes down.
 - **Cross-domain primitives** that several modules and the job handlers share:
   `access` (project/document authorization), `audit` (audit-row writes),
   `documentTypes`, `documentVersions`, `modelSelection`, `routerModels`,
-  `userLookup`, `workflowCatalog*` (used by the chat tools), `sourceDocuments`
+  `providerCredentials/` (owner-aware encrypted keys and settings, via `index.ts`),
+  `routerModelValidation`, `userLookup`, `workflowCatalog*` (used by the chat tools), `sourceDocuments`
   and pure shared utilities. Document-version reads can join across domains;
   mutations have one owner in the documents module.
 
@@ -265,7 +302,27 @@ retention; domain job bodies live with documents, tabular, user, audit, and memo
 BullMQ workers are transport adapters to those same domain operations.
 
 Stale-work sweeps live in documents and tabular. `jobs/maintenance.ts` composes
-them. Account erasure and export orchestration belong to the user module.
+them. Account erasure and export orchestration live in `application/`, with
+queue adapters in `application/jobs/`. The registry imports these adapters directly.
+
+## Cross-domain application services
+
+`application/accounts/` coordinates account deletion, retention and data clearing.
+`application/organizations/purgeContent.ts` composes permanent content cleanup;
+`orgs.deletion.ts` retains recovery-period organization suspension.
+`application/exports/` validates/enqueues requests and builds artifacts, checking
+permissions again when a queued request executes. No domain facade re-exports
+these workflows.
+
+Projects own `projects.lifecycle.ts` and `projects.export.ts`. Document lifecycle
+mutations continue through documents. Shared credential persistence, precedence
+and encryption live in `lib/providerCredentials/`; user and org adapters retain
+their caller-specific policy. Shared DTOs and schemas live below implementations.
+
+These workflows preserve existing transaction and retry boundaries. Account
+erasure must refuse sole-owner blockers before destruction, retain organization
+content, delete export objects before their pointers and delete auth identity last.
+A cross-system workflow is not one database transaction.
 
 ## Shared operations and caller-specific policy
 
@@ -312,6 +369,56 @@ For changes to these rules, add a test of the shared operation and verify the
 caller-specific permissions and response contracts. The rename route and
 folder-service compatibility suites also pass against the pre-consolidation
 PR snapshot (`54d067d3`), so their assertions characterize existing behavior.
+
+### Provider-backed source documents
+
+A source that is read from a provider rather than uploaded (CourtListener case
+law, Legal Data Hunter documents) is a *source provider* in
+`modules/source-documents/`:
+
+- `sourceDocuments.types.ts` defines `SourceProvider`: which opaque document
+  ids it owns (id families must not overlap; `mcp:*` belongs to Legal Data
+  Hunter because its ids are keyed by connector), how its quotes are verified
+  (`exact` or `fuzzy`, applied when a request-scoped source is cited and when
+  citations are re-verified by `verifyCitations`, and stamped on the panel
+  document as `quote_verification` so the client highlights the same way), how
+  to hydrate a document for the panel (`fetch`), and optionally how to
+  recognise a complete document inside an MCP tool result (`fromMcpCall`) and
+  how much of a result from its server the model may see (`mcpResultChars`;
+  every other connector keeps `MAX_MCP_RESULT_CHARS`).
+- `sourceDocuments.providers.ts` is the registry. `getSourceDocument`
+  dispatches a `GET /documents/:id` to the owning provider and deduplicates
+  concurrent fetches; `externalSourceFromMcpCall` asks every provider about a
+  successful connector call. No other code dispatches on a provider's
+  identity; the engine's CourtListener tools predate the registry and keep
+  their own case-citation handling, stamping the documents they emit through
+  `stampSourceDocument`.
+- One `sourceDocuments.<provider>.ts` per provider holds the implementation:
+  `sourceDocuments.courtlistener.ts` hydrates `case:*` ids;
+  `sourceDocuments.legalDataHunter.ts` owns `mcp:*` ids, recognises complete
+  `get_document` results and reads a document again through the viewer's
+  connector with `executeMcpToolOnServer`.
+
+The chat engine consumes providers only through the facade. A source a
+provider recognises in a connector result is registered for the request by
+`modules/chat/engine/tools/externalSources.ts` (`DocStore.external_source`
+plus `inline_text`), which makes it readable and searchable like an attachment
+and citable through `createCitation`, with verbatim quotes only when the
+provider verifies exactly. Nothing is persisted: a citation carries the
+provider's document id, and the panel reads the text again through
+`getSourceDocument` when the source is opened.
+
+Every provider document the backend emits carries `provider` and
+`quote_verification`: the registry stamps what it hands out, and the chat
+engine stamps the case documents it assembles itself (`createCitation`, the
+`case_citation` and `case_opinions` events) through `stampSourceDocument`.
+The client reads origin and highlight exactness from those fields and falls
+back to the legal document types only for documents saved before the fields
+existed. Adding a provider therefore means one implementation file and one
+registry entry. The frontend changes only if the provider introduces a new
+`SourceDocumentType`: add it to the contract's union, to `PANEL_DOCUMENT_TYPES`
+in `frontend/src/app/components/shared/types.ts`, and to the type set and icon
+map in `frontend/src/app/components/shared/documentCapabilities.ts`.
 
 ## Shared API contracts
 

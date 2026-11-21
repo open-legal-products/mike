@@ -16,7 +16,7 @@ import {
     useWorkspaceOrgId,
     useWorkspaceParam,
 } from "@/app/contexts/WorkspaceContext";
-import { workspaceIdentityKey } from "@/shared/lib/workspaceSelection";
+import { workspaceIdentityKey } from "@mike/client";
 import {
     createChat,
     deleteChat,

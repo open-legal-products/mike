@@ -4,7 +4,7 @@ import {
   nearestReasoningLevelForModel,
   reasoningLevelsForModel,
   type ReasoningLevel,
-} from "@mike/model-toggle-ui";
+} from "@mike/ui";
 import { getOllamaModels, type ApiKeyStatus } from "../../api/mikeApi";
 import {
   MODELS,
@@ -12,7 +12,7 @@ import {
   modelDisplayName,
   type ModelOption,
   type RouterSelections,
-} from "@mike/model-catalog";
+} from "@mike/client";
 import { isModelAvailable } from "../../lib/modelCatalog";
 
 export function ModelToggle({

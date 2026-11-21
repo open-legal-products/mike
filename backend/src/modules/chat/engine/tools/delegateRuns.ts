@@ -8,10 +8,14 @@ import type {
 } from "@mike/contracts";
 import { filterAccessibleDocumentIds } from "../../../../lib/access";
 import type { NormalizedToolCall } from "../../../../lib/llm";
+import { AppError } from "../../../../lib/appError";
+import { reportError } from "../../../../lib/observability/sentry";
 import { safeError } from "../../../../lib/safeError";
 import type { Db } from "../../../../lib/supabase";
 import { loadAssistantMessage } from "../contextBuilders";
-import { resolveDocLabel, type DocIndex, type DocStore } from "../types";
+import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
+import { log } from "../../../../lib/log";
+import { externalSourceReference } from "./externalSources";
 
 type DocumentRef = { document_id: string; version_id: string | null };
 
@@ -74,23 +78,41 @@ export function toolRecord(
     result: string,
     docStore: DocStore,
     docIndex: DocIndex,
+    /** The request-scoped source this call's result registered, if any. */
+    externalSourceHandle?: string,
 ): SubagentRecord {
     // A project-wide search reads documents its input does not name.
     const named =
         call.name === "find_documents" && call.input.scope !== "document"
             ? []
             : [call.input.doc_id, ...(Array.isArray(call.input.doc_ids) ? call.input.doc_ids : [])];
-    const documents = named
-        .filter((id) => id !== undefined)
-        .map((id) => {
-            const label = typeof id === "string" ? resolveDocLabel(id, docStore, docIndex) : null;
+    const labelFor = createDocLabelResolver(docStore, docIndex);
+    const labels = named
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => labelFor(id));
+    // A provider's source text is never persisted: a connector result that
+    // registered one, or a read, search or fetch of one, is recorded as the
+    // source's reference. Such a source exists only in the request that read
+    // it, so it is not a document a continuation could recheck access to; the
+    // uploaded documents named beside it still are.
+    const candidate =
+        externalSourceHandle ??
+        labels.find((label) => label && docStore.get(label)?.external_source) ??
+        null;
+    const external = candidate ? docStore.get(candidate)?.external_source : undefined;
+    const externalLabel = external ? candidate : null;
+    const documents = labels
+        .filter((label) => !label || !docStore.get(label)?.external_source)
+        .map((label) => {
             const doc = label ? docIndex[label] : undefined;
-            return doc && { document_id: doc.document_id, version_id: doc.version_id ?? null };
+            return doc
+                ? { document_id: doc.document_id, version_id: doc.version_id ?? null }
+                : undefined;
         });
     return {
         tool: call.name,
         input: JSON.stringify(call.input).slice(0, MAX_INPUT_CHARS),
-        result,
+        result: external ? externalSourceReference(external, externalLabel ?? undefined) : result,
         // Without every document it read, a later turn could not recheck access.
         documents: documents.every((doc): doc is DocumentRef => doc !== undefined) ? documents : [],
     };
@@ -234,7 +256,16 @@ export function createSubagentRunStore(scope: {
                 const { error } = await db.from(TABLE).insert(rows);
                 if (error) throw error;
             } catch (error) {
-                console.error("[subagents] run save failed", safeError(error));
+                // The wrapper carries the kind and the database's own code to
+                // Sentry; the log keeps its redacted category (warn: the
+                // console bridge forwards error-level lines only).
+                reportError(
+                    new AppError("chat.subagent_failed", "Subagent run save failed", {
+                        cause: error,
+                    }),
+                    { tags: { component: "chat-stream", operation: "chat.subagent" } },
+                );
+                log.warn("subagents", "run save failed", safeError(error));
             }
         },
         async load(delegationId) {
@@ -267,7 +298,13 @@ export function createSubagentRunStore(scope: {
                 }
                 return resumed;
             } catch (error) {
-                console.error("[subagents] run load failed", safeError(error));
+                reportError(
+                    new AppError("chat.subagent_failed", "Subagent run load failed", {
+                        cause: error,
+                    }),
+                    { tags: { component: "chat-stream", operation: "chat.subagent" } },
+                );
+                log.warn("subagents", "run load failed", safeError(error));
                 return null;
             }
         },

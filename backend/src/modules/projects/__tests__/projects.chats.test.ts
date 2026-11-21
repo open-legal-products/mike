@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
+import { tableDb } from "../../../__tests__/helpers/tableDb";
 
 const access = vi.hoisted(() => vi.fn());
 vi.mock("../../../lib/access", async (original) => ({
@@ -15,31 +15,15 @@ describe("listProjectChats", () => {
         access.mockResolvedValue({ ok: true, projectRole: "editor" });
     });
 
-    it("orders project chat history by latest activity", async () => {
-        const fake = scriptedDb([
-            {
-                table: "chats",
-                data: [
-                    {
-                        id: "chat-1",
-                        user_id: null,
-                        updated_at: "2026-09-21T12:00:00Z",
-                    },
-                ],
-            },
-        ]);
-
-        const result = await listProjectChats(fake.db, {
-            projectId: "project-1",
-            userId: "user-1",
-        });
-
-        expect(result.ok).toBe(true);
-        expect(fake.calls[0].filters).toContainEqual([
-            "order",
-            "updated_at",
-            { ascending: false },
-        ]);
-        fake.done();
+    it("lists every project chat past max_rows, newest activity first", async () => {
+        const chats = Array.from({ length: 1200 }, (_, i) => ({
+            id: `chat-${String(i).padStart(4, "0")}`, project_id: "project-1", user_id: null,
+            updated_at: new Date(Date.UTC(2026, 8, 1, 0, 0, i)).toISOString(),
+        }));
+        const fake = tableDb({ chats, user_profiles: [] });
+        const result = await listProjectChats(fake.db, { projectId: "project-1", userId: "user-1" });
+        const ids = result.ok ? (result.chats as { id: string }[]).map((chat) => chat.id) : [];
+        expect(ids).toHaveLength(1200);
+        expect(ids[0]).toBe("chat-1199");
     });
 });

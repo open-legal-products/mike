@@ -107,6 +107,28 @@ describe("backend-managed auth cookies", () => {
     );
   });
 
+  // GoTrue rethrows a subscriber's error out of getUser(), so a throwing
+  // write turned a late session change into a 500 (MIKE-BACKEND-10).
+  it("skips, rather than throws, a session write after the response was sent", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const append = vi.fn(() => {
+      throw Object.assign(new Error("Cannot set headers after they are sent to the client"), { code: "ERR_HTTP_HEADERS_SENT" });
+    });
+    const req = { headers: { cookie: "" }, get: vi.fn().mockReturnValue(undefined), baseUrl: "/projects", route: { path: "/:id" } } as never;
+    const res = { append, setHeader: append, headersSent: true } as never;
+
+    createRequestSupabase(req, res);
+    const options = createServerClient.mock.calls[0]![2] as unknown as {
+      cookies: { setAll(cookies: Array<{ name: string; value: string; options: Record<string, unknown> }>, headers: Record<string, string>): void };
+    };
+
+    expect(() => options.cookies.setAll([{ name: "mike-session", value: "rotated", options: {} }], { "cache-control": "private" })).not.toThrow();
+    expect(append).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]![1]).toEqual({ route: "/projects/:id" });
+    warn.mockRestore();
+  });
+
   it("uses partitioned SameSite=None cookies for the Word task pane", () => {
     process.env.NODE_ENV = "production";
     process.env.WORD_ADDIN_URL = "https://word.example.test";

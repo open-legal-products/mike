@@ -4,14 +4,14 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { InputUI } from "@/shared/ui/InputUI";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
-import { SiteLogo } from "@/app/components/site-logo";
 import {
+    InputUI,
+    PillButtonUI,
+    pillButtonUIClassName,
     authGlassCardUIClassName,
     authInputUIClassName,
-} from "@/shared/ui/AuthStylesUI";
+} from "@mike/ui";
+import { SiteLogo } from "@/app/components/site-logo";
 import {
     MIN_PASSWORD_LENGTH,
     isPasswordTooLong,
@@ -24,6 +24,7 @@ import {
 } from "@/app/lib/authMessages";
 import { getAuthSession, updateAuthPassword } from "@/app/lib/authApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
+import { MfaVerificationPopup } from "@/app/components/popups/MfaVerificationPopup";
 import {
     describeError,
     supportMailtoFor,
@@ -53,6 +54,12 @@ function ResetPasswordContent() {
     const [success, setSuccess] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [failure, setFailure] = useState<UserFacingError | null>(null);
+    // The password that passed this form's checks and is waiting for the
+    // authenticator. The retry sends this value, not whatever the fields
+    // hold by then.
+    const [passwordAwaitingMfa, setPasswordAwaitingMfa] = useState<
+        string | null
+    >(null);
     const preview =
         process.env.NODE_ENV !== "production"
             ? searchParams.get("preview")
@@ -122,11 +129,22 @@ function ResetPasswordContent() {
             return;
         }
 
+        await savePassword(password);
+    }
+
+    async function savePassword(validated: string) {
         setLoading(true);
         try {
-            await updateAuthPassword(password, true);
+            await updateAuthPassword(validated, true);
             setSuccess(true);
         } catch (caught) {
+            // An account with an authenticator proves it before its password
+            // changes; the existing verification popup steps the session up.
+            const code = (caught as { code?: unknown })?.code;
+            if (code === "insufficient_aal" || code === "mfa_verification_required") {
+                setPasswordAwaitingMfa(validated);
+                return;
+            }
             const described = describeError(caught, {
                 action: "update your password",
                 codeMessages: RESET_ERROR_MESSAGES,
@@ -284,6 +302,15 @@ function ResetPasswordContent() {
                     )}
                 </div>
             </div>
+            <MfaVerificationPopup
+                open={passwordAwaitingMfa !== null}
+                onCancel={() => setPasswordAwaitingMfa(null)}
+                onVerified={() => {
+                    const validated = passwordAwaitingMfa;
+                    setPasswordAwaitingMfa(null);
+                    if (validated !== null) void savePassword(validated);
+                }}
+            />
         </div>
     );
 }

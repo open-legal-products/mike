@@ -28,6 +28,10 @@ const allowlist = JSON.parse(readFileSync(allowlistPath, "utf8"));
 // name or an environment variable supplied by the caller.
 // Scope fields are exact matches. `dev` is npm's lockfile classification;
 // the reason must separately assess exposure in the shipped image/bundle.
+// A production copy (`dev: false`) is admitted only with its own written
+// `productionExposure`: npm classes build-time tools reached through a
+// production dependency (a bundler plugin under a framework SDK) as
+// production, and the scope must say why the shipped app never runs it.
 const workspace = relative(
   realpathSync(join(dirname(allowlistPath), "..")), realpathSync("."),
 ).replaceAll("\\", "/") || ".";
@@ -36,7 +40,9 @@ for (const entry of allowlist) {
       !entry.scopes.every((scope) =>
         typeof scope.workspace === "string" && typeof scope.package === "string" &&
         typeof scope.version === "string" && typeof scope.path === "string" &&
-        scope.dev === true && Array.isArray(scope.dependents) && scope.dependents.length > 0 &&
+        (scope.dev === true || (scope.dev === false &&
+          typeof scope.productionExposure === "string" && scope.productionExposure.trim() !== "")) &&
+        Array.isArray(scope.dependents) && scope.dependents.length > 0 &&
         scope.dependents.every((parent) => typeof parent === "string"))) {
     throw new Error(`Invalid scoped audit exception: ${entry.ghsa ?? "unknown"}`);
   }
@@ -102,7 +108,7 @@ function isAllowed(exception, matches) {
     return copies.length > 0 && copies.every((copy) => exception.scopes.some((scope) => {
       const parents = [...(dependents.get(copy.path) ?? [])];
       return scope.workspace === workspace && scope.package === copy.name &&
-        scope.version === copy.version && scope.path === copy.path && copy.dev &&
+        scope.version === copy.version && scope.path === copy.path && scope.dev === copy.dev &&
         parents.length > 0 && parents.every((parent) => scope.dependents.includes(parent));
     }));
   }));
@@ -178,30 +184,7 @@ async function loadNpmReport() {
     encoding: "utf8",
   }).trim().replace(/\/$/, "");
   const endpoint = `${registry}/-/npm/v1/security/advisories/bulk`;
-  const report = {};
-  // Use one bounded attempt before the OSV fallback. Retrying a retired npm
-  // fallback was the source of the previous five-minute CI failures.
-  // One version per package in each request retains exact affected versions
-  // without guessing at registry semver ranges. Different copies of a package
-  // cannot be collapsed into a single advisory-wide exemption.
-  const batches = [];
-  const versionCount = Math.max(...packageEntries.map(([, versions]) => versions.length));
-  for (let index = 0; index < versionCount; index += 1) {
-    const lane = packageEntries.filter(([, versions]) => versions[index] !== undefined)
-      .map(([name, versions]) => [name, [versions[index]]]);
-    for (let offset = 0; offset < lane.length; offset += 500) {
-      batches.push(Object.fromEntries(lane.slice(offset, offset + 500)));
-    }
-  }
-  for (const batch of batches) {
-    const queried = structuredClone(batch);
-    // Only strip the canary back out if it was not already part of this
-    // workspace's tree. When it IS a real dependency its advisories are a
-    // real finding and must survive.
-    const canaryIsReal = (batch[CANARY_PACKAGE] ?? []).includes(CANARY_VERSION);
-    batch[CANARY_PACKAGE] = [
-      ...new Set([...(batch[CANARY_PACKAGE] ?? []), CANARY_VERSION]),
-    ];
+  async function requestBatch(batch, requireCanary) {
     const batchReport = await fetchJson(endpoint, {
       method: "POST",
       headers: {
@@ -242,15 +225,45 @@ async function loadNpmReport() {
     // The canary must come back. An empty or missing entry means this
     // endpoint did not answer the question we asked, however well-formed its
     // 200 was — send the run to OSV rather than pass on silence.
-    if (
+    if (requireCanary && (
       !Array.isArray(batchReport[CANARY_PACKAGE]) ||
       batchReport[CANARY_PACKAGE].length === 0
-    ) {
+    )) {
       throw new Error(
         `npm returned no advisory for the canary ${CANARY_PACKAGE}@${CANARY_VERSION} — the endpoint is not answering advisory queries`,
       );
     }
-    if (!canaryIsReal) delete batchReport[CANARY_PACKAGE];
+    return batchReport;
+  }
+  const report = {};
+  // Use one bounded attempt before the OSV fallback. Retrying a retired npm
+  // fallback was the source of the previous five-minute CI failures.
+  // One version per package in each request retains exact affected versions
+  // without guessing at registry semver ranges. Different copies of a package
+  // cannot be collapsed into a single advisory-wide exemption.
+  const batches = [];
+  const versionCount = Math.max(...packageEntries.map(([, versions]) => versions.length));
+  for (let index = 0; index < versionCount; index += 1) {
+    const lane = packageEntries.filter(([, versions]) => versions[index] !== undefined)
+      .map(([name, versions]) => [name, [versions[index]]]);
+    for (let offset = 0; offset < lane.length; offset += 500) {
+      batches.push(Object.fromEntries(lane.slice(offset, offset + 500)));
+    }
+  }
+  for (const batch of batches) {
+    const queried = structuredClone(batch);
+    // npm keys its answer by package name, not version. Never combine an
+    // injected canary with a different real adm-zip version: stripping the
+    // canary would discard real findings, while keeping it would misattribute
+    // canary findings to a potentially patched installation.
+    const hasCanaryPackage = Object.hasOwn(batch, CANARY_PACKAGE);
+    const canaryIsReal = batch[CANARY_PACKAGE]?.includes(CANARY_VERSION);
+    if (hasCanaryPackage && !canaryIsReal) {
+      await requestBatch({ [CANARY_PACKAGE]: [CANARY_VERSION] }, true);
+    }
+    if (!hasCanaryPackage) batch[CANARY_PACKAGE] = [CANARY_VERSION];
+    const batchReport = await requestBatch(batch, !hasCanaryPackage || canaryIsReal);
+    if (!hasCanaryPackage) delete batchReport[CANARY_PACKAGE];
 
     batchesAnswered += 1;
     for (const [packageName, packageAdvisories] of Object.entries(batchReport)) {
@@ -406,6 +419,11 @@ for (const [ghsa, adv] of advisories) {
   if (!adv.unmatched && isAllowed(allowed.get(ghsa), adv.matches)) {
     console.log(`ALLOWLISTED ${adv.severity}: ${ghsa} — ${adv.title}`);
     console.log(`  reason: ${allowed.get(ghsa).reason}`);
+    for (const scope of allowed.get(ghsa).scopes) {
+      if (scope.workspace === workspace && scope.dev === false) {
+        console.log(`  production copy ${scope.path}@${scope.version}: ${scope.productionExposure}`);
+      }
+    }
   } else {
     blocking.push(`${adv.severity}: ${ghsa} — ${adv.title} (${adv.url})${allowed.has(ghsa) ? " — outside the approved dependency scope" : ""}`);
   }

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { reportWordFailure } from "../lib/errorReporting";
+import {
+  isReported,
+  reportWordFailure,
+  type AddinOperation,
+} from "../lib/errorReporting";
 import {
   releaseTrackedEdits,
   revealProposedEdit,
@@ -13,8 +17,29 @@ import {
 } from "./useWordDoc";
 import type { TrackedEditHandle } from "./useWordDoc";
 import type { Message as SavedMessage, WordDocumentEdit } from "../types";
-import { projectRedlineStream } from "../lib/redline";
+import { projectRedlineStream, type RedlineStreamProjection } from "../lib/redline";
 import type { RedlineEdit, StreamingRedlineEdit } from "../lib/redline";
+
+/**
+ * A failure that escaped a validate/apply batch and is about to become a
+ * card's inline error. The host's failures are reported under word-office
+ * with Word's own code, so a Mac-only or web-only refusal is visible; one
+ * the API client already filed (a 5xx, a dead backend) is not sent again,
+ * and an API answer with a status is left to `userMessage`, which reports a
+ * fault and stays quiet about a 4xx.
+ */
+function reportEscapedWordFailure(
+  error: unknown,
+  operation: AddinOperation,
+): void {
+  if (isReported(error)) return;
+  const status =
+    error && typeof error === "object"
+      ? (error as { status?: unknown }).status
+      : undefined;
+  if (typeof status === "number") return;
+  reportWordFailure(error, { operation });
+}
 
 /**
  * Shape a sealed streamed block for `applyTrackedEdits`. Returns null for a
@@ -101,8 +126,8 @@ import type {
 } from "../lib/wordChatTypes";
 import type { WordEditApplyMode } from "../lib/wordChatSettings";
 import { getEditKey, parseEditKey } from "../lib/wordTrackedEditKeys";
-import { listWordEditAnchorIds } from "../lib/wordEditAnchors";
-import { userMessage } from "../lib/notify";
+import { groupWordEditAnchorPassIds } from "../lib/wordEditAnchors";
+import { reportFault } from "../lib/notify";
 import {
   ALREADY_APPLIED_MESSAGE,
   UNVERIFIED_APPLY_MESSAGE,
@@ -176,19 +201,33 @@ export function useWordTrackedEdits({
     [],
   );
 
-  const setEditRuntimeState = useCallback(
-    (key: string, patch: Partial<EditRuntimeState>): void => {
-      const previous = editStateRef.current[key];
-      commitEditState({
-        ...editStateRef.current,
-        [key]: {
+  /**
+   * Patch many cards with ONE copy of the state map and one commit. Loops
+   * over cards used to call setEditRuntimeState per card, copying all K
+   * cards each time (O(K^2)) and re-running per-message grouping per call.
+   */
+  const patchEditStates = useCallback(
+    (patches: ReadonlyMap<string, Partial<EditRuntimeState>>): void => {
+      if (patches.size === 0) return;
+      const next = { ...editStateRef.current };
+      for (const [key, patch] of patches) {
+        const previous = next[key];
+        next[key] = {
           ...previous,
           ...patch,
           status: patch.status ?? previous?.status ?? "receiving",
-        },
-      });
+        };
+      }
+      commitEditState(next);
     },
     [commitEditState],
+  );
+
+  const setEditRuntimeState = useCallback(
+    (key: string, patch: Partial<EditRuntimeState>): void => {
+      patchEditStates(new Map([[key, patch]]));
+    },
+    [patchEditStates],
   );
 
   const updatePersistedEdit = useCallback(
@@ -237,15 +276,17 @@ export function useWordTrackedEdits({
     [],
   );
 
+  const terminalState = (status: "accepted" | "rejected"): Partial<EditRuntimeState> => ({
+    status,
+    busy: false,
+    busyAction: undefined,
+    error: undefined,
+  });
+
   const recordTerminalDecision = useCallback(
     async (key: string, status: "accepted" | "rejected"): Promise<void> => {
       await updatePersistedEdit(key, { resolution_status: status });
-      setEditRuntimeState(key, {
-        status,
-        busy: false,
-        busyAction: undefined,
-        error: undefined,
-      });
+      setEditRuntimeState(key, terminalState(status));
     },
     [setEditRuntimeState, updatePersistedEdit],
   );
@@ -291,6 +332,9 @@ export function useWordTrackedEdits({
     }[] = [];
     const proposedDescriptors: { cardKey: string; edit: RedlineEdit }[] = [];
     const durableStates: Record<string, EditRuntimeState> = {};
+    // Read and validate the anchor registry once, on the first replace-all
+    // card, rather than once per card.
+    let passIdsByCard: Map<string, string[]> | undefined;
     for (const message of initialMessages) {
       if (message.role !== "assistant" || !message.id) continue;
       if (message.edits && message.edits.length > 0) {
@@ -340,14 +384,16 @@ export function useWordTrackedEdits({
             continue;
           }
           if (edit.occurrence === "all") {
-            let passIds: string[] = [];
-            try {
-              passIds = listWordEditAnchorIds(`${cardKey}#`);
-            } catch {
-              // No anchor index yet (a chat restored from history). The
-              // fixed-width scan below covers it; nothing has gone wrong.
-              passIds = [];
+            if (passIdsByCard === undefined) {
+              try {
+                passIdsByCard = groupWordEditAnchorPassIds();
+              } catch {
+                // No anchor index yet (a chat restored from history). The
+                // fixed-width scan below covers it; nothing has gone wrong.
+                passIdsByCard = new Map();
+              }
             }
+            let passIds = passIdsByCard.get(cardKey) ?? [];
             if (passIds.length === 0) {
               passIds = Array.from(
                 { length: 8 },
@@ -401,6 +447,7 @@ export function useWordTrackedEdits({
           return;
         }
         const unapplied: { cardKey: string; edit: RedlineEdit }[] = [];
+        const probePatches = new Map<string, Partial<EditRuntimeState>>();
         probes.forEach((probe, probeIndex) => {
           const descriptor = proposedDescriptors[probeIndex];
           if (!descriptor) return;
@@ -408,7 +455,7 @@ export function useWordTrackedEdits({
           if (probe.status === "restored" && probe.handle) {
             editHandlesRef.current.set(cardKey, [probe.handle]);
             persistentViewEditKeysRef.current.set(cardKey, cardKey);
-            setEditRuntimeState(cardKey, {
+            probePatches.set(cardKey, {
               status: "pending",
               busy: false,
               error: undefined,
@@ -420,7 +467,7 @@ export function useWordTrackedEdits({
           }
           if (probe.status === "view-only") {
             persistentViewEditKeysRef.current.set(cardKey, cardKey);
-            setEditRuntimeState(cardKey, {
+            probePatches.set(cardKey, {
               status: "view-only",
               busy: false,
               error: undefined,
@@ -430,6 +477,7 @@ export function useWordTrackedEdits({
           }
           unapplied.push(descriptor);
         });
+        patchEditStates(probePatches);
         if (unapplied.length === 0) return;
 
         const results = await Promise.all(
@@ -445,10 +493,11 @@ export function useWordTrackedEdits({
         ) {
           return;
         }
+        const validationPatches = new Map<string, Partial<EditRuntimeState>>();
         for (const { cardKey, edit, result } of results) {
           if (result.status === "ready") {
             readyEditsRef.current.set(cardKey, { edit, persistent: true });
-            setEditRuntimeState(cardKey, {
+            validationPatches.set(cardKey, {
               status: "ready",
               matches: result.matches,
               busy: false,
@@ -461,26 +510,28 @@ export function useWordTrackedEdits({
                 persistent: true,
               });
             }
-            setEditRuntimeState(cardKey, {
+            validationPatches.set(cardKey, {
               ...editFailureState(result),
               matches: result.matches,
               busy: false,
             });
           }
         }
+        patchEditStates(validationPatches);
       })().catch((error: unknown) => {
         if (!mountedRef.current || generation !== sessionGenerationRef.current) {
           return;
         }
-        for (const { cardKey } of proposedDescriptors) {
-          setEditRuntimeState(cardKey, {
-            status: "error",
-            busy: false,
-            error: userMessage(error, {
-              fallback: "Word couldn't check whether this change can be applied.",
-            }),
-          });
-        }
+        reportEscapedWordFailure(error, "word.edit_apply");
+        const message = reportFault(error, {
+          fallback: "Word couldn't check whether this change can be applied.",
+          operation: "word.edit_apply",
+        }).message;
+        patchEditStates(new Map(proposedDescriptors.map(({ cardKey }) => [cardKey, {
+          status: "error" as const,
+          busy: false,
+          error: message,
+        }])));
       });
     }
     if (descriptors.length === 0) return;
@@ -527,6 +578,7 @@ export function useWordTrackedEdits({
         byCard.set(descriptor.cardKey, bucket);
       });
 
+      const restorePatches = new Map<string, Partial<EditRuntimeState>>();
       for (const [cardKey, bucket] of byCard) {
         if (bucket.handles.length > 0) {
           editHandlesRef.current.set(cardKey, bucket.handles);
@@ -534,7 +586,7 @@ export function useWordTrackedEdits({
             cardKey,
             bucket.viewId ?? cardKey,
           );
-          setEditRuntimeState(cardKey, {
+          restorePatches.set(cardKey, {
             status: "pending",
             busy: false,
             error: undefined,
@@ -546,19 +598,20 @@ export function useWordTrackedEdits({
             cardKey,
             bucket.viewId ?? cardKey,
           );
-          setEditRuntimeState(cardKey, {
+          restorePatches.set(cardKey, {
             status: "view-only",
             busy: false,
             error: undefined,
           });
           continue;
         }
-        setEditRuntimeState(cardKey, {
+        restorePatches.set(cardKey, {
           status: "historical",
           busy: false,
           error: bucket.firstError,
         });
       }
+      patchEditStates(restorePatches);
     })();
     // sessionKey is the explicit boundary for historical restoration.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -767,19 +820,20 @@ export function useWordTrackedEdits({
         ) {
           return;
         }
+        reportEscapedWordFailure(error, "word.edit_apply");
+        const message = reportFault(error, {
+          fallback: "Word couldn't apply this change.",
+          operation: "word.edit_apply",
+        }).message;
         setEditRuntimeState(key, {
           status: "error",
           busy: false,
-          error: userMessage(error, {
-            fallback: "Word couldn't apply this change.",
-          }),
+          error: message,
         });
         void updatePersistedEdit(key, {
           apply_status: "failed",
           error_code: "word-error",
-          error_message: userMessage(error, {
-            fallback: "Word couldn't apply this change.",
-          }),
+          error_message: message,
         });
       });
       editApplyJobsRef.current.set(key, job);
@@ -867,19 +921,20 @@ export function useWordTrackedEdits({
           ) {
             return;
           }
+          reportEscapedWordFailure(error, "word.edit_apply");
+          const message = reportFault(error, {
+            fallback: "Word couldn't check whether this change can be applied.",
+            operation: "word.edit_apply",
+          }).message;
           setEditRuntimeState(key, {
             status: "error",
             busy: false,
-            error: userMessage(error, {
-              fallback: "Word couldn't check whether this change can be applied.",
-            }),
+            error: message,
           });
           void updatePersistedEdit(key, {
             apply_status: "failed",
             error_code: "validation-error",
-            error_message: userMessage(error, {
-              fallback: "Word couldn't check whether this change can be applied.",
-            }),
+            error_message: message,
           });
         });
       editApplyJobsRef.current.set(key, job);
@@ -1031,19 +1086,23 @@ export function useWordTrackedEdits({
     [],
   );
 
+  const lastProcessedProjection = useRef<{ messageId: string; projection: RedlineStreamProjection } | null>(null);
   const processLiveRedlines = useCallback(
-    (messageId: string, content: string, persistent: boolean): void => {
-      const projection = projectRedlineStream(content);
-      let changed = false;
-      const next = { ...editStateRef.current };
+    (messageId: string, content: string, persistent: boolean, cachedProjection?: RedlineStreamProjection): void => {
+      const projection = cachedProjection ?? projectRedlineStream(content);
+      if (lastProcessedProjection.current?.messageId === messageId && lastProcessedProjection.current.projection === projection) return;
+      lastProcessedProjection.current = { messageId, projection };
+      // Copy the state map only when a card actually appears: streaming
+      // calls this every frame, mostly with nothing new.
+      let next: Record<string, EditRuntimeState> | null = null;
       projection.edits.forEach((edit) => {
         const key = getEditKey(messageId, edit.blockIndex);
-        if (!next[key]) {
+        if (!(next ?? editStateRef.current)[key]) {
+          next ??= { ...editStateRef.current };
           next[key] = { status: "receiving" };
-          changed = true;
         }
       });
-      if (changed) commitEditState(next);
+      if (next) commitEditState(next);
 
       projection.edits.forEach((edit) => {
         if (!edit.sealed) return;
@@ -1072,18 +1131,20 @@ export function useWordTrackedEdits({
   const markIncompleteRedlines = useCallback(
     (messageId: string, content: string): void => {
       const projection = projectRedlineStream(content);
+      const patches = new Map<string, Partial<EditRuntimeState>>();
       projection.edits.forEach((edit) => {
         const key = getEditKey(messageId, edit.blockIndex);
         if (!edit.sealed && !scheduledEditKeysRef.current.has(key)) {
-          setEditRuntimeState(key, {
+          patches.set(key, {
             status: "incomplete",
             busy: false,
             error: undefined,
           });
         }
       });
+      patchEditStates(patches);
     },
-    [setEditRuntimeState],
+    [patchEditStates],
   );
 
   /**
@@ -1334,7 +1395,10 @@ export function useWordTrackedEdits({
           });
         }
       } catch (error) {
-        reportWordFailure(error, { stage: "resolve" });
+        reportWordFailure(error, {
+          stage: "resolve",
+          operation: "word.edit_resolve",
+        });
         if (
           !mountedRef.current ||
           generation !== sessionGenerationRef.current
@@ -1344,9 +1408,10 @@ export function useWordTrackedEdits({
         setEditRuntimeState(key, {
           status: "error",
           busy: false,
-          error: userMessage(error, {
+          error: reportFault(error, {
             fallback: "Word couldn't update the tracked change.",
-          }),
+            operation: "word.edit_resolve",
+          }).message,
         });
       } finally {
         resolvingEditKeysRef.current.delete(key);
@@ -1370,15 +1435,13 @@ export function useWordTrackedEdits({
         );
       if (entries.length === 0) return;
 
-      for (const entry of entries) {
-        resolvingEditKeysRef.current.add(entry.key);
-        setEditRuntimeState(entry.key, {
-          busy: true,
-          busyAction: decision,
-          error: undefined,
-          viewError: undefined,
-        });
-      }
+      for (const entry of entries) resolvingEditKeysRef.current.add(entry.key);
+      patchEditStates(new Map(entries.map((entry) => [entry.key, {
+        busy: true,
+        busyAction: decision,
+        error: undefined,
+        viewError: undefined,
+      }])));
 
       try {
         // One flat resolution pass; results group back per card so a
@@ -1406,20 +1469,35 @@ export function useWordTrackedEdits({
               : result.status === "already-resolved" && result.resolvedAs
                 ? result.resolvedAs
                 : null;
+        const resultsByCard = new Map<string, typeof results>();
+        results.forEach((result, index) => {
+          const key = flat[index]?.key;
+          if (!key) return;
+          const bucket = resultsByCard.get(key) ?? [];
+          bucket.push(result);
+          resultsByCard.set(key, bucket);
+        });
+        // Show every card's outcome at once, then persist. The document
+        // decision is already made; awaiting each card's record before the
+        // next card left later cards "busy" for N sequential round trips.
+        // Records still enqueue in card order on persistenceQueueRef.
+        const outcomePatches = new Map<string, Partial<EditRuntimeState>>();
+        const persisted: Promise<void>[] = [];
         for (const entry of entries) {
-          const cardResults = results.filter(
-            (_result, index) => flat[index]?.key === entry.key,
-          );
+          const cardResults = resultsByCard.get(entry.key) ?? [];
           editHandlesRef.current.delete(entry.key);
           const decisions = cardResults.map(decisionOf);
-          if (decisions.every((item) => item === "accept")) {
+          const status = decisions.every((item) => item === "accept")
+            ? ("accepted" as const)
+            : decisions.every((item) => item === "reject")
+              ? ("rejected" as const)
+              : null;
+          if (status) {
             persistentViewEditKeysRef.current.delete(entry.key);
-            await recordTerminalDecision(entry.key, "accepted");
-          } else if (decisions.every((item) => item === "reject")) {
-            persistentViewEditKeysRef.current.delete(entry.key);
-            await recordTerminalDecision(entry.key, "rejected");
+            persisted.push(updatePersistedEdit(entry.key, { resolution_status: status }));
+            outcomePatches.set(entry.key, terminalState(status));
           } else {
-            setEditRuntimeState(entry.key, {
+            outcomePatches.set(entry.key, {
               status: "error",
               busy: false,
               error:
@@ -1428,30 +1506,35 @@ export function useWordTrackedEdits({
             });
           }
         }
+        patchEditStates(outcomePatches);
+        await Promise.all(persisted);
       } catch (error) {
-        reportWordFailure(error, { stage: "resolve-batch" });
+        reportWordFailure(error, {
+          stage: "resolve-batch",
+          operation: "word.edit_resolve",
+        });
         if (
           !mountedRef.current ||
           generation !== sessionGenerationRef.current
         ) {
           return;
         }
-        for (const entry of entries) {
-          setEditRuntimeState(entry.key, {
-            status: "error",
-            busy: false,
-            error: userMessage(error, {
-              fallback: "Word couldn't update the tracked changes.",
-            }),
-          });
-        }
+        const message = reportFault(error, {
+          fallback: "Word couldn't update the tracked changes.",
+          operation: "word.edit_resolve",
+        }).message;
+        patchEditStates(new Map(entries.map((entry) => [entry.key, {
+          status: "error" as const,
+          busy: false,
+          error: message,
+        }])));
       } finally {
         for (const entry of entries) {
           resolvingEditKeysRef.current.delete(entry.key);
         }
       }
     },
-    [recordTerminalDecision, setEditRuntimeState],
+    [patchEditStates, updatePersistedEdit],
   );
 
   // handleChat lists the stream controller among its deps. Handing it an
