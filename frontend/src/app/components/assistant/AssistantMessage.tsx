@@ -5,7 +5,6 @@ import { useMarkdownCheckpoint } from "./message/markdownCheckpoint";
 import { createCitationPreprocessor } from "./message/citationPreprocessor";
 import { TextCardUI } from "@mike/ui";
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
-import type { WebSource } from "@mike/contracts";
 import { Check, Copy } from "lucide-react";
 import type {
     AssistantEvent,
@@ -20,11 +19,7 @@ import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
 import { DocSearchBlock } from "./message/DocSearchBlock";
-import {
-    WebReadBlock,
-    WebSearchBlock,
-    WebSourcesBlock,
-} from "./message/WebActivityBlock";
+import { WebReadBlock, WebSearchBlock } from "./message/WebActivityBlock";
 import {
     SubagentGroup,
     subagentTints,
@@ -289,19 +284,6 @@ function AssistantMessageImpl({
         !!onOpenCitationSource ||
         (citation.kind !== "case" && !!onOpenDocument);
     const eventsWithDelegated = withDelegationEvents(events ?? []);
-    // The pages an answer cites follow the answer, not the steps before it.
-    // Several provider steps can cite the same page, so list each URL once.
-    const webSourcesByUrl = new Map<string, WebSource>();
-    for (const event of events ?? []) {
-        if (event.type !== "web_sources") continue;
-        for (const source of event.sources) {
-            const existing = webSourcesByUrl.get(source.url);
-            if (!existing || (!existing.title && source.title)) {
-                webSourcesByUrl.set(source.url, source);
-            }
-        }
-    }
-    const webSources = [...webSourcesByUrl.values()];
     const showCitationBlock =
         !!citationStatus || (!isStreaming && citations.length > 0);
     const handleCopy = async () => {
@@ -1275,12 +1257,6 @@ function AssistantMessageImpl({
                             })}
                         </div>
                     )}
-
-                {webSources.length > 0 && (
-                    <div className="mt-2 mb-3">
-                        <WebSourcesBlock sources={webSources} />
-                    </div>
-                )}
 
                 {showCitationBlock && (
                     <CitationsBlock

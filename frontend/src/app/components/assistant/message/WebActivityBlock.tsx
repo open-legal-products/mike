@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { WebSource } from "@mike/contracts";
+import { WebSkeuoIcon } from "@/app/components/shared/WebSkeuoIcon";
 import type { AssistantEvent } from "../../shared/types";
 import { EventBlock } from "./EventBlocks";
 import { EventDisclosureButton, EventLabel } from "./EventDisclosure";
@@ -55,15 +56,62 @@ function WebPageName({
     );
 }
 
+// Flat grey pills. A long page title wraps inside its pill rather than being
+// cut off.
+const WEB_PAGE_TEXT_PILL_CLASS =
+    "inline-flex min-h-6 max-w-full items-center rounded-full bg-gray-100 px-2.5 py-1 text-left text-[11px] font-medium leading-snug text-gray-700 [overflow-wrap:anywhere]";
+const WEB_PAGE_LINK_PILL_CLASS = `${WEB_PAGE_TEXT_PILL_CLASS} transition-colors hover:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40`;
+
+function WebPagePill({ source }: { source: WebSource }) {
+    const { href, host } = webAddress(source.url);
+    const title = source.title?.trim();
+    const name = (
+        <span className="min-w-0">
+            {title ? (
+                <>
+                    {title}{" "}
+                    <span className="font-normal text-gray-400">{host}</span>
+                </>
+            ) : (
+                host
+            )}
+        </span>
+    );
+    if (!href) return <span className={WEB_PAGE_TEXT_PILL_CLASS}>{name}</span>;
+    return (
+        <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={WEB_PAGE_LINK_PILL_CLASS}
+        >
+            {name}
+        </a>
+    );
+}
+
 function WebPageList({ sources }: { sources: WebSource[] }) {
     return (
-        <ul className="mt-2 flex flex-col gap-1">
+        <ul className="mt-2 flex flex-wrap gap-1.5">
             {sources.map((source, index) => (
-                <li key={`${index}-${source.url}`}>
-                    <WebPageName source={source} />
+                <li key={`${index}-${source.url}`} className="flex max-w-full">
+                    <WebPagePill source={source} />
                 </li>
             ))}
         </ul>
+    );
+}
+
+/** The globe and label at the start of a web search or page read. */
+function WebEventLabel({ children }: { children: ReactNode }) {
+    return (
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+            <WebSkeuoIcon
+                data-testid="web-event-icon"
+                className="h-3.5 w-3.5 shrink-0"
+            />
+            <span className="min-w-0 [overflow-wrap:anywhere]">{children}</span>
+        </span>
     );
 }
 
@@ -110,13 +158,13 @@ export function WebSearchBlock({
                 <EventDisclosureButton
                     open={open}
                     onToggle={() => setOpen((value) => !value)}
-                    label={<span className="[overflow-wrap:anywhere]">{label}</span>}
+                    label={<WebEventLabel>{label}</WebEventLabel>}
                 />
             ) : (
-                <>
-                    <EventLabel className="[overflow-wrap:anywhere]">{label}</EventLabel>
+                <WebEventLabel>
+                    <EventLabel>{label}</EventLabel>
                     {isStreaming ? <span>...</span> : null}
-                </>
+                </WebEventLabel>
             )}
             <WebToolError message={error} />
             {open && results.length > 0 && <WebPageList sources={results} />}
@@ -143,38 +191,25 @@ export function WebReadBlock({
             isStreaming={isStreaming}
             dotColor={error ? "red" : interrupted ? "gray" : "green"}
         >
-            <EventLabel>
-                {isStreaming
-                    ? "Reading"
-                    : error
-                      ? "Read failed"
-                      : interrupted
-                        ? "Read stopped"
-                        : "Read"}
-            </EventLabel>{" "}
-            {/* Only a page the server actually read is a link: the model
-                picks the URL, and it may not be one the user should open. */}
-            <WebPageName
-                source={event}
-                linked={!isStreaming && !error && !interrupted}
-            />
-            {isStreaming ? <span>...</span> : null}
+            <WebEventLabel>
+                <EventLabel>
+                    {isStreaming
+                        ? "Reading"
+                        : error
+                          ? "Read failed"
+                          : interrupted
+                            ? "Read stopped"
+                            : "Read"}
+                </EventLabel>{" "}
+                {/* Only a page the server actually read is a link: the model
+                    picks the URL, and it may not be one the user should open. */}
+                <WebPageName
+                    source={event}
+                    linked={!isStreaming && !error && !interrupted}
+                />
+                {isStreaming ? <span>...</span> : null}
+            </WebEventLabel>
             <WebToolError message={error} />
-        </EventBlock>
-    );
-}
-
-export function WebSourcesBlock({ sources }: { sources: WebSource[] }) {
-    const [open, setOpen] = useState(false);
-    return (
-        <EventBlock>
-            <EventDisclosureButton
-                open={open}
-                onToggle={() => setOpen((value) => !value)}
-                label="Sources"
-                detail={`${sources.length} ${sources.length === 1 ? "web page" : "web pages"}`}
-            />
-            {open && <WebPageList sources={sources} />}
         </EventBlock>
     );
 }

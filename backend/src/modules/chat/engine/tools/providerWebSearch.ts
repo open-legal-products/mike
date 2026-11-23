@@ -1,4 +1,4 @@
-import type { WebSource, WebToolEvent } from "@mike/contracts";
+import type { WebToolEvent } from "@mike/contracts";
 import type { ProviderWebSearchEvent } from "../../../../lib/llm";
 import {
     allowWebPage,
@@ -11,7 +11,6 @@ import {
 const PROVIDER_MAX_SEARCHES = 5;
 
 export function createProviderWebSearchTracker(state: WebTurnState) {
-    const cited = new Map<string, WebSource>();
     let reserved = 0;
     let started = 0;
     return {
@@ -55,10 +54,8 @@ export function createProviderWebSearchTracker(state: WebTurnState) {
                         },
                     };
                 case "cited_source":
+                    // The model may open a page it cites with read_webpage.
                     allowWebPage(state, event.source.url);
-                    if (!cited.has(event.source.url)) {
-                        cited.set(event.source.url, event.source);
-                    }
                     return {};
                 case "unavailable":
                     return {
@@ -71,11 +68,6 @@ export function createProviderWebSearchTracker(state: WebTurnState) {
                         },
                     };
             }
-        },
-        citedSources(): WebToolEvent | null {
-            return cited.size
-                ? { type: "web_sources", sources: [...cited.values()] }
-                : null;
         },
     };
 }

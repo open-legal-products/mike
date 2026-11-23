@@ -1213,12 +1213,6 @@ export async function consumeAssistantTurnStream(
           continue;
         }
 
-        if (data.type === "web_sources") {
-          const sources = parseWebSources(data.sources);
-          if (sources.length) pushEvent({ type: "web_sources", sources });
-          continue;
-        }
-
         if (data.type === "response_details") {
           const details = parseResponseDetails(data);
           if (details) pushEvent(details);

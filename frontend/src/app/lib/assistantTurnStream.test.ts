@@ -1983,7 +1983,7 @@ describe("web activity", () => {
     ]);
   });
 
-  it("keeps valid cited sources and search results while discarding malformed entries", async () => {
+  it("keeps valid search results while discarding malformed entries", async () => {
     const sources = [
       null, {}, "not a source", { url: 42 }, { url: "" },
       { url: "https://law.example/act", title: "Act" },
@@ -1999,15 +1999,15 @@ describe("web activity", () => {
     ];
     expect(web(await eventsOf([
       { type: "web_search", search_id: "ws-1", query: "law", results: sources },
-      { type: "web_sources", sources },
     ]))).toEqual([
       { type: "web_search", search_id: "ws-1", query: "law", results: valid, isStreaming: false },
-      { type: "web_sources", sources: valid },
     ]);
   });
 
-  it.each([undefined, null, {}, [], [null, { url: "" }]])("omits empty or malformed source lists: %j", async (sources) => {
-    expect(await eventsOf([{ type: "web_sources", sources }])).toEqual([]);
+  it("ignores a cited-pages frame from an older server", async () => {
+    expect(await eventsOf([
+      { type: "web_sources", sources: [{ url: "https://law.example/act" }] },
+    ])).toEqual([]);
   });
 
   it("completes a search and a read from their start frames", async () => {

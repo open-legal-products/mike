@@ -201,6 +201,23 @@ describe("runWebToolCall", () => {
     expect(readWebPage).toHaveBeenCalledOnce();
   });
 
+  it("lets the model read a page it cited without listing it in the answer", async () => {
+    readWebPage.mockResolvedValue({
+      url: "https://law.test/cited",
+      title: null,
+      text: "The cited page.",
+    });
+    const ctx = context();
+    const shown = createProviderWebSearchTracker(ctx.state).handle({
+      kind: "cited_source",
+      source: { url: "https://law.test/cited", title: "Cited" },
+    });
+
+    expect(shown).toEqual({});
+    await runWebToolCall(read("https://law.test/cited"), ctx);
+    expect(readWebPage).toHaveBeenCalledOnce();
+  });
+
   it("pages through a long page at the address it redirected to, fetching it once", async () => {
     readWebPage.mockResolvedValue({
       url: "https://law.test/act/2006",

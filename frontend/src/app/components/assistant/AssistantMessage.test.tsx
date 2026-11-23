@@ -55,30 +55,25 @@ describe("AssistantMessage copy", () => {
 });
 
 describe("AssistantMessage web sources", () => {
-    it("lists a page cited by several steps once, keeping its title", async () => {
-        const user = userEvent.setup();
+    it("shows nothing for the cited-pages event an older answer saved", () => {
         render(
             <AssistantMessage
                 events={[
-                    {
-                        type: "web_sources",
-                        sources: [{ url: "https://law.test/s172" }],
-                    },
                     { type: "content", text: "The answer." },
                     {
                         type: "web_sources",
                         sources: [
                             { url: "https://law.test/s172", title: "Section 172" },
-                            { url: "https://law.test/s171", title: "Section 171" },
                         ],
                     },
                 ]}
             />,
         );
 
-        const toggle = screen.getByRole("button", { name: /Sources/ });
-        expect(toggle).toHaveTextContent("2 web pages");
-        await user.click(toggle);
-        expect(screen.getByText("Section 172")).toBeInTheDocument();
+        expect(screen.getByText("The answer.")).toBeInTheDocument();
+        expect(
+            screen.queryByRole("button", { name: /Sources/ }),
+        ).not.toBeInTheDocument();
+        expect(screen.queryByText("Section 172")).not.toBeInTheDocument();
     });
 });
