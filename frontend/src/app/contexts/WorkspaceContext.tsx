@@ -39,6 +39,23 @@ export const PERSONAL_WORKSPACE_LABEL = "Personal";
 interface OrgPreferenceWrites {
     completed: number;
     pending?: Promise<OrgPreferences>;
+    /** Reads started for the organization, numbered from 1. */
+    readsStarted: number;
+    /** The number of the latest read whose answer was published. */
+    readPublished: number;
+}
+
+/** The organization's entry in `writes`, created on first use. */
+function preferenceWritesFor(
+    writes: Map<string, OrgPreferenceWrites>,
+    orgId: string,
+): OrgPreferenceWrites {
+    let entry = writes.get(orgId);
+    if (!entry) {
+        entry = { completed: 0, readsStarted: 0, readPublished: 0 };
+        writes.set(orgId, entry);
+    }
+    return entry;
 }
 
 const STORAGE_PREFIX = "mike.activeWorkspace.";
@@ -269,14 +286,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const loadOrgPreferences = useCallback(
         async (orgId: string, signal?: AbortSignal) => {
             const writes = writesByOrg.current;
-            const completed = writes.get(orgId)?.completed ?? 0;
+            const entry = preferenceWritesFor(writes, orgId);
+            const completed = entry.completed;
+            // Reads can answer out of order (the provider and a settings
+            // page each read): an answer is published only if no read that
+            // started later has published already. A later read that fails
+            // leaves this one free to publish.
+            const read = ++entry.readsStarted;
             const preferences = await getOrgPreferences(orgId, signal);
             if (
                 !signal?.aborted &&
                 writes === writesByOrg.current &&
                 currentOrgId.current === orgId &&
-                completed === (writes.get(orgId)?.completed ?? 0)
+                completed === entry.completed &&
+                read > entry.readPublished
             ) {
+                entry.readPublished = read;
                 setOrgPrefs({ orgId, preferences });
             }
             return preferences;
@@ -286,8 +311,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const saveOrgPreferences = useCallback(
         (orgId: string, update: OrgPreferencesUpdate) => {
             const writes = writesByOrg.current;
-            const entry = writes.get(orgId) ?? { completed: 0 };
-            writes.set(orgId, entry);
+            const entry = preferenceWritesFor(writes, orgId);
             const save = async () => {
                 if (writes !== writesByOrg.current)
                     throw new DOMException("Workspace session ended", "AbortError");

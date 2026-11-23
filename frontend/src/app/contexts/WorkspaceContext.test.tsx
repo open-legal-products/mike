@@ -532,6 +532,56 @@ describe("the active organization's preferences", () => {
         expect(shownPreferences()).toBe("beta-saved");
     });
 
+    it("keeps a newer read when an older read of the same organization answers last", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        const older = Promise.withResolvers<unknown>();
+        const newer = Promise.withResolvers<unknown>();
+        mocks.getOrgPreferences
+            .mockReturnValueOnce(older.promise)
+            .mockReturnValueOnce(newer.promise);
+        let olderRead: Promise<unknown> = Promise.resolve();
+        let newerRead: Promise<unknown> = Promise.resolve();
+        act(() => {
+            olderRead = latest.loadOrgPreferences(ACME.id);
+            newerRead = latest.loadOrgPreferences(ACME.id);
+        });
+        await act(async () => {
+            newer.resolve(preferencesFor("newer"));
+            await newerRead;
+        });
+        await act(async () => {
+            older.resolve(preferencesFor("older"));
+            await olderRead;
+        });
+        expect(shownPreferences()).toBe("newer");
+    });
+
+    it("still takes an older read when the newer read of the organization fails", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        const older = Promise.withResolvers<unknown>();
+        mocks.getOrgPreferences
+            .mockReturnValueOnce(older.promise)
+            .mockRejectedValueOnce(new Error("network"));
+        let olderRead: Promise<unknown> = Promise.resolve();
+        let newerRead: Promise<unknown> = Promise.resolve();
+        act(() => {
+            olderRead = latest.loadOrgPreferences(ACME.id);
+            newerRead = latest.loadOrgPreferences(ACME.id).catch(() => undefined);
+        });
+        await act(async () => {
+            await newerRead;
+            older.resolve(preferencesFor("older"));
+            await olderRead;
+        });
+        expect(shownPreferences()).toBe("older");
+    });
+
     it("drops queued writes when the account session ends", async () => {
         window.localStorage.setItem(STORAGE_KEY, ACME.id);
         const view = renderProvider();
