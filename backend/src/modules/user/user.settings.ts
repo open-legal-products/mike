@@ -20,6 +20,7 @@ import {
 import { AppError } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 import { getEffectiveRouterModels } from "../../lib/routerModels";
+import { loadWorkspacePreferences } from "../../lib/orgPreferences";
 import {
     normalizeOptionalModelPreference,
     normalizeReasoningLevel,
@@ -63,11 +64,14 @@ export type UserModelSettings = {
 
 /**
  * `options.orgId` is the organization the work belongs to, when it belongs
- * to one: the keys it runs on are then the organization's, with a member's
- * own keys beneath them only if the organization allows that (see
- * getEffectiveApiKeys), and the saved model preferences are judged against
- * the lists that govern those keys (getEffectiveRouterModels). Everything
- * else here is the person's own, whichever workspace they are in.
+ * to one. For a team organization the caller is a member of, the work runs
+ * on the organization's keys (getEffectiveApiKeys) and follows the
+ * organization's preferences (lib/orgPreferences.ts): its title, tabular,
+ * memory-curation and subagent models and its web search choices replace
+ * the person's. Every saved model is judged against the lists that govern
+ * the keys in use (getEffectiveRouterModels). Everything else here — the
+ * last picks in the composer, personalisation — is the person's own,
+ * whichever workspace they are in.
  */
 /**
  * A settings read that fell back to its default. The chat goes ahead, so this
@@ -94,6 +98,7 @@ export async function getUserModelSettings(
         responseStyle,
         webSearch,
         courtListener,
+        workspacePreferences,
     ] = await Promise.all([
         client
             .from("user_profiles")
@@ -126,6 +131,10 @@ export async function getUserModelSettings(
             reportSettingsReadFailure("CourtListener connection load failed", error);
             return { enabled: false, token: null };
         }),
+        // Not optional like the enhancements above: falling back to the
+        // person's own models and web search would send an organization's
+        // work somewhere its owners did not choose, so a failure throws.
+        loadWorkspacePreferences(client, userId, options.orgId),
     ]);
     let data = profileResult.data;
     let profileError = profileResult.error;
@@ -221,24 +230,34 @@ export async function getUserModelSettings(
         }
     }
 
+    // In a team organization's workspace these come from the organization.
+    const governing = workspacePreferences ?? {
+        title_model: data?.title_model,
+        tabular_model: data?.tabular_model,
+        memory_curator_model: data?.memory_curator_model,
+        subagent_model: data?.subagent_model,
+        subagent_reasoning: data?.subagent_reasoning,
+        web_search: webSearch,
+    };
+
     return {
         title_model: normalizeOptionalModelPreference(
-            data?.title_model,
+            governing.title_model,
             routerModels,
         ),
         tabular_model: normalizeOptionalModelPreference(
-            data?.tabular_model,
+            governing.tabular_model,
             routerModels,
         ),
         memory_curator_model: normalizeOptionalModelPreference(
-            data?.memory_curator_model,
+            governing.memory_curator_model,
             routerModels,
         ),
         subagent_model: normalizeOptionalModelPreference(
-            data?.subagent_model,
+            governing.subagent_model,
             routerModels,
         ),
-        subagent_reasoning: normalizeReasoningLevel(data?.subagent_reasoning),
+        subagent_reasoning: normalizeReasoningLevel(governing.subagent_reasoning),
         last_selected_chat_model: normalizeOptionalModelPreference(
             data?.last_selected_chat_model,
             routerModels,
@@ -249,7 +268,7 @@ export async function getUserModelSettings(
         legal_research_us:
             courtListener.enabled &&
             (!!api_keys.courtlistener || courtlistenerBulkDataEnabled()),
-        web_search: webSearch,
+        web_search: governing.web_search,
         personalisation: {
             displayName:
                 typeof data?.display_name === "string"

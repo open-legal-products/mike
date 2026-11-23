@@ -11,25 +11,15 @@ import {
 } from "../../lib/serviceResult";
 import {
     DEFAULT_WEB_SEARCH_SETTINGS,
-    WEB_SEARCH_FAMILY_CHOICES,
-    type WebSearchFamily,
+    WEB_SEARCH_FIELDS,
+    parseWebSearchUpdate,
+    webSearchSettingsFromStored,
     type WebSearchSettings,
 } from "../../lib/webSearch";
 import { type Db } from "./user.shared";
 
 const COLUMN = "web_search";
 const MERGE_FUNCTION = "merge_user_web_search";
-
-const FAMILIES = Object.keys(WEB_SEARCH_FAMILY_CHOICES) as WebSearchFamily[];
-
-const FIELDS = ["enabled", ...FAMILIES] as const;
-
-function isChoice<F extends WebSearchFamily>(
-    family: F,
-    value: unknown,
-): value is WebSearchSettings[F] {
-    return (WEB_SEARCH_FAMILY_CHOICES[family] as readonly unknown[]).includes(value);
-}
 
 /** The column or the merge function is not there yet: deployed before migrating. */
 function isNotMigrated(error: unknown): boolean {
@@ -43,28 +33,6 @@ function isNotMigrated(error: unknown): boolean {
         ((code === "PGRST202" || code === "42883") &&
             text.includes(MERGE_FUNCTION))
     );
-}
-
-function toWebSearchSettings(stored: unknown): WebSearchSettings {
-    const record =
-        stored && typeof stored === "object" && !Array.isArray(stored)
-            ? (stored as Record<string, unknown>)
-            : {};
-    const choice = <F extends WebSearchFamily>(family: F): WebSearchSettings[F] => {
-        const value = record[family];
-        return isChoice(family, value)
-            ? value
-            : DEFAULT_WEB_SEARCH_SETTINGS[family];
-    };
-    return {
-        enabled:
-            typeof record.enabled === "boolean"
-                ? record.enabled
-                : DEFAULT_WEB_SEARCH_SETTINGS.enabled,
-        claude: choice("claude"),
-        openai: choice("openai"),
-        other: choice("other"),
-    };
 }
 
 /**
@@ -84,7 +52,7 @@ export async function loadWebSearchSettings(
         if (isNotMigrated(error)) return DEFAULT_WEB_SEARCH_SETTINGS;
         throw error;
     }
-    return toWebSearchSettings(
+    return webSearchSettingsFromStored(
         (data as { web_search?: unknown } | null)?.web_search,
     );
 }
@@ -100,52 +68,15 @@ export async function getWebSearchSettings(
     }
 }
 
-export function validateWebSearchPayload(
-    body: unknown,
-):
-    | { ok: true; update: Partial<WebSearchSettings> }
-    | { ok: false; detail: string } {
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-        return { ok: false, detail: "Expected a JSON object" };
-    }
-    const raw = body as Record<string, unknown>;
-    const unsupported = Object.keys(raw).find(
-        (key) => !(FIELDS as readonly string[]).includes(key),
-    );
-    if (unsupported) {
-        return {
-            ok: false,
-            detail: `Unsupported web search field: ${unsupported}`,
-        };
-    }
-    if (FIELDS.every((field) => raw[field] === undefined)) {
-        return { ok: false, detail: `Expected one of: ${FIELDS.join(", ")}` };
-    }
-    if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
-        return { ok: false, detail: "enabled must be a boolean" };
-    }
-    const update: Partial<WebSearchSettings> =
-        raw.enabled !== undefined ? { enabled: raw.enabled } : {};
-    for (const family of FAMILIES) {
-        const value = raw[family];
-        if (value === undefined) continue;
-        if (!isChoice(family, value)) {
-            return {
-                ok: false,
-                detail: `${family} must be one of: ${WEB_SEARCH_FAMILY_CHOICES[family].join(", ")}`,
-            };
-        }
-        Object.assign(update, { [family]: value });
-    }
-    return { ok: true, update };
-}
+/** Validate a PUT /user/web-search body; shared with an organization's. */
+export const validateWebSearchPayload = parseWebSearchUpdate;
 
 /** A choice back at its default is sent as null, which removes its key. */
 function toStoredPatch(
     update: Partial<WebSearchSettings>,
 ): Record<string, unknown> {
     const patch: Record<string, unknown> = {};
-    for (const field of FIELDS) {
+    for (const field of WEB_SEARCH_FIELDS) {
         const value = update[field];
         if (value === undefined) continue;
         patch[field] =
@@ -175,5 +106,5 @@ export async function saveWebSearchSettings(
     if (data === null || data === undefined) {
         return failure("not_found", "Profile not found");
     }
-    return ok(toWebSearchSettings(data));
+    return ok(webSearchSettingsFromStored(data));
 }

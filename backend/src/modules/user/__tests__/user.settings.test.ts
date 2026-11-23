@@ -1,11 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getEffectiveApiKeys, getEffectiveRouterModels, loadCourtListenerConnection } =
-    vi.hoisted(() => ({
-        getEffectiveApiKeys: vi.fn(),
-        getEffectiveRouterModels: vi.fn(),
-        loadCourtListenerConnection: vi.fn(),
-    }));
+const {
+    getEffectiveApiKeys,
+    getEffectiveRouterModels,
+    loadCourtListenerConnection,
+    loadWorkspacePreferences,
+} = vi.hoisted(() => ({
+    getEffectiveApiKeys: vi.fn(),
+    getEffectiveRouterModels: vi.fn(),
+    loadCourtListenerConnection: vi.fn(),
+    loadWorkspacePreferences: vi.fn(),
+}));
+
+vi.mock("../../../lib/orgPreferences", async () => ({
+    ...(await vi.importActual<typeof import("../../../lib/orgPreferences")>(
+        "../../../lib/orgPreferences",
+    )),
+    loadWorkspacePreferences: (...args: unknown[]) =>
+        loadWorkspacePreferences(...args),
+}));
 
 vi.mock("../../../lib/providerCredentials/index", () => ({
     getEffectiveApiKeys: (...args: unknown[]) => getEffectiveApiKeys(...args),
@@ -48,6 +61,8 @@ beforeEach(() => {
     vi.clearAllMocks();
     getEffectiveApiKeys.mockResolvedValue(NO_KEYS);
     loadCourtListenerConnection.mockResolvedValue({ enabled: true, token: null });
+    // Personal unless a test says the work is in a team organization.
+    loadWorkspacePreferences.mockResolvedValue(null);
     getEffectiveRouterModels.mockResolvedValue({
         openrouter: ["allowed/model"],
         vercel: [],
@@ -346,5 +361,100 @@ describe("getUserModelSettings CourtListener connector", () => {
         expect((await settingsWith("saved-token", false)).legal_research_us).toBe(
             false,
         );
+    });
+});
+
+describe("getUserModelSettings in an organization's workspace", () => {
+    const PROFILE = {
+        title_model: "claude-haiku-4-5",
+        tabular_model: "claude-sonnet-5-5",
+        memory_curator_model: "claude-haiku-4-5",
+        subagent_model: "claude-sonnet-5-5",
+        subagent_reasoning: "low",
+        last_selected_chat_model: "claude-sonnet-5-5",
+        last_selected_reasoning_level: "medium",
+        display_name: "Ada",
+        web_search: { enabled: true, other: "brave" },
+    };
+
+    it("follows the person's own preferences in Personal", async () => {
+        const db = profileDb(PROFILE);
+        const settings = await getUserModelSettings("user-1", db);
+        expect(loadWorkspacePreferences).toHaveBeenCalledWith(db, "user-1", undefined);
+        expect(settings).toMatchObject({
+            title_model: "claude-haiku-4-5",
+            tabular_model: "claude-sonnet-5-5",
+            subagent_reasoning: "low",
+            web_search: { enabled: true, other: "brave" },
+        });
+    });
+
+    it("takes the organization's models and web search, keeping the person's own picks", async () => {
+        loadWorkspacePreferences.mockResolvedValue({
+            title_model: null,
+            tabular_model: "claude-haiku-4-5",
+            memory_curator_model: null,
+            subagent_model: "claude-haiku-4-5",
+            subagent_reasoning: "max",
+            quick_actions_visible: false,
+            response_details_visible: true,
+            web_search: {
+                enabled: false,
+                claude: "provider",
+                openai: "provider",
+                other: "off",
+            },
+        });
+        const db = profileDb(PROFILE);
+
+        const settings = await getUserModelSettings("user-1", db, {
+            orgId: "org-1",
+        });
+
+        expect(loadWorkspacePreferences).toHaveBeenCalledWith(db, "user-1", "org-1");
+        expect(settings).toMatchObject({
+            title_model: null,
+            tabular_model: "claude-haiku-4-5",
+            memory_curator_model: null,
+            subagent_model: "claude-haiku-4-5",
+            subagent_reasoning: "max",
+            web_search: { enabled: false, other: "off" },
+            // The composer's last picks and personalisation stay the person's.
+            last_selected_chat_model: "claude-sonnet-5-5",
+            last_selected_reasoning_level: "medium",
+        });
+        expect(settings.personalisation?.displayName).toBe("Ada");
+    });
+
+    it("judges the organization's models against the lists that govern its keys", async () => {
+        loadWorkspacePreferences.mockResolvedValue({
+            title_model: "openrouter/org/not-listed",
+            tabular_model: "openrouter/allowed/model",
+            memory_curator_model: null,
+            subagent_model: null,
+            subagent_reasoning: null,
+            quick_actions_visible: true,
+            response_details_visible: false,
+            web_search: {
+                enabled: false,
+                claude: "provider",
+                openai: "provider",
+                other: "off",
+            },
+        });
+        const settings = await getUserModelSettings("user-1", profileDb(PROFILE), {
+            orgId: "org-1",
+        });
+        expect(settings.title_model).toBeNull();
+        expect(settings.tabular_model).toBe("openrouter/allowed/model");
+    });
+
+    it("fails rather than running an organization's work on the person's choices", async () => {
+        loadWorkspacePreferences.mockRejectedValue(
+            new Error("Failed to read the organization's preferences"),
+        );
+        await expect(
+            getUserModelSettings("user-1", profileDb(PROFILE), { orgId: "org-1" }),
+        ).rejects.toThrow("Failed to read the organization's preferences");
     });
 });

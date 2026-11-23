@@ -423,6 +423,26 @@ create table if not exists public.organizations (
   -- Whose personal organization this is; set exactly when it is one.
   -- Deleting the account takes its personal organization with it.
   personal_user_id uuid references auth.users(id) on delete cascade,
+  -- Settings > Features and Settings > Model Preferences for work in the
+  -- organization's workspace, set by its owners and admins for every member
+  -- (in Personal the person's own user_profiles columns apply). They mirror
+  -- those columns; web_search likewise holds only the choices that differ
+  -- from the default.
+  title_model text,
+  tabular_model text,
+  memory_curator_model text,
+  subagent_model text,
+  subagent_reasoning text
+    constraint organizations_subagent_reasoning_check
+    check (subagent_reasoning in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
+  quick_actions_visible boolean not null default true,
+  response_details_visible boolean not null default false,
+  web_search jsonb not null default '{}'::jsonb
+    constraint organizations_web_search_check
+    check (
+      jsonb_typeof(web_search) = 'object'
+      and octet_length(web_search::text) <= 1000
+    ),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint organizations_personal_owner_check
@@ -12557,5 +12577,6 @@ insert into public.schema_migrations (filename) values
   ('20261101_24_wipe_memory_files_batch.sql'),
   ('20261107_01_playbook_review_publication.sql'),
   ('20261116_01_tabular_cache_revisions.sql'),
-  ('20261118_01_connector_write_approval_default.sql')
+  ('20261118_01_connector_write_approval_default.sql'),
+  ('20261123_01_org_workspace_preferences.sql')
 on conflict (filename) do nothing;
