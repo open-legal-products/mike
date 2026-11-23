@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listMyOrgInvitations, type OrgInvitation } from "@/app/lib/mikeApi";
@@ -40,6 +40,54 @@ describe("SettingsLayout", () => {
         dataActions.canDelete = true;
     });
 
+    const tabNames = (list: HTMLElement) =>
+        within(list)
+            .getAllByRole("button")
+            .map((button) => button.textContent);
+
+    it("groups the workspace's own settings apart from the person's", () => {
+        render(
+            <SettingsLayout>
+                <div />
+            </SettingsLayout>,
+        );
+        const nav = screen.getByRole("navigation", { name: "Settings" });
+
+        expect(
+            tabNames(within(nav).getByRole("list", { name: "Workspace" })),
+        ).toEqual(["Memory", "Connectors", "Privacy & Data"]);
+        expect(
+            tabNames(within(nav).getByRole("list", { name: "Personal" })),
+        ).toEqual([
+            "Account",
+            "Personalisation",
+            "Appearance",
+            "Features",
+            "Model Preferences",
+            "Bring Your Own Keys",
+            "Security",
+            "My Activity",
+            "Organizations",
+        ]);
+    });
+
+    it("marks Account current at the root of Settings, under Personal", () => {
+        pathname = "/settings";
+        render(
+            <SettingsLayout>
+                <div />
+            </SettingsLayout>,
+        );
+
+        const personal = screen.getByRole("list", { name: "Personal" });
+        expect(
+            within(personal).getByRole("button", { name: "Account" }),
+        ).toHaveAttribute("aria-current", "page");
+        const workspace = screen.getByRole("list", { name: "Workspace" });
+        for (const button of within(workspace).getAllByRole("button"))
+            expect(button).not.toHaveAttribute("aria-current");
+    });
+
     it("lists Privacy & Data while it has an export or a delete to offer", () => {
         dataActions.canDelete = false;
         render(
@@ -63,7 +111,9 @@ describe("SettingsLayout", () => {
         expect(
             screen.queryByRole("button", { name: "Privacy & Data" }),
         ).toBeNull();
-        expect(screen.getByRole("button", { name: "Memory" })).toBeInTheDocument();
+        expect(
+            tabNames(screen.getByRole("list", { name: "Workspace" })),
+        ).toEqual(["Memory", "Connectors"]);
     });
 
     it("exposes Memory as a dedicated settings page and marks it current", async () => {

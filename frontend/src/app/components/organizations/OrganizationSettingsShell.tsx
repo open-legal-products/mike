@@ -238,7 +238,7 @@ export function OrganizationSettingsFrame({
     <SettingsShell
       title="Organization"
       navLabel="Organization"
-      tabs={tabs}
+      groups={[{ id: "organization", tabs }]}
       rootHref={organizationSettingsHref(orgId)}
     >
       {children}

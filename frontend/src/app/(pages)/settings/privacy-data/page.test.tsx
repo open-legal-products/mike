@@ -199,12 +199,14 @@ describe("privacy-data async exports", () => {
         );
     });
 
-    it("names Personal to someone who also belongs to an organization", async () => {
+    it("names Personal in a deletion's confirmation to someone who also belongs to an organization", async () => {
         workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
         mockedDeleteMemories.mockResolvedValue();
 
         render(<PrivacyDataPage />);
-        expect(screen.getByText(/Deletes data in Personal only/)).toBeVisible();
+        // Settings lists the page under Workspace, so the page itself does
+        // not say that it covers this workspace only.
+        expect(screen.queryByText(/Personal only/)).toBeNull();
         await userEvent.click(
             screen.getByRole("button", { name: "Delete all memory" }),
         );
@@ -214,7 +216,7 @@ describe("privacy-data async exports", () => {
         ).toBeVisible();
     });
 
-    it("deletes in the active organization only, and says so", async () => {
+    it("deletes in the active organization only, and names it when confirming", async () => {
         workspaceState.workspaceId = "org-1";
         workspaceState.activeOrganization = {
             id: "org-1",
@@ -226,12 +228,10 @@ describe("privacy-data async exports", () => {
         mockedDeleteChats.mockResolvedValue();
 
         render(<PrivacyDataPage />);
-        expect(
-            screen.getByText(/Deletes data in Acme LLP only/),
-        ).toBeVisible();
+        expect(screen.queryByText(/Acme LLP only/)).toBeNull();
         // The rows describe what is deleted here, not Personal's private projects.
         expect(
-            screen.getByText("Permanently delete your memory in Acme LLP."),
+            screen.getByText("Permanently delete your memory."),
         ).toBeVisible();
         expect(
             screen.queryByText(/private projects you created/i),
@@ -241,9 +241,7 @@ describe("privacy-data async exports", () => {
             screen.getAllByRole("button", { name: "Delete" })[0],
         );
         expect(screen.getByText("Delete all chats in Acme LLP?")).toBeVisible();
-        expect(
-            screen.getByText(/Your other workspaces are not affected/),
-        ).toBeVisible();
+        expect(screen.queryByText(/other workspaces/)).toBeNull();
         await userEvent.click(
             screen.getAllByRole("button", { name: "Delete" }).at(-1)!,
         );
@@ -298,7 +296,8 @@ describe("privacy-data async exports", () => {
         vi.spyOn(console, "error").mockImplementation(() => {});
 
         render(<PrivacyDataPage />);
-        expect(screen.getByText(/Exports data in Acme LLP only/)).toBeVisible();
+        expect(screen.getByText("Export data")).toBeVisible();
+        expect(screen.queryByText(/Acme LLP only/)).toBeNull();
         // Bulk deletion is not this member's to do here.
         expect(screen.queryByText("Delete data")).toBeNull();
 

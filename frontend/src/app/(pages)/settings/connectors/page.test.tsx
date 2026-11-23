@@ -1767,33 +1767,21 @@ describe("ConnectorsPage workspaces", () => {
 
     const installed = () => within(screen.getByRole("region", { name: "Installed" }));
 
-    it("says nothing about workspaces to someone who has only Personal", async () => {
-        render(<ConnectorsPage />);
-        await act(flushMicrotasks);
-
-        expect(screen.queryByText(/Each workspace has its own connectors/)).toBeNull();
-    });
-
-    it("says which workspace the installed connectors are saved for", async () => {
-        workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
+    // Settings lists Connectors under Workspace, which says the connectors
+    // are the workspace's own; the page does not repeat it.
+    it("says nothing about workspaces, with one workspace or several", async () => {
         const { unmount } = render(<ConnectorsPage />);
         await act(flushMicrotasks);
-        expect(
-            installed().getByText(
-                "Saved for Personal. Each workspace has its own connectors.",
-            ),
-        ).toBeInTheDocument();
+        expect(screen.queryByText(/workspace/i)).toBeNull();
         unmount();
 
+        workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
         workspaceState.workspaceId = "org-1";
         workspaceState.activeOrganization = { id: "org-1", name: "Acme LLP" };
         render(<ConnectorsPage />);
         await act(flushMicrotasks);
-        expect(
-            installed().getByText(
-                "Saved for Acme LLP. Each workspace has its own connectors.",
-            ),
-        ).toBeInTheDocument();
+        expect(screen.queryByText(/workspace/i)).toBeNull();
+        expect(screen.queryByText(/Saved for/)).toBeNull();
     });
 
     it("reads and adds connectors in the active organization's workspace", async () => {
