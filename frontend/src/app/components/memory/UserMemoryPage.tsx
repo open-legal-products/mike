@@ -343,8 +343,9 @@ function ProjectMemoryDefaultRow() {
       <div className="space-y-1">
         <SettingsLabel>Project memory for new projects</SettingsLabel>
         <SettingsDescription>
-          Choose whether memory is enabled by default for projects you create.
-          Project owners can still change it for each project.
+          Choose whether memory is enabled by default for projects you create
+          in any workspace. Project owners can still change it for each
+          project.
         </SettingsDescription>
         {error ? (
           <p className="text-xs text-red-600" role="alert">

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrgPreferences } from "@/app/lib/mikeApi";
@@ -9,13 +9,17 @@ import type { OrgPreferences } from "@/app/lib/mikeApi";
 const state = vi.hoisted(() => ({
     scope: { kind: "organization", orgId: "org-1", orgName: "Acme LLP" } as
         | { kind: "organization"; orgId: string; orgName: string }
-        | { kind: "managed"; orgName: string },
+        | { kind: "managed"; orgName: string }
+        | { kind: "loading" },
     initial: null as unknown as OrgPreferences,
     save: vi.fn(),
     notifyError: vi.fn(),
     updateModelPreference: vi.fn(),
 }));
 
+vi.mock("@/app/components/settings/WorkspaceScopePending", () => ({
+    WorkspaceScopePending: () => <p>Loading the workspace</p>,
+}));
 vi.mock("@/app/hooks/useWorkspaceSettingsScope", () => ({
     useWorkspaceSettingsScope: () => state.scope,
 }));
@@ -133,6 +137,35 @@ describe("ModelPreferencesPage in an organization's workspace", () => {
         ).toBeInTheDocument();
     });
 
+    it("shows the model a Retry saved, after a later choice succeeded", async () => {
+        state.save.mockRejectedValueOnce(new Error("refused"));
+        const user = userEvent.setup();
+        render(<ModelPreferencesPage />);
+
+        // Sol is refused; Luna is then chosen and saved.
+        await user.click(screen.getByRole("button", { name: "GPT-6 Luna" }));
+        await user.click(screen.getByText("GPT-6.1 Sol"));
+        await waitFor(() => expect(state.notifyError).toHaveBeenCalled());
+        await user.click(screen.getByRole("button", { name: "GPT-6 Luna" }));
+        await user.click(screen.getAllByText("GPT-6 Luna").at(-1)!);
+        await waitFor(() =>
+            expect(state.save).toHaveBeenLastCalledWith({
+                memory_curator_model: "gpt-6-luna",
+            }),
+        );
+
+        // Retry on the notice saves Sol after all: the page shows Sol.
+        const { onRetry } = state.notifyError.mock.calls[0][1] as {
+            onRetry: () => void;
+        };
+        await act(async () => onRetry());
+        await waitFor(() =>
+            expect(
+                screen.getByRole("button", { name: "GPT-6.1 Sol" }),
+            ).toBeInTheDocument(),
+        );
+    });
+
     it("tells a member who sets them, and offers no choices", () => {
         state.scope = { kind: "managed", orgName: "Acme LLP" };
         render(<ModelPreferencesPage />);
@@ -143,5 +176,11 @@ describe("ModelPreferencesPage in an organization's workspace", () => {
             ),
         ).toBeInTheDocument();
         expect(screen.queryByRole("button")).toBeNull();
+    });
+
+    it("holds a placeholder until the organization has loaded", () => {
+        state.scope = { kind: "loading" };
+        render(<ModelPreferencesPage />);
+        expect(screen.getByText("Loading the workspace")).toBeInTheDocument();
     });
 });

@@ -15,6 +15,11 @@ import {
  * organization's settings have not loaded), and callers apply their default.
  */
 export interface WorkspacePreferences {
+    /**
+     * Whether an organization governs these. There an unknown value must not
+     * read as its default: the organization may have turned it off.
+     */
+    governedByOrganization: boolean;
     quickActionsVisible: boolean | undefined;
     responseDetailsVisible: boolean | undefined;
     /** The model preselected for a new tabular review; `null` for none. */
@@ -30,6 +35,7 @@ export function useWorkspacePreferences(): WorkspacePreferences {
     return useMemo(() => {
         if (inOrganization)
             return {
+                governedByOrganization: true,
                 quickActionsVisible: orgPreferences?.quick_actions_visible,
                 responseDetailsVisible:
                     orgPreferences?.response_details_visible,
@@ -38,6 +44,7 @@ export function useWorkspacePreferences(): WorkspacePreferences {
                     : undefined,
             };
         return {
+            governedByOrganization: false,
             quickActionsVisible: profile?.quickActionsVisible,
             responseDetailsVisible: profile?.responseDetailsVisible,
             tabularModel: profile ? profile.tabularModel : undefined,

@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
         name: string;
         role: string;
     } | null,
+    organizationsFailed: false,
 }));
 
 vi.mock("@/app/contexts/WorkspaceContext", () => ({
@@ -21,6 +22,7 @@ const scope = () => renderHook(() => useWorkspaceSettingsScope()).result.current
 beforeEach(() => {
     state.workspaceId = "personal";
     state.activeOrganization = null;
+    state.organizationsFailed = false;
 });
 
 describe("useWorkspaceSettingsScope", () => {
@@ -33,6 +35,12 @@ describe("useWorkspaceSettingsScope", () => {
     it("is not decided before the organization has loaded", () => {
         state.workspaceId = "org-1";
         expect(scope()).toEqual({ kind: "loading" });
+    });
+
+    it("is unavailable once reading the organizations has failed", () => {
+        state.workspaceId = "org-1";
+        state.organizationsFailed = true;
+        expect(scope()).toEqual({ kind: "unavailable" });
     });
 
     it.each(["owner", "admin"])(

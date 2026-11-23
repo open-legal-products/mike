@@ -10,13 +10,17 @@ import FeaturesPage from "./page";
 const state = vi.hoisted(() => ({
     scope: { kind: "organization", orgId: "org-1", orgName: "Acme LLP" } as
         | { kind: "organization"; orgId: string; orgName: string }
-        | { kind: "managed"; orgName: string },
+        | { kind: "managed"; orgName: string }
+        | { kind: "loading" },
     initial: null as unknown as OrgPreferences,
     save: vi.fn(),
     notifyError: vi.fn(),
     updateQuickActionsVisible: vi.fn(),
 }));
 
+vi.mock("@/app/components/settings/WorkspaceScopePending", () => ({
+    WorkspaceScopePending: () => <p>Loading the workspace</p>,
+}));
 vi.mock("@/app/hooks/useWorkspaceSettingsScope", () => ({
     useWorkspaceSettingsScope: () => state.scope,
 }));
@@ -140,5 +144,11 @@ describe("FeaturesPage in an organization's workspace", () => {
             ),
         ).toBeInTheDocument();
         expect(screen.queryByRole("switch")).toBeNull();
+    });
+
+    it("holds a placeholder until the organization has loaded", () => {
+        state.scope = { kind: "loading" };
+        render(<FeaturesPage />);
+        expect(screen.getByText("Loading the workspace")).toBeInTheDocument();
     });
 });

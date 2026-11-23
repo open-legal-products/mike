@@ -14,6 +14,7 @@ import {
 const mocks = vi.hoisted(() => ({
     userId: "u1" as string | null,
     listOrgs: vi.fn(),
+    updateOrgPreferences: vi.fn(),
     getOrgApiKeys: vi.fn(),
     getOrgPreferences: vi.fn(),
 }));
@@ -25,6 +26,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
     listOrgs: mocks.listOrgs,
     getOrgApiKeys: mocks.getOrgApiKeys,
     getOrgPreferences: mocks.getOrgPreferences,
+    updateOrgPreferences: mocks.updateOrgPreferences,
 }));
 
 const ACME = { id: "org-acme", name: "Acme LLP", role: "member" };
@@ -376,30 +378,98 @@ describe("the active organization's preferences", () => {
         renderProvider();
         await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
 
-        act(() =>
-            latest.setOrgPreferences(ACME.id, {
-                ...preferencesFor(ACME.id),
-                tabular_model: "saved",
-            } as never),
+        mocks.updateOrgPreferences.mockResolvedValueOnce({
+            ...preferencesFor(ACME.id),
+            tabular_model: "saved",
+        });
+        await act(() =>
+            latest.saveOrgPreferences(ACME.id, { tabular_model: "saved" }),
         );
+        expect(mocks.updateOrgPreferences).toHaveBeenCalledWith(ACME.id, {
+            tabular_model: "saved",
+        });
         expect(shownPreferences()).toBe("saved");
 
         // A save that lands after switching away is not shown as Beta's.
         act(() => latest.setWorkspace(BETA.id));
         await waitFor(() => expect(shownPreferences()).toBe(BETA.id));
-        act(() =>
-            latest.setOrgPreferences(ACME.id, preferencesFor("late") as never),
+        mocks.updateOrgPreferences.mockResolvedValueOnce(preferencesFor("late"));
+        await act(() =>
+            latest.saveOrgPreferences(ACME.id, { tabular_model: "late" }),
         );
         expect(shownPreferences()).toBe(BETA.id);
     });
 
-    it("stay unknown when they cannot be read", async () => {
+    it("keep a saved answer over a read that started before the save", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        let arrive: (value: unknown) => void = () => {};
+        mocks.getOrgPreferences.mockImplementationOnce(
+            () => new Promise((resolve) => (arrive = resolve)),
+        );
+        let stale: Promise<unknown> = Promise.resolve();
+        act(() => {
+            stale = latest.loadOrgPreferences(ACME.id);
+        });
+        mocks.updateOrgPreferences.mockResolvedValueOnce(preferencesFor("saved"));
+        await act(() =>
+            latest.saveOrgPreferences(ACME.id, { tabular_model: "saved" }),
+        );
+        await act(async () => {
+            arrive(preferencesFor("stale"));
+            await stale;
+        });
+        expect(shownPreferences()).toBe("saved");
+
+        // A read that starts after the save applies as usual.
+        mocks.getOrgPreferences.mockResolvedValueOnce(preferencesFor("fresh"));
+        await act(() => latest.loadOrgPreferences(ACME.id));
+        expect(shownPreferences()).toBe("fresh");
+    });
+
+    it("stay unknown when they cannot be read, and are read again on returning to the tab", async () => {
         window.localStorage.setItem(STORAGE_KEY, ACME.id);
         mocks.getOrgPreferences.mockRejectedValueOnce(new Error("network"));
         renderProvider();
         await screen.findByText(`${ACME.id}|${ACME.id}|loaded|Acme LLP`);
         await waitFor(() => expect(mocks.getOrgPreferences).toHaveBeenCalled());
         expect(latest.orgPreferences).toBeNull();
+
+        act(() => {
+            document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+    });
+});
+
+describe("a failed read of the organizations", () => {
+    it("is reported while nothing is known, and cleared once a read succeeds", async () => {
+        mocks.listOrgs.mockRejectedValueOnce(new Error("network"));
+        renderProvider();
+        await waitFor(() => expect(latest.organizationsFailed).toBe(true));
+        expect(latest.organizations).toBeNull();
+
+        await act(() => latest.refreshOrganizations());
+        expect(latest.organizationsFailed).toBe(false);
+        expect(latest.organizations).toEqual([ACME, BETA]);
+    });
+
+    it("is not reported over organizations already known", async () => {
+        renderProvider();
+        await waitFor(() => expect(latest.organizations).not.toBeNull());
+        mocks.listOrgs.mockRejectedValueOnce(new Error("network"));
+        await act(() => latest.refreshOrganizations());
+        expect(latest.organizationsFailed).toBe(false);
+    });
+});
+
+describe("outside a provider, preferences", () => {
+    it("cannot be read or saved", async () => {
+        render(<Probe />);
+        await expect(latest.loadOrgPreferences("o")).rejects.toThrow();
+        await expect(latest.saveOrgPreferences("o", {})).rejects.toThrow();
     });
 });
 

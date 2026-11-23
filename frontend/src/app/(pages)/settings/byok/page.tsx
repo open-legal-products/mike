@@ -4,6 +4,7 @@ import { OrganizationProviderKeys } from "@/app/components/organizations/Organiz
 import { ManagedByOrganization } from "@/app/components/settings/ManagedByOrganization";
 import { PersonalProviderKeys } from "@/app/components/settings/PersonalProviderKeys";
 import { useWorkspaceSettingsScope } from "@/app/hooks/useWorkspaceSettingsScope";
+import { WorkspaceScopePending } from "@/app/components/settings/WorkspaceScopePending";
 
 /**
  * Settings > Bring Your Own Keys: the keys work in the active workspace runs
@@ -13,7 +14,8 @@ import { useWorkspaceSettingsScope } from "@/app/hooks/useWorkspaceSettingsScope
  */
 export default function ByokPage() {
     const scope = useWorkspaceSettingsScope();
-    if (scope.kind === "loading") return null;
+    if (scope.kind === "loading" || scope.kind === "unavailable")
+      return <WorkspaceScopePending unavailable={scope.kind === "unavailable"} />;
     if (scope.kind === "managed")
         return (
             <ManagedByOrganization

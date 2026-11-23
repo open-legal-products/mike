@@ -144,7 +144,9 @@ export function OrganizationWebSearchSection({
     save: (update) =>
       save({ web_search: update }).then((saved) => saved.web_search),
     apiKeys,
-    hasSavedKey: (service) => orgApiKeys?.keys[service] === true,
+    // Saved by the organization itself: a deployment-wide key also reads as
+    // configured, but there is no organization key to show or remove.
+    hasSavedKey: (service) => orgApiKeys?.keys.sources?.[service] === "org",
     saveKey: async (service, value) => {
       await saveOrgApiKey(orgId, service, value);
       await refreshOrgApiKeys();
@@ -315,6 +317,7 @@ function WebSearchCard({ store }: { store: WebSearchStore }) {
               <ApiKeyField
                 key={service}
                 label={SEARCH_SERVICES[service].keyLabel}
+                owner={store.owner}
                 hasSavedKey={store.hasSavedKey(service)}
                 onSave={(value) => store.saveKey(service, value.trim() || null)}
                 onRemove={() => store.saveKey(service, null)}

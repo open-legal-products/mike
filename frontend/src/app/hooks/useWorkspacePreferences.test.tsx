@@ -41,6 +41,7 @@ beforeEach(() => {
 describe("useWorkspacePreferences", () => {
     it("follows the caller's own settings in Personal", () => {
         expect(renderHook(() => useWorkspacePreferences()).result.current).toEqual({
+            governedByOrganization: false,
             quickActionsVisible: true,
             responseDetailsVisible: false,
             tabularModel: "my-model",
@@ -50,6 +51,7 @@ describe("useWorkspacePreferences", () => {
     it("follows the organization's settings in its workspace, not the caller's", () => {
         state.workspaceId = "org-1";
         expect(renderHook(() => useWorkspacePreferences()).result.current).toEqual({
+            governedByOrganization: true,
             quickActionsVisible: false,
             responseDetailsVisible: true,
             tabularModel: "org-model",
@@ -60,6 +62,7 @@ describe("useWorkspacePreferences", () => {
         state.workspaceId = "org-1";
         state.orgPreferences = null;
         expect(renderHook(() => useWorkspacePreferences()).result.current).toEqual({
+            governedByOrganization: true,
             quickActionsVisible: undefined,
             responseDetailsVisible: undefined,
             tabularModel: undefined,
@@ -69,6 +72,7 @@ describe("useWorkspacePreferences", () => {
     it("knows nothing in Personal until the profile arrives", () => {
         state.profile = null;
         expect(renderHook(() => useWorkspacePreferences()).result.current).toEqual({
+            governedByOrganization: false,
             quickActionsVisible: undefined,
             responseDetailsVisible: undefined,
             tabularModel: undefined,
