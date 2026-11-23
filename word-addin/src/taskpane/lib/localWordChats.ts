@@ -4,7 +4,7 @@ import { notifyWordChatHistoryChanged } from "./wordChatHistoryEvents";
 import { UserVisibleError } from "./notify";
 
 /** Shown when this pane's code is older than the device-only chat database. */
-export const OUTDATED_ADDIN_MESSAGE =
+const OUTDATED_ADDIN_MESSAGE =
   "A newer version of Mike updated this device's chats. Close and reopen the add-in to load them.";
 
 const DATABASE_NAME = "mike-word-addin";
