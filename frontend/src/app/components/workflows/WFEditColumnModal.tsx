@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, X } from "lucide-react";
 import type { ColumnConfig, ColumnFormat } from "../shared/types";
 import { generateTabularColumnPrompt } from "@/app/lib/mikeApi";
+import { notifyError } from "@/app/lib/userFacingError";
 import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
 import { FORMAT_OPTIONS } from "../tabular/columnFormat";
 import { TAG_COLORS } from "../tabular/pillUtils";
@@ -99,6 +100,11 @@ export function WFEditColumnModal({ column, onClose, onSave, onDelete }: Props) 
                 tags: draft.format === "tag" ? draft.tags : undefined,
             });
             update({ prompt });
+        } catch (error) {
+            notifyError(error, {
+                action: "draft the column prompt",
+                onRetry: () => void autoGeneratePrompt(),
+            });
         } finally {
             setGenerating(false);
         }

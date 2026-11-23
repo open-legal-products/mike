@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { ChevronDown, Loader2, MoreHorizontal, Plus, X } from "lucide-react";
 import type { ColumnConfig, ColumnFormat } from "../shared/types";
 import { generateTabularColumnPrompt } from "@/app/lib/mikeApi";
+import { notifyError } from "@/app/lib/userFacingError";
 import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
 import { FORMAT_OPTIONS, formatLabel, formatIcon } from "./columnFormat";
 import { TAG_COLORS } from "./pillUtils";
@@ -213,6 +214,11 @@ export function TREditColumnMenu({
                 tags: format === "tag" ? tags : undefined,
             });
             setPrompt(prompt);
+        } catch (error) {
+            notifyError(error, {
+                action: "draft the column prompt",
+                onRetry: () => void handleAutoGenerate(),
+            });
         } finally {
             setGenerating(false);
         }
