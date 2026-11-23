@@ -78,7 +78,6 @@ import {
 import { isReported, reportError } from "@/app/lib/errorReporting";
 
 export {
-    SUPPORT_EMAIL,
     UserVisibleError,
     isAbortError,
     isNetworkError,
