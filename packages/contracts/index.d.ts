@@ -351,7 +351,10 @@ export type WebToolEvent =
       error?: string;
       error_code?: WebToolErrorCode;
     }
-  /** Pages the answer cites, as reported by the model provider. */
+  /**
+   * Pages the answer cites, as reported by the model provider. No longer
+   * produced; answers saved before then still carry it.
+   */
   | { type: "web_sources"; sources: WebSource[] };
 
 export type DelegationEffort = "quick" | "standard" | "deep";

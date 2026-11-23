@@ -23,7 +23,29 @@ describe("web activity blocks", () => {
         expect(links[0]).toHaveAccessibleName(/Companies Act 2006, s 172/);
         expect(links[0]).toHaveAttribute("href", search.results[0].url);
         expect(links[0]).toHaveAttribute("target", "_blank");
+        expect(links[0]).toHaveAttribute("rel", "noopener noreferrer");
         expect(screen.getByText("Trap")).toBeInTheDocument();
+    });
+
+    it("marks web searches and page reads with the globe icon", () => {
+        render(
+            <>
+                <WebSearchBlock event={search} />
+                <WebSearchBlock event={{ ...search, search_id: "ws-2", results: [] }} isStreaming />
+                <WebReadBlock event={{ type: "web_read", read_id: "r1", url: "https://example.com/a" }} />
+            </>,
+        );
+
+        const icons = screen.getAllByTestId("web-event-icon");
+        expect(icons).toHaveLength(3);
+        for (const icon of icons) {
+            expect(icon).toHaveAttribute("aria-hidden", "true");
+            expect(icon).toHaveAttribute("alt", "");
+        }
+        // The icon is decorative, so the disclosure keeps its text name.
+        expect(
+            screen.getByRole("button", { name: "Searched the web for “directors duties”" }),
+        ).toBeInTheDocument();
     });
 
     it("labels a stopped search and read as stopped, and does not link the unread page", () => {

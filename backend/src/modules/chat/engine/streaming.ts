@@ -1325,12 +1325,6 @@ export async function runLLMStream(params: {
 
   flushText();
 
-  const citedWebSources = providerWebSearch.citedSources();
-  if (citedWebSources) {
-    events.push(citedWebSources);
-    write(`data: ${JSON.stringify(citedWebSources)}\n\n`);
-  }
-
   // Parse and emit citations from <CITATIONS> block
   const { citations: parsedCitations, diagnostics: citationDiagnostics } =
     parseCitationsWithDiagnostics(fullText);

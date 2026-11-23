@@ -577,6 +577,7 @@ export async function enrichWithPriorEvents(
     } else if (ev?.type === "web_read" && !ev.error) {
       lines.push(`- read_webpage → ${untrustedRef(ev.url)}`);
     } else if (ev?.type === "web_sources" && Array.isArray(ev.sources)) {
+      // No longer produced; answers saved before then still carry it.
       for (const source of ev.sources as { url?: unknown }[]) {
         lines.push(`- cited web page → ${untrustedRef(source.url)}`);
       }
