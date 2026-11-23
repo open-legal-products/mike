@@ -286,6 +286,7 @@ tabularRouter.post("/prompt", requireAuth, asyncRoute(async (req, res) => {
         tags: Array.isArray(req.body.tags)
             ? req.body.tags.filter((t: unknown) => typeof t === "string")
             : [],
+        workspace: req.body.workspace,
     });
     if (!result.ok) return void sendTabularFailure(res, result);
     res.json(result.data);

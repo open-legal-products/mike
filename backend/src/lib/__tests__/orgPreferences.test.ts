@@ -2,12 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
     role: null as string | null,
+    roleReadFails: false,
     personal: false,
 }));
 
 vi.mock("../access", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../access")>()),
-    getOrgRole: vi.fn(async () => mocks.role),
+    getOrgRoleOrThrow: vi.fn(async () => {
+        if (mocks.roleReadFails) throw new Error("membership read failed");
+        return mocks.role;
+    }),
 }));
 vi.mock("../personalOrgs", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../personalOrgs")>()),
@@ -49,6 +53,7 @@ function orgDb(
 
 beforeEach(() => {
     mocks.role = null;
+    mocks.roleReadFails = false;
     mocks.personal = false;
 });
 
@@ -150,6 +155,15 @@ describe("loadWorkspacePreferences", () => {
         await expect(
             loadWorkspacePreferences(db, "u1", "org-1"),
         ).resolves.toBeNull();
+    });
+
+    it("throws when membership cannot be read rather than answering Personal", async () => {
+        mocks.roleReadFails = true;
+        const { db, reads } = orgDb({ title_model: "claude-haiku-4-5" });
+        await expect(
+            loadWorkspacePreferences(db, "u1", "org-1"),
+        ).rejects.toThrow("membership read failed");
+        expect(reads).toEqual([]);
     });
 
     it("is the organization's for any member of a team organization", async () => {

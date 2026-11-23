@@ -19,16 +19,25 @@ import {
 
 type Row = Record<string, unknown>;
 
-/** One organizations row; reads see it, updates change it and return it. */
-function fakeDb(row: Row | null) {
+/**
+ * One organizations row; reads see it, updates change it and return it. An
+ * update filtered on `web_search` lands only while the row still holds that
+ * value. `beforeWrite` runs just before each update, as another admin's
+ * save landing in between would.
+ */
+function fakeDb(row: Row | null, beforeWrite?: (row: Row) => void) {
     const updates: Row[] = [];
     const db = {
         from: (table: string) => {
             expect(table).toBe("organizations");
             let patch: Row | null = null;
+            const filters: Record<string, unknown> = {};
             const q: Record<string, unknown> = {
                 select: () => q,
-                eq: () => q,
+                eq: (column: string, value: unknown) => {
+                    filters[column] = value;
+                    return q;
+                },
                 update: (value: Row) => {
                     patch = value;
                     return q;
@@ -38,12 +47,18 @@ function fakeDb(row: Row | null) {
                     error: null,
                 }),
                 then: (resolve: (v: unknown) => unknown) => {
-                    if (patch && row) {
+                    if (patch && row) beforeWrite?.(row);
+                    const matches =
+                        !!row &&
+                        (filters.web_search === undefined ||
+                            filters.web_search ===
+                                JSON.stringify(row.web_search ?? {}));
+                    if (patch && row && matches) {
                         updates.push(patch);
                         Object.assign(row, patch);
                     }
                     return Promise.resolve({
-                        data: row ? [{ ...row }] : [],
+                        data: row && matches ? [{ ...row }] : [],
                         error: null,
                     }).then(resolve);
                 },
@@ -166,6 +181,39 @@ describe("updateOrgPreferences", () => {
                 web_search: { enabled: true, claude: "tavily", openai: "provider", other: "off" },
             },
         });
+    });
+
+    it("re-merges over another admin's web search change that landed first", async () => {
+        mocks.role = "admin";
+        let raced = false;
+        const { db, row } = fakeDb({ web_search: { enabled: true } }, (current) => {
+            if (raced) return;
+            raced = true;
+            // Another admin turns web search off between our read and write.
+            current.web_search = {};
+        });
+
+        const result = await update(db, { web_search: { claude: "tavily" } });
+
+        expect(row?.web_search).toEqual({ claude: "tavily" });
+        expect(result).toMatchObject({
+            ok: true,
+            preferences: { web_search: { enabled: false, claude: "tavily" } },
+        });
+    });
+
+    it("answers a conflict when web search keeps changing underneath", async () => {
+        mocks.role = "admin";
+        let n = 0;
+        const { db, updates } = fakeDb({ web_search: {} }, (current) => {
+            current.web_search = { other: `brave-${n++}` };
+        });
+
+        await expect(
+            update(db, { web_search: { enabled: true } }),
+        ).resolves.toMatchObject({ ok: false, kind: "conflict" });
+        expect(updates).toEqual([]);
+        expect(mocks.recordAudit).not.toHaveBeenCalled();
     });
 
     it("does not audit a save that changed nothing", async () => {
