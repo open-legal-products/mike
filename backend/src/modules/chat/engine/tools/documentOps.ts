@@ -55,6 +55,7 @@ export function citationReminder(
   return [
     `[Citation requirement for ${docLabel}]:`,
     `Document filename: ${promptFilename}`,
+    "When a passage carries a [[p…:N]] handle, append that exact handle to the claim. For a more precise quote or an unlabelled passage, use these cite_sources instructions:",
     `If your final answer makes any factual claim from this document, include inline [N] markers, each with a citation entry.`,
     `Every citation entry for this document MUST use "doc_id": "${docLabel}".`,
     shapeLine,
@@ -1213,6 +1214,7 @@ export async function readDocumentContent(
   db?: Db,
   opts?: {
     emitEvents?: boolean;
+    annotatePassages?: (text: string, label: string, source: DocIndex[string]) => string;
     readIdentity?: Awaited<ReturnType<typeof getTurnReadIdentity>>;
   },
 ): Promise<string> {
@@ -1238,6 +1240,14 @@ export async function readDocumentContent(
     readIdentity?.versionId ?? docIndex?.[docLabel]?.version_id ?? null;
   const versionNumber =
     readIdentity?.versionNumber ?? docIndex?.[docLabel]?.version_number ?? null;
+  // A passage must open the same stored revision the model read. Provider
+  // sources, live Word snapshots and spreadsheets have specialized locators.
+  const source = documentId && versionId && !docInfo.external_source &&
+    /\.(?:pdf|docx|txt)$/i.test(docInfo.filename)
+    ? { document_id: documentId, version_id: versionId, version_number: versionNumber, filename: docInfo.filename }
+    : null;
+  const present = (text: string) => source && opts?.annotatePassages
+    ? opts.annotatePassages(text, docLabel, source) : text;
   const emitDocRead = () => {
     if (!emitEvents) return;
     write(
@@ -1274,13 +1284,15 @@ export async function readDocumentContent(
     }
 
     const cached = turnDocumentTexts.get(docStore)?.get(docLabel);
+    let canPinRead = true;
     const remember = (text: string) => {
+      if (!canPinRead) return text;
       if (readIdentity) {
         const texts = turnDocumentTexts.get(docStore) ?? new Map();
         texts.set(docLabel, { key: readIdentity.key, text });
         turnDocumentTexts.set(docStore, texts);
       }
-      return text;
+      return present(text);
     };
 
     // Search results are bound to a content revision, not just a mutable
@@ -1302,7 +1314,7 @@ export async function readDocumentContent(
           ...actor, revision: docInfo.search_source.revision,
         });
         emitDocRead();
-        return current ? cached.text : "Document could not be read.";
+        return current ? present(cached.text) : "Document could not be read.";
       }
       const stored = await readStoredDocumentText(db, actor);
       if (!stored || stored.revision !== docInfo.search_source.revision || stored.status !== "ready") {
@@ -1318,7 +1330,7 @@ export async function readDocumentContent(
 
     if (readIdentity && cached?.key === readIdentity.key) {
       emitDocRead();
-      return cached.text;
+      return present(cached.text);
     }
     if (db && documentId && versionId) {
       const stored = await loadVersionTextState(db, documentId, versionId, readIdentity?.storagePath);
@@ -1353,6 +1365,7 @@ export async function readDocumentContent(
       if (!raw) {
         raw = await downloadFileIfAvailable(docInfo.storage_path);
         if (raw) {
+          canPinRead = readIdentity?.storagePath === docInfo.storage_path;
           devLog(
             `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
           );

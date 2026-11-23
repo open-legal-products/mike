@@ -427,6 +427,16 @@ function uniqueSources(
 export function createCitationRecorder(kind: CitationKind) {
   const byRef = new Map<number, RecordedCitation>();
 
+  const passageRefs = new Set<number>();
+  function insertPassage(row: Record<string, unknown>): number | null {
+    if (byRef.size >= MAX_CITATIONS) return null;
+    let ref = 1;
+    while (byRef.has(ref)) ref++;
+    byRef.set(ref, { ...row, ref });
+    passageRefs.add(ref);
+    return ref;
+  }
+
   /** The tool result for the model, and the timeline event for the call. */
   const record = async (
     input: unknown,
@@ -469,6 +479,10 @@ export function createCitationRecorder(kind: CitationKind) {
         continue;
       }
       const { ref } = result.citation;
+      if (passageRefs.has(ref)) {
+        rejected.push({ ref, error: "That ref belongs to a cited passage. Choose an unused ref." });
+        continue;
+      }
       if (!refsAfterCall.has(ref) && refsAfterCall.size >= MAX_CITATIONS) {
         rejected.push({
           ref,
@@ -528,6 +542,7 @@ export function createCitationRecorder(kind: CitationKind) {
 
   return {
     tool: kind.tool,
+    insertPassage,
     record,
     /** The recorded citations, in ref order. */
     citations(): RecordedCitation[] {

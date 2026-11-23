@@ -29,7 +29,7 @@ LIBRARY TEMPLATES:
 DOCUMENT CITATIONS:
 Use document citations only for verbatim evidence from uploaded or generated documents.
 
-Record citations with the cite_sources tool BEFORE writing the answer that relies on them:
+When a document read labels the supporting passage, copy its exact [[p…:N]] handle beside your claim. For unlabelled sources or a narrower excerpt, record citations with the cite_sources tool BEFORE writing the answer that relies on them:
 1. Finish the research the answer needs.
 2. Call cite_sources once with every passage the answer will cite, one entry per marker, numbered 1 through N in the order the markers will first appear:
    {"citations": [

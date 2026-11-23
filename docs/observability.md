@@ -998,3 +998,26 @@ personal-key refusal is handled where shown to the user; an opaque 403/404
 remains visible, as does a gateway account refusal whose reason is only relayed. Locally authored missing-key/model configuration refusals are
 warnings. Deployment-specific configuration problems still require operators
 to correct their settings.
+
+### Chat citation outcomes
+
+With `SENTRY_LOGS=on`, the backend counts one `citation_turns` per top-level answer
+that reaches stream finalization. Group by `kind`
+(`completed`, `stopped`, `failed`, `paused`) and `outcome` (`resolved`,
+`unresolved`, `no_markers`). For completed runs, divide the sum with
+`outcome=unresolved` by the sum with either `resolved` or `unresolved`.
+Compare by release and keep interrupted runs separate. A stopped run that
+never reaches the engine, or a stop after the engine returns, falls outside
+this measurement. Telemetry opt-in and the per-process budget still apply.
+
+The `citation_issues` counter breaks down `missing_ref` (distinct numeric
+markers absent from the delivered list), `unavailable_passage` (unresolvable
+or interrupted passage tokens), `unused_ref`, and `unverified_ref`. For
+example, an answer containing `[1, 2]` with only ref 1 delivered contributes
+one unresolved turn and one missing ref. No text, quotations, passage
+handles, filenames, user identifiers or custom model identifiers are sent.
+
+These are structural diagnostics. A no-marker run can be appropriate or can
+contain an uncited material claim. Checking claim coverage, whether the source
+supports the entire claim, and whether the answer is complete requires a
+separate evaluation against the matter and its answer key.

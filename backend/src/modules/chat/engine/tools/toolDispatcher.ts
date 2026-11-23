@@ -377,6 +377,7 @@ export async function runToolCalls(
      * The surface can pause for an approval and continue the same turn.
      * Without it, a connector write that needs approval is refused.
      */
+    annotatePassages?: (text: string, label: string, source: DocIndex[string]) => string;
     connectorApprovals?: boolean;
     /**
      * The caller's authenticated email, for the per-document write check
@@ -750,7 +751,7 @@ export async function runToolCalls(
         write,
         docIndex,
         db,
-        { readIdentity },
+        { readIdentity, annotatePassages: options.annotatePassages },
       );
       const filename = docStore.get(docId)?.filename;
       const documentId = docIndex?.[docId]?.document_id;
@@ -994,7 +995,7 @@ export async function runToolCalls(
           write,
           docIndex,
           db,
-          { readIdentity },
+          { readIdentity, annotatePassages: options.annotatePassages },
         );
         const filename = docStore.get(docId)?.filename ?? docId;
         if (readIdentity && turnReadState) {

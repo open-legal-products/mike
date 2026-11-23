@@ -1,3 +1,5 @@
+import { PassageReferences } from "./passageReferences";
+import { countCitationOutcome } from "./citationOutcome";
 import { BACKEND_REPORTING_OWNER } from "../../../lib/reportedUpstreamCodes";
 import { AppError } from "../../../lib/appError";
 import { teamOrgIdOf } from "../../../lib/personalOrgs";
@@ -543,6 +545,7 @@ export async function runLLMStream(params: {
   });
   const systemPrompt = [
     memory.systemPrompt,
+    ...(!citesTableCells ? ["For document passages labeled [[p…:N]] by a read in this run, cite by copying that exact handle immediately after the supported claim. Mike supplies the quote and reference number. Use cite_sources for unlabelled material, narrower quotes or other source types. Do not copy passage handles into edits, searches or other tool arguments."] : []),
     ...(webSearch
       ? [
           WEB_SEARCH_SYSTEM_PROMPT,
@@ -630,9 +633,14 @@ export async function runLLMStream(params: {
             getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
         }),
   );
+  const passages = new PassageReferences(citationRecorder.insertPassage);
   const recordedCitations = () =>
     limitCitationPayload(citationRecorder.citations());
 
+  const measure = (kind: "completed" | "stopped" | "failed" | "paused") => {
+    if (!isSubagent) countCitationOutcome(kind, fullText, recordedCitations(), passages.unknown);
+  };
+  let paused = false;
   const emitCitations = (status: "partial" | "final") => {
     const snapshot = ++citationSnapshotSeq;
     write(
@@ -652,7 +660,12 @@ export async function runLLMStream(params: {
     write(`data: ${JSON.stringify({ type: "content_delta", text: delta })}\n\n`);
   };
 
+  const appendText = (text: string) => {
+    iterText += text;
+    streamVisibleContent(text);
+  };
   const flushText = () => {
+    appendText(passages.flush());
     if (!iterText) return;
     fullText += iterText;
     events.push({ type: "content", text: iterText });
@@ -937,8 +950,10 @@ export async function runLLMStream(params: {
           subagentRun?.onUsage(usage, finishReason);
         },
         onContentDelta: (delta) => {
-          iterText += delta;
-          streamVisibleContent(delta);
+          const before = passages.count;
+          const text = passages.push(delta);
+          if (before !== passages.count) emitCitations("partial");
+          appendText(text);
         },
         onStopNotice: (notice) => {
           // The server's incomplete-answer warning is its own part of the
@@ -1101,6 +1116,7 @@ export async function runLLMStream(params: {
               apiKeys,
               nonce,
               {
+                annotatePassages: citesTableCells || byScript ? undefined : (text, label, source) => passages.annotate(text, label, source),
                 connectorApprovals: canPauseForApproval,
                 userEmail,
                 orgId,
@@ -1233,6 +1249,7 @@ export async function runLLMStream(params: {
     // Before any await: what a still-running batch finished by now.
     for (const batch of [...unrecordedBatches]) recordBatchEvents(batch);
     if (isAskInputsPause(err)) {
+      paused = true;
       // The ask_inputs event has already been emitted and persisted in `events`.
       // Stop this assistant turn here so the model does not add redundant
       // prose telling the user to answer the picker or attach documents.
@@ -1242,6 +1259,7 @@ export async function runLLMStream(params: {
       // stopped: that is the outcome its readers were given.
       await recordDelegations().catch(() => {});
       flushPartialTurn();
+      measure("stopped");
       throw new AssistantStreamAbortError(
         fullText,
         events.map(sanitizeAssistantEvent),
@@ -1279,6 +1297,7 @@ export async function runLLMStream(params: {
       }
       const errorEvent = modelFailureEvent(err);
       events.push(errorEvent);
+      measure("failed");
       throw new AssistantStreamError(
         errorEvent.message,
         fullText,
@@ -1291,8 +1310,9 @@ export async function runLLMStream(params: {
 
   flushText();
 
-  // The citations recorded with cite_sources, each checked when recorded.
+  // Both inline passages and cite_sources entries share the delivered list.
   const citations = recordedCitations();
+  measure(paused ? "paused" : "completed");
   emitCitations("final");
   if (!isSubagent && answerModel) {
     const details: AssistantEvent = {

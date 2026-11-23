@@ -136,3 +136,17 @@ it("is off unless SENTRY_LOGS=on, with a limit that can be set", () => {
     expect(sentryLogsPerDay({ SENTRY_MAX_LOGS_PER_DAY: "  " })).toBe(5000);
     expect(sentryLogsPerDay({ SENTRY_MAX_LOGS_PER_DAY: "0" })).toBe(0);
 });
+
+it("sends citation outcomes through the production privacy filter", async () => {
+    const { countCitationOutcome } = await import("../../modules/chat/engine/citationOutcome.js");
+    const sent = start(telemetryBudget(20));
+    countCitationOutcome("completed", "PRIVATE_CANARY [1, 7]", [{ ref: 1, verified: false }], 0);
+    await Sentry.flush(2000);
+    const metrics = sent.filter(s => s.type === "trace_metric").flatMap(s => s.items);
+    expect(metrics.map(m => [m.name, m.value, m.attributes.outcome.value])).toEqual([
+        ["citation_turns", 1, "unresolved"],
+        ["citation_issues", 1, "missing_ref"],
+        ["citation_issues", 1, "unverified_ref"],
+    ]);
+    expect(JSON.stringify(sent)).not.toContain("PRIVATE_CANARY");
+});

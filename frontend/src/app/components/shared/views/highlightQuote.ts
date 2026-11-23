@@ -85,12 +85,13 @@ export async function highlightQuote(
     textDivs: HTMLElement[],
     quote: string,
     order?: readonly number[],
+    pdfTextOffset?: number,
 ): Promise<boolean> {
     clearHighlights(textDivs);
 
     // Split on ellipsis variants to highlight each segment separately
-    const segments = quote
-        .split(/\.{3}|…/)
+    const parts = pdfTextOffset === undefined ? quote.split(/\.{3}|…/) : [quote];
+    const segments = parts
         .map((s) => onlyLetters(s))
         .filter((s) => s.length > 0);
 
@@ -106,7 +107,11 @@ export async function highlightQuote(
 
     for (const segment of segments) {
         const searchKey = segment.slice(0, 30);
-        const matchPos = fullStripped.indexOf(searchKey);
+        const matchPos = pdfTextOffset ?? fullStripped.indexOf(searchKey);
+        if (pdfTextOffset !== undefined &&
+            (!Number.isSafeInteger(matchPos) || matchPos < 0 || !fullStripped.startsWith(segment, matchPos))) {
+            return false;
+        }
         if (matchPos === -1) {
             continue;
         }

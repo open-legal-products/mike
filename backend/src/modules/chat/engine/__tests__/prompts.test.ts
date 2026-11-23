@@ -21,10 +21,11 @@ describe("buildSystemPrompt", () => {
         }
     });
 
-    it("asks for citations through cite_sources, before the answer", () => {
+    it("prefers read passage handles and uses cite_sources for unlabelled evidence", () => {
         for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
+            expect(prompt).toContain("copy its exact [[p…:N]] handle beside your claim");
             expect(prompt).toContain(
-                `Record citations with the ${CITE_SOURCES_TOOL_NAME} tool BEFORE writing the answer`,
+                `record citations with the ${CITE_SOURCES_TOOL_NAME} tool BEFORE writing the answer`,
             );
             expect(prompt).toContain("Never list the citations or their JSON in the answer");
             expect(prompt).not.toContain("<CITATIONS>");

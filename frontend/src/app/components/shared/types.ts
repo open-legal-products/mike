@@ -431,6 +431,7 @@ export type MessageFile = {
 };
 
 export interface CitationQuote {
+  pdfTextOffset?: number;
   page?: number;
   quote: string;
 }
@@ -440,6 +441,7 @@ export type QuoteVerification = {
   source_excerpt?: string;
   start_char?: number;
   end_char?: number;
+  pdf_text_offset?: number;
 };
 
 export type DocumentCitationQuote = {
@@ -635,6 +637,7 @@ function formatCellLocator(sheet?: string, cell?: string): string {
 }
 
 export function expandDocumentQuoteEntry(entry: {
+  pdfTextOffset?: number;
   page?: number | string;
   quote: string;
 }): CitationQuote[] {
@@ -656,7 +659,7 @@ export function expandDocumentQuoteEntry(entry: {
       ? entry.page
       : parseInt(String(entry.page), 10);
   if (!Number.isFinite(pageNum)) return [];
-  return [{ page: pageNum, quote: entry.quote }];
+  return [{ page: pageNum, quote: entry.quote, ...(entry.pdfTextOffset === undefined ? {} : { pdfTextOffset: entry.pdfTextOffset }) }];
 }
 
 function getDocumentCitationQuotes(a: Citation): DocumentCitationQuote[] {
