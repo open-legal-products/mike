@@ -40,6 +40,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "org.member_exports.blocked": "Member exports turned off",
   "org.member_deletes.allowed": "Member data deletion allowed",
   "org.member_deletes.blocked": "Member data deletion turned off",
+  "org.preferences.updated": "Workspace preferences updated",
   "org.created": "Organization created",
   "org.deleted": "Organization deleted",
   "org.restored": "Organization restored",

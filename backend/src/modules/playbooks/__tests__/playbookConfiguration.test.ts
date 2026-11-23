@@ -1,11 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../lib/supabase";
 
-const { getUserApiKeys } = vi.hoisted(() => ({ getUserApiKeys: vi.fn() }));
+const { getUserApiKeys, getEffectiveApiKeys, routerModels, workspace } =
+  vi.hoisted(() => ({
+    getUserApiKeys: vi.fn(),
+    getEffectiveApiKeys: vi.fn(),
+    routerModels: {
+      current: {} as Record<string, string[]>,
+    },
+    workspace: { current: null as Record<string, unknown> | null },
+  }));
 
 vi.mock("../../../lib/providerCredentials/index", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/providerCredentials/index")>()),
   getUserApiKeys,
+  getEffectiveApiKeys,
+}));
+vi.mock("../../../lib/routerModels", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../lib/routerModels")>();
+  return {
+    ...actual,
+    getEffectiveRouterModels: vi.fn(async () => ({
+      ...Object.fromEntries(actual.ROUTER_SLUGS.map((slug) => [slug, []])),
+      ...routerModels.current,
+    })),
+  };
+});
+vi.mock("../../../lib/workspace", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/workspace")>()),
+  resolveWorkspaceFilter: vi.fn(async (_db: unknown, _user: string, raw: unknown) => ({
+    ok: true,
+    workspace: raw ?? null,
+  })),
+}));
+vi.mock("../../../lib/orgPreferences", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/orgPreferences")>()),
+  loadWorkspacePreferences: vi.fn(async () => workspace.current),
 }));
 
 import { playbookConfiguration } from "../playbooks.operations";
@@ -20,6 +51,8 @@ function dbWithProfile(profile: Record<string, unknown> | null): Db {
 
 describe("playbookConfiguration", () => {
   beforeEach(() => {
+    routerModels.current = {};
+    workspace.current = null;
     getUserApiKeys.mockResolvedValue({
       claude: "sk-ant",
       gemini: "gm",
@@ -61,5 +94,34 @@ describe("playbookConfiguration", () => {
     );
 
     expect(config.defaultModel).toBe("gemini-3.8-flash");
+  });
+
+  it("takes the background-task models from the organization in its workspace", async () => {
+    getEffectiveApiKeys.mockResolvedValue({ gemini: "gm", claude: "sk-ant" });
+    workspace.current = { title_model: "gemini-3.8-flash", tabular_model: null };
+
+    const config = await playbookConfiguration(
+      "u1",
+      dbWithProfile({ title_model: "claude-sonnet-5-5" }),
+      "org-1",
+    );
+
+    expect(config.defaultModel).toBe("gemini-3.8-flash");
+  });
+
+  it("skips a router model that is no longer selected for its router", async () => {
+    getUserApiKeys.mockResolvedValue({ gemini: "gm", openrouter: "or" });
+    const profile = {
+      last_selected_chat_model: "openrouter/acme/model-x",
+      title_model: "gemini-3.8-flash",
+    };
+
+    const deselected = await playbookConfiguration("u1", dbWithProfile(profile));
+    expect(deselected.defaultModel).toBe("gemini-3.8-flash");
+    expect(deselected.availableModelIds).not.toContain("openrouter/acme/model-x");
+
+    routerModels.current = { openrouter: ["acme/model-x"] };
+    const selected = await playbookConfiguration("u1", dbWithProfile(profile));
+    expect(selected.defaultModel).toBe("openrouter/acme/model-x");
   });
 });

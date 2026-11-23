@@ -14,20 +14,49 @@ import {
     useCallback,
     useContext,
     useEffect,
+    useLayoutEffect,
     useMemo,
+    useRef,
     useState,
     type ReactNode,
 } from "react";
+import { useLatestRef } from "@/app/hooks/useLatestRef";
 import { useAuth } from "@/app/contexts/AuthContext";
 import {
     getOrgApiKeys,
+    getOrgPreferences,
     listOrgs,
+    updateOrgPreferences,
     type Org,
     type OrgApiKeySettings,
+    type OrgPreferences,
+    type OrgPreferencesUpdate,
 } from "@/app/lib/mikeApi";
 
 export const PERSONAL_WORKSPACE = "personal";
 export const PERSONAL_WORKSPACE_LABEL = "Personal";
+
+interface OrgPreferenceWrites {
+    completed: number;
+    pending?: Promise<OrgPreferences>;
+    /** Reads started for the organization, numbered from 1. */
+    readsStarted: number;
+    /** The number of the latest read whose answer was published. */
+    readPublished: number;
+}
+
+/** The organization's entry in `writes`, created on first use. */
+function preferenceWritesFor(
+    writes: Map<string, OrgPreferenceWrites>,
+    orgId: string,
+): OrgPreferenceWrites {
+    let entry = writes.get(orgId);
+    if (!entry) {
+        entry = { completed: 0, readsStarted: 0, readPublished: 0 };
+        writes.set(orgId, entry);
+    }
+    return entry;
+}
 
 const STORAGE_PREFIX = "mike.activeWorkspace.";
 
@@ -51,10 +80,39 @@ interface WorkspaceContextValue {
      * than on the caller's own keys.
      */
     orgApiKeys: OrgApiKeySettings | null;
+    /**
+     * The active organization's Features and Model Preferences, which govern
+     * work in its workspace in place of the caller's own; `null` in the
+     * personal workspace, until first loaded, and when the read failed.
+     */
+    orgPreferences: OrgPreferences | null;
     setWorkspace: (workspaceId: string) => void;
     refreshOrganizations: () => Promise<void>;
     /** Re-read `orgApiKeys`, after they were changed in settings. */
     refreshOrgApiKeys: () => Promise<void>;
+    /**
+     * True once reading the organizations has failed and nothing is known
+     * yet, so a screen waiting on them can offer Retry instead of waiting.
+     */
+    organizationsFailed: boolean;
+    /**
+     * Read an organization's preferences afresh, for its settings pages.
+     * The answer replaces the app-wide copy unless a save for the same organization
+     * succeeded while this read was in flight. Rejects when the read fails.
+     */
+    loadOrgPreferences: (
+        orgId: string,
+        signal?: AbortSignal,
+    ) => Promise<OrgPreferences>;
+    /**
+     * Save some of an organization's preferences and put the answer in the
+     * app-wide copy, so the app follows at once. Rejects with the server's
+     * error.
+     */
+    saveOrgPreferences: (
+        orgId: string,
+        update: OrgPreferencesUpdate,
+    ) => Promise<OrgPreferences>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue>({
@@ -62,9 +120,15 @@ const WorkspaceContext = createContext<WorkspaceContextValue>({
     organizations: null,
     activeOrganization: null,
     orgApiKeys: null,
+    orgPreferences: null,
     setWorkspace: () => {},
     refreshOrganizations: async () => {},
     refreshOrgApiKeys: async () => {},
+    organizationsFailed: false,
+    loadOrgPreferences: () =>
+        Promise.reject(new Error("No workspace provider")),
+    saveOrgPreferences: () =>
+        Promise.reject(new Error("No workspace provider")),
 });
 
 // A convenience remembered per account and per browser: it can come back
@@ -101,6 +165,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         workspaceId: readStoredWorkspace(userId),
     }));
     const [organizations, setOrganizations] = useState<Org[] | null>(null);
+    const [organizationsReadFailed, setOrganizationsReadFailed] =
+        useState(false);
 
     // A different account signed in under the same mounted provider: its
     // remembered workspace applies, not the previous account's.
@@ -118,8 +184,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         } catch {
             // Keep whatever was known. A failed read is not evidence that the
             // caller left their organization, so the selection stands.
+            setOrganizationsReadFailed(true);
             return;
         }
+        setOrganizationsReadFailed(false);
         setOrganizations(next);
         // The remembered workspace is only as good as the membership behind
         // it. One the caller no longer belongs to falls back to Personal
@@ -200,6 +268,102 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const orgApiKeys =
         orgKeys && orgKeys.orgId === activeOrgId ? orgKeys.settings : null;
 
+    // What the active organization sets in place of the caller's own
+    // Features and Model Preferences, held with its id like the keys above.
+    const [orgPrefs, setOrgPrefs] = useState<{
+        orgId: string;
+        preferences: OrgPreferences;
+    } | null>(null);
+    const currentOrgId = useLatestRef(activeOrgId);
+    const writesByOrg = useRef(new Map<string, OrgPreferenceWrites>());
+    useLayoutEffect(() => {
+        // Queued edits belong to the account that submitted them.
+        return () => {
+            writesByOrg.current = new Map();
+        };
+    }, [userId]);
+
+    const loadOrgPreferences = useCallback(
+        async (orgId: string, signal?: AbortSignal) => {
+            const writes = writesByOrg.current;
+            const entry = preferenceWritesFor(writes, orgId);
+            const completed = entry.completed;
+            // Reads can answer out of order (the provider and a settings
+            // page each read): an answer is published only if no read that
+            // started later has published already. A later read that fails
+            // leaves this one free to publish.
+            const read = ++entry.readsStarted;
+            const preferences = await getOrgPreferences(orgId, signal);
+            if (
+                !signal?.aborted &&
+                writes === writesByOrg.current &&
+                currentOrgId.current === orgId &&
+                completed === entry.completed &&
+                read > entry.readPublished
+            ) {
+                entry.readPublished = read;
+                setOrgPrefs({ orgId, preferences });
+            }
+            return preferences;
+        },
+        [currentOrgId],
+    );
+    const saveOrgPreferences = useCallback(
+        (orgId: string, update: OrgPreferencesUpdate) => {
+            const writes = writesByOrg.current;
+            const entry = preferenceWritesFor(writes, orgId);
+            const save = async () => {
+                if (writes !== writesByOrg.current)
+                    throw new DOMException("Workspace session ended", "AbortError");
+                const preferences = await updateOrgPreferences(orgId, update);
+                entry.completed += 1;
+                if (writes === writesByOrg.current && currentOrgId.current === orgId) {
+                    setOrgPrefs({ orgId, preferences });
+                }
+                return preferences;
+            };
+            // Each PATCH returns the full row. Send edits in order within an
+            // organization, including when the preceding edit failed.
+            const pending = entry.pending ? entry.pending.then(save, save) : save();
+            entry.pending = pending;
+            return pending.finally(() => {
+                if (entry.pending === pending) delete entry.pending;
+            });
+        },
+        [currentOrgId],
+    );
+    const refreshOrgPreferences = useCallback(
+        (signal?: AbortSignal) => {
+            if (!activeOrgId) return;
+            loadOrgPreferences(activeOrgId, signal).catch(() => {
+                // Unknown: readers treat it as not yet known, and it is read
+                // again when the person comes back to the tab. The server
+                // applies the real preferences regardless.
+            });
+        },
+        [activeOrgId, loadOrgPreferences],
+    );
+    useEffect(() => {
+        const controller = new AbortController();
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- start the preferences request once the active organization is known
+        refreshOrgPreferences(controller.signal);
+        // An owner may have changed them meanwhile, or the last read failed.
+        const onVisible = () => {
+            if (document.visibilityState === "visible")
+                refreshOrgPreferences(controller.signal);
+        };
+        document.addEventListener("visibilitychange", onVisible);
+        return () => {
+            controller.abort();
+            document.removeEventListener("visibilitychange", onVisible);
+        };
+    }, [refreshOrgPreferences]);
+    const orgPreferences =
+        orgPrefs && orgPrefs.orgId === activeOrgId
+            ? orgPrefs.preferences
+            : null;
+    const organizationsFailed = organizations === null && organizationsReadFailed;
+
     const setWorkspace = useCallback(
         (next: string) => {
             const known =
@@ -239,9 +403,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             organizations,
             activeOrganization,
             orgApiKeys,
+            orgPreferences,
             setWorkspace,
             refreshOrganizations,
             refreshOrgApiKeys,
+            organizationsFailed,
+            loadOrgPreferences,
+            saveOrgPreferences,
         }),
         [
             userId,
@@ -249,9 +417,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             organizations,
             activeOrganization,
             orgApiKeys,
+            orgPreferences,
             setWorkspace,
             refreshOrganizations,
             refreshOrgApiKeys,
+            organizationsFailed,
+            loadOrgPreferences,
+            saveOrgPreferences,
         ],
     );
 

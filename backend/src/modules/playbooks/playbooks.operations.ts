@@ -58,6 +58,11 @@ import {
 } from "../documents/documents.service";
 import { loadCreatorProfiles, type CreatorProfile } from "../../lib/userLookup";
 import { createServerSupabase } from "../../lib/supabase";
+import { loadWorkspacePreferences } from "../../lib/orgPreferences";
+import {
+  getEffectiveRouterModels,
+  isRouterModelSelected,
+} from "../../lib/routerModels";
 import {
   completeText,
   streamChatWithTools,
@@ -486,20 +491,32 @@ async function availablePlaybookModels(
   const apiKeys = orgId
     ? await getEffectiveApiKeys(userId, orgId, db)
     : await getUserApiKeys(userId, db);
-  const { data: profile } = await db
-    .from("user_profiles")
-    .select("last_selected_chat_model, title_model, tabular_model")
-    .eq("user_id", userId)
-    .maybeSingle();
+  const [{ data: profile }, workspacePreferences, routerModels] =
+    await Promise.all([
+      db
+        .from("user_profiles")
+        .select("last_selected_chat_model, title_model, tabular_model")
+        .eq("user_id", userId)
+        .maybeSingle(),
+      loadWorkspacePreferences(db, userId, orgId),
+      getEffectiveRouterModels(userId, orgId, db),
+    ]);
   // The assistant composer opens on the last model chosen there, so a
   // playbook run defaults to the same model before any background-task one.
+  // In a team organization's workspace the background-task models are the
+  // organization's choice; the last pick in the composer stays the person's.
+  const backgroundModels = workspacePreferences ?? profile;
   const profileModelIds = [
     profile?.last_selected_chat_model,
-    profile?.title_model,
-    profile?.tabular_model,
+    backgroundModels?.title_model,
+    backgroundModels?.tabular_model,
   ]
     .filter((modelId): modelId is string => typeof modelId === "string")
-    .map((modelId) => LEGACY_MODEL_IDS[modelId] ?? modelId);
+    .map((modelId) => LEGACY_MODEL_IDS[modelId] ?? modelId)
+    // A router model counts only while it is still selected for the router,
+    // as Settings > Model Preferences treats it; otherwise a model the
+    // organization (or person) deselected would still be offered and billed.
+    .filter((modelId) => isRouterModelSelected(modelId, routerModels));
   const candidateIds = [
     ...new Set([...builtInModelIds(), ...profileModelIds]),
   ];

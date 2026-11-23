@@ -103,24 +103,27 @@ describe("UserMemoryPage", () => {
     );
   });
 
-  it("says nothing about other workspaces to someone who has only Personal", async () => {
-    render(<UserMemoryPage />);
+  // Settings lists Memory under Workspace, which says the memory is the
+  // workspace's own; the page does not repeat it.
+  // The memory itself belongs to the workspace, which the Workspace group
+  // already says; only the account-wide project default names workspaces.
+  it("says nothing about other workspaces, with one workspace or several", async () => {
+    const { unmount } = render(<UserMemoryPage />);
+    const description =
+      "Let Mike curate useful details after your saved conversations and use them in future answers.";
 
-    expect(
-      await screen.findByText(
-        "Let Mike curate useful details after your saved conversations and use them in future answers.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/separate memory for each workspace/)).toBeNull();
-  });
+    const workspaceMentions = () =>
+      screen
+        .queryAllByText(/workspace/)
+        .filter((node) => !/^Choose whether memory/.test(node.textContent ?? ""));
+    expect(await screen.findByText(description)).toBeInTheDocument();
+    expect(workspaceMentions()).toEqual([]);
+    unmount();
 
-  it("tells someone in an organization that Personal has its own memory", async () => {
     workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
     render(<UserMemoryPage />);
-
-    expect(
-      await screen.findByText(/in Personal and use them in future answers there\. You have a separate memory for each workspace\./),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(description)).toBeInTheDocument();
+    expect(workspaceMentions()).toEqual([]);
   });
 
   it("loads the current file independently and autosaves editor changes", async () => {
@@ -620,6 +623,10 @@ describe("UserMemoryPage", () => {
       name: "Project memory for new projects",
     });
     expect(toggle).toHaveAttribute("aria-checked", "true");
+    // One account-wide default, shown on a Workspace page: it says so.
+    expect(
+      screen.getByText(/for projects you create\s+in any workspace/),
+    ).toBeInTheDocument();
 
     await user.click(toggle);
 
@@ -695,9 +702,11 @@ describe("UserMemoryPage in an organization's workspace", () => {
     expect(
       screen.getByRole("switch", { name: "Memory in Acme LLP" }),
     ).toBeInTheDocument();
-    // It says whose eyes it is for, and that it is this workspace's only.
+    // It says whose eyes it is for.
     expect(
-      screen.getByText(/Only you can see it\. You have a separate memory for each workspace\./),
+      screen.getByText(
+        "Let Mike curate useful details after your own conversations and use them in future answers. Only you can see it.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -721,7 +730,7 @@ describe("UserMemoryPage in an organization's workspace", () => {
     );
   });
 
-  it("turns off that organization's memory only, and says so", async () => {
+  it("turns off that organization's memory only, and names it", async () => {
     const user = userEvent.setup();
     render(<UserMemoryPage />);
     await user.click(
@@ -731,9 +740,7 @@ describe("UserMemoryPage in an organization's workspace", () => {
     expect(
       screen.getByText("Turn off and delete your memory in Acme LLP?"),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Your memory in other workspaces is not affected\./),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/other workspaces/)).toBeNull();
     await user.click(screen.getByRole("button", { name: "Disable" }));
     await waitFor(() =>
       expect(setUserMemoryEnabled).toHaveBeenCalledWith(false, ACME.id),

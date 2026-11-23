@@ -48,8 +48,8 @@ vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({ user: { id: "me", email: "me@firm.test" } }),
 }));
 
-vi.mock("@/app/contexts/UserProfileContext", () => ({
-    useUserProfile: () => ({
+vi.mock("@/app/contexts/UserProfileContext", () => {
+    const useUserProfile = () => ({
         profile: {
             tabularModel: "gemini-3.8-flash",
             apiKeys: {
@@ -67,8 +67,9 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
         },
         loading: false,
         apiKeysDegraded: false,
-    }),
-}));
+    });
+    return { useUserProfile, useOptionalUserProfile: useUserProfile };
+});
 
 vi.mock("@/app/hooks/useOllamaModels", () => ({
     useOllamaModels: () => [],

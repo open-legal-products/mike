@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { getTabularReview } from "@/app/lib/mikeApi";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { WorkspaceProvider } from "@/app/contexts/WorkspaceContext";
+import { generateTabularColumnPrompt, getTabularReview } from "@/app/lib/mikeApi";
 import type { TabularReview, TabularReviewRow, Document } from "@/app/components/shared/types";
 import { TRView } from "./TabularReviewView";
 
@@ -22,6 +23,8 @@ vi.mock("@/app/lib/mikeApi", () => ({
     clearTabularCells: vi.fn(),
     deleteTabularReview: vi.fn(),
     getTabularReview: vi.fn(),
+    listOrgs: vi.fn(() => new Promise(() => {})),
+    generateTabularColumnPrompt: vi.fn(async () => ({ prompt: "Extract the term." })),
     getTabularReviewAccess: vi.fn(async () => ({
         grants: [],
         scope: "direct",
@@ -62,11 +65,6 @@ vi.mock("../modals/AddDocumentsModal", () => ({
 vi.mock("../popups/ApiKeyMissingPopup", () => ({
     ApiKeyMissingPopup: () => null,
 }));
-// The real modal is a large form; all this test needs is whether it opened.
-vi.mock("./AddColumnModal", () => ({
-    AddColumnModal: ({ open }: { open: boolean }) =>
-        open ? <div data-testid="add-column-modal" /> : null,
-}));
 vi.mock("../modals/AccessModal", () => ({ AccessModal: () => null }));
 
 function review(over: Partial<TabularReview>): TabularReview {
@@ -83,14 +81,14 @@ function review(over: Partial<TabularReview>): TabularReview {
     } as TabularReview;
 }
 
-function renderAs(role: "viewer" | "editor") {
+function renderAs(role: "viewer" | "editor", overrides: Partial<TabularReview> = {}) {
     vi.mocked(getTabularReview).mockResolvedValue({
-        review: review({ access_role: role }),
+        review: review({ access_role: role, ...overrides }),
         cells: [],
         rows: [],
         documents: [],
     });
-    return render(<TRView reviewId="r1" />);
+    return render(<WorkspaceProvider><TRView reviewId="r1" /></WorkspaceProvider>);
 }
 
 beforeEach(() => {
@@ -107,7 +105,7 @@ beforeEach(() => {
     }));
 });
 
-describe("TabularReviewView Add Columns gating", () => {
+describe("TabularReviewView columns", () => {
     it.each([1, 2])("matches toolbar and right-click actions for %i selected review rows", async (count) => {
         const user = userEvent.setup();
         const docs = [1, 2].map((index) => ({ id: `doc-${index}`, filename: `Document ${index}`, file_type: "pdf" })) as Document[];
@@ -133,7 +131,7 @@ describe("TabularReviewView Add Columns gating", () => {
         expect(
             screen.getByText("Only an editor can add columns."),
         ).toBeInTheDocument();
-        expect(screen.queryByTestId("add-column-modal")).not.toBeInTheDocument();
+        expect(screen.queryByPlaceholderText("Column name")).not.toBeInTheDocument();
     });
 
     it("opens the modal for an editor", async () => {
@@ -141,7 +139,29 @@ describe("TabularReviewView Add Columns gating", () => {
 
         fireEvent.click((await screen.findAllByText("Add Columns"))[0]);
 
-        expect(screen.getByTestId("add-column-modal")).toBeInTheDocument();
+        expect(screen.getByPlaceholderText("Column name")).toBeInTheDocument();
         expect(screen.queryByText("Editors only")).not.toBeInTheDocument();
+    });
+
+    it.each(["add", "edit"])("drafts with the review's workspace on column %s while membership is loading", async (action) => {
+        const orgId = "ebbdcdba-f239-4bb9-b469-93d0dc61c3ee";
+        const user = userEvent.setup();
+        renderAs("editor", {
+            org_id: orgId,
+            columns_config: [{ index: 0, name: "Term", prompt: "Extract the term" }],
+        });
+        if (action === "add") {
+            await user.click((await screen.findAllByText("Add Columns"))[0]);
+            await user.type(screen.getByPlaceholderText("Column name"), "Term");
+            await user.click(screen.getByText("Auto-Generate Prompt"));
+        } else {
+            const label = await screen.findByText("Term");
+            const header = label.closest<HTMLElement>("[data-tr-col-header]")!;
+            await user.click(within(header).getByRole("button"));
+            await user.click(screen.getByText("Auto-generate"));
+        }
+        expect(generateTabularColumnPrompt).toHaveBeenCalledWith(
+            "Term", expect.objectContaining({ workspace: orgId }),
+        );
     });
 });

@@ -9,6 +9,8 @@ import {
     ensureDocAccess,
     ensureReviewAccess,
     filterAccessibleDocumentIds,
+    getOrgRole,
+    getOrgRoleOrThrow,
     isOrgAdmin,
     isOrgOwner,
     listAccessibleProjectIds,
@@ -131,6 +133,28 @@ function makeDb(
         },
     } as any;
 }
+
+describe("getOrgRoleOrThrow", () => {
+    const tables = {
+        organizations: [{ id: "org-1", deleted_at: null }],
+        org_members: [{ org_id: "org-1", user_id: "u1", role: "admin" }],
+    };
+
+    it("answers the role, or null for a confirmed non-member", async () => {
+        const db = makeDb(tables);
+        await expect(getOrgRoleOrThrow("u1", "org-1", db)).resolves.toBe("admin");
+        await expect(getOrgRoleOrThrow("u2", "org-1", db)).resolves.toBeNull();
+        await expect(getOrgRoleOrThrow("u1", null, db)).resolves.toBeNull();
+    });
+
+    it("throws on a failed read, where getOrgRole answers null", async () => {
+        const db = makeDb(tables, { selectErrors: { org_members: "down" } });
+        await expect(getOrgRole("u1", "org-1", db)).resolves.toBeNull();
+        await expect(getOrgRoleOrThrow("u1", "org-1", db)).rejects.toThrow(
+            "Failed to read organization membership",
+        );
+    });
+});
 
 describe("access helpers", () => {
     it("denies archived containers to former creators and organization owners", async () => {

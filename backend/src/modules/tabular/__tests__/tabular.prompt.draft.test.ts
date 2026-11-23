@@ -18,6 +18,12 @@ vi.mock("../../../lib/llm", async (importOriginal) => ({
 const getUserModelSettings = vi.hoisted(() => vi.fn());
 vi.mock("../../user/user.settings", () => ({ getUserModelSettings }));
 
+const resolveWorkspaceFilter = vi.hoisted(() => vi.fn());
+vi.mock("../../../lib/workspace", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../lib/workspace")>()),
+    resolveWorkspaceFilter,
+}));
+
 const reportError = vi.hoisted(() => vi.fn());
 vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
     ...(await importOriginal<
@@ -43,6 +49,12 @@ const ARGS = {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    resolveWorkspaceFilter.mockImplementation(
+        async (_db: unknown, _user: string, raw: unknown) => ({
+            ok: true,
+            workspace: raw ?? null,
+        }),
+    );
     getUserModelSettings.mockResolvedValue({
         tabular_model: "claude-sonnet-5",
         api_keys: {},
@@ -70,6 +82,39 @@ describe("draftColumnPrompt", () => {
         expect(
             result.ok === false && result.kind === "status" && result.body.code,
         ).toBe("model_required");
+    });
+
+    it("drafts with the organization's tabular model in its workspace", async () => {
+        completeText.mockResolvedValue('{"prompt":"Extract it."}');
+        await draftColumnPrompt(DB, { ...ARGS, workspace: "org-1" });
+        expect(getUserModelSettings).toHaveBeenCalledWith("user-1", DB, {
+            orgId: "org-1",
+        });
+
+        await draftColumnPrompt(DB, { ...ARGS, workspace: "personal" });
+        expect(getUserModelSettings).toHaveBeenLastCalledWith("user-1", DB, {
+            orgId: null,
+        });
+    });
+
+    it("tells an organization's member who can choose the missing model", async () => {
+        getUserModelSettings.mockResolvedValue({ tabular_model: null, api_keys: {} });
+        const result = await draftColumnPrompt(DB, { ...ARGS, workspace: "org-1" });
+        expect(
+            result.ok === false && result.kind === "status" && result.body.detail,
+        ).toMatch(/owner or admin/);
+    });
+
+    it("refuses a workspace the caller cannot use", async () => {
+        resolveWorkspaceFilter.mockResolvedValueOnce({ ok: false, kind: "not_found" });
+        await expect(
+            draftColumnPrompt(DB, { ...ARGS, workspace: "org-9" }),
+        ).resolves.toMatchObject({ ok: false, kind: "not_found" });
+        resolveWorkspaceFilter.mockResolvedValueOnce({ ok: false, kind: "validation" });
+        await expect(
+            draftColumnPrompt(DB, { ...ARGS, workspace: 7 }),
+        ).resolves.toMatchObject({ ok: false, kind: "validation" });
+        expect(getUserModelSettings).not.toHaveBeenCalled();
     });
 
     it("unwraps a fenced JSON reply", async () => {

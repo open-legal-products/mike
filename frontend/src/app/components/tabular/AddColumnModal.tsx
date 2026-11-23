@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, X } from "lucide-react";
 import type { ColumnConfig, ColumnFormat } from "../shared/types";
 import { generateTabularColumnPrompt } from "@/app/lib/mikeApi";
+import { notifyError } from "@/app/lib/userFacingError";
+import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
 import { FORMAT_OPTIONS } from "./columnFormat";
 import { TAG_COLORS } from "./pillUtils";
 import { getPresetConfig, PROMPT_PRESETS } from "./columnPresets";
@@ -46,6 +48,8 @@ export function AddColumnModal({
     onAdd,
 }: Props) {
     const formId = "add-column-modal-form";
+    // Drafted by the tabular model of the workspace the column belongs to.
+    const workspace = useDocumentWorkspace();
     const [columns, setColumns] = useState<ColumnDraft[]>([{ ...EMPTY_DRAFT }]);
     const [collapsedIndices, setCollapsedIndices] = useState<number[]>([]);
     const [generatingIndices, setGeneratingIndices] = useState<number[]>([]);
@@ -166,10 +170,18 @@ export function AddColumnModal({
         try {
             const col = columns[index]!;
             const { prompt } = await generateTabularColumnPrompt(title, {
+                workspace,
                 format: col.format,
                 tags: col.format === "tag" ? col.tags : undefined,
             });
             updateColumn(index, { prompt });
+        } catch (error) {
+            // A refused or failed draft (no tabular model chosen, the model's
+            // provider down) left the button idle with no word of why.
+            notifyError(error, {
+                action: "draft the column prompt",
+                onRetry: () => void autoGeneratePrompt(index),
+            });
         } finally {
             setGeneratingIndices((prev) => prev.filter((v) => v !== index));
         }

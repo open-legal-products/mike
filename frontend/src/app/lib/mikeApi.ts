@@ -2008,6 +2008,51 @@ export async function setOrgApiKeyEnabled(
     );
 }
 
+/**
+ * What an organization sets for work in its workspace: the Features and
+ * Model Preferences a person sets for themselves in Personal. Every member
+ * reads them; owners and admins change them.
+ */
+export interface OrgPreferences {
+    title_model: string | null;
+    tabular_model: string | null;
+    memory_curator_model: string | null;
+    subagent_model: string | null;
+    subagent_reasoning: NonNullable<Message["reasoning"]> | null;
+    quick_actions_visible: boolean;
+    response_details_visible: boolean;
+    web_search: WebSearchSettings;
+}
+
+/** A change to an organization's preferences; `web_search` merges. */
+export type OrgPreferencesUpdate = Partial<
+    Omit<OrgPreferences, "web_search">
+> & { web_search?: Partial<WebSearchSettings> };
+
+export async function getOrgPreferences(
+    orgId: string,
+    signal?: AbortSignal,
+): Promise<OrgPreferences> {
+    return apiRequest<OrgPreferences>(
+        "organizations.manage", `/orgs/${orgId}/preferences`,
+        { signal },
+    );
+}
+
+export async function updateOrgPreferences(
+    orgId: string,
+    update: OrgPreferencesUpdate,
+): Promise<OrgPreferences> {
+    return apiRequest<OrgPreferences>(
+        "organizations.manage", `/orgs/${orgId}/preferences`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(update),
+        },
+    );
+}
+
 export interface OrgMemberDataPolicy {
     allow_member_exports: boolean;
     allow_member_deletes: boolean;
@@ -3408,7 +3453,13 @@ export async function revokeTabularReviewAccess(
 
 export async function generateTabularColumnPrompt(
     title: string,
-    options?: { format?: string; documentName?: string; tags?: string[] },
+    options?: {
+        format?: string;
+        documentName?: string;
+        tags?: string[];
+        /** "personal" or an organization's id: whose tabular model drafts it. */
+        workspace?: string;
+    },
 ): Promise<{ prompt: string; source: "preset" | "llm" | "fallback" }> {
     return apiRequest<{
         prompt: string;
@@ -3421,6 +3472,7 @@ export async function generateTabularColumnPrompt(
             format: options?.format,
             documentName: options?.documentName,
             tags: options?.tags,
+            workspace: options?.workspace,
         }),
     });
 }

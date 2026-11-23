@@ -108,6 +108,11 @@ describe("the sections each role is offered", () => {
       "Bring Your Own Keys",
       "Privacy & Data",
     ]);
+    // Each section has an icon beside its name, hidden from assistive tech.
+    for (const button of within(
+      screen.getByRole("navigation", { name: "Organization" }),
+    ).getAllByRole("button"))
+      expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
   });
 
   it("offers an admin General, Members and Bring Your Own Keys, not Privacy & Data", async () => {

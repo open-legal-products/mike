@@ -164,6 +164,7 @@ export function ByokProviderModal({ provider, enabledToggle, store, onClose }: {
       key={provider.provider}
       variant="modal"
       label={provider.label}
+      owner={store ? "the organization's" : "your"}
       hasSavedKey={hasSavedKey}
       keyLabel={provider.keyLabel}
       validateKey={provider.provider === "vertex" ? validateVertexKey : undefined}
