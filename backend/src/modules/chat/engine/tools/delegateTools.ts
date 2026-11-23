@@ -354,7 +354,7 @@ function childMessages(
 }
 
 const CITE_INSTRUCTION =
-    "To rely on a finding, cite its source in your own <CITATIONS> block, copying doc_id or cluster_id, page and quote exactly from the Sources lines; the brief's [N] markers are their ref. Keep web pages as markdown links.";
+    "To rely on a finding, record its source with cite_sources, copying doc_id or cluster_id, page and quote exactly from the Sources lines; the brief's [N] markers are their ref. Keep web pages as markdown links.";
 
 const CANNOT_CONTINUE = "That delegation cannot be continued. Start a new delegation.";
 

@@ -278,6 +278,8 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 workflowStore,
                 includeResearchTools: legalResearchUs,
                 webSearch,
+                // The system prompt (buildSystemPrompt) asks for cite_sources.
+                citeSources: true,
                 subagentRuns,
                 subagentDefaults,
                 model: selectedModel,

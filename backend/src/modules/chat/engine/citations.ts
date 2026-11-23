@@ -48,9 +48,10 @@ type ParsedCaseCitation = {
   }[];
 };
 
-type ParsedCitation = ParsedDocumentCitation | ParsedCaseCitation;
+export type ParsedCitation = ParsedDocumentCitation | ParsedCaseCitation;
 
-function normalizeCitation(raw: unknown): ParsedCitation | null {
+/** One citation entry as the model wrote it, or null when it is unusable. */
+export function normalizeCitation(raw: unknown): ParsedCitation | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;
   const markerRef =

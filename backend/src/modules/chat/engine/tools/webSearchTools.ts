@@ -32,7 +32,7 @@ export const WEB_SEARCH_SYSTEM_PROMPT = `WEB SEARCH:
 You can search the web. Search when the answer depends on recent information or on facts you are not sure of; answer from your own knowledge and the user's documents otherwise.
 Never put client names, matter details, personal data, or text from the user's documents into a search query. Search for the law or the public facts in general terms.
 Prefer primary and official sources: legislation, court and regulator websites, official publications.
-Cite every web page you rely on with an inline markdown link to it, for example [Companies Act 2006, s 172](https://www.legislation.gov.uk/ukpga/2006/46/section/172). Web pages never go in the <CITATIONS> block, which is only for the user's documents and cases.
+Cite every web page you rely on with an inline markdown link to it, for example [Companies Act 2006, s 172](https://www.legislation.gov.uk/ukpga/2006/46/section/172). Web pages never get [N] markers or citation entries, which are only for the user's documents and cases.
 If a search fails or is unavailable, say so and answer without it. Never invent a URL.`;
 
 const WEB_TOOL_ERROR_MESSAGES: Record<WebToolErrorCode, string> = {

@@ -552,7 +552,7 @@ export async function runToolCalls(
             `Before writing your final response, call read_document with doc_id "${newDocLabel}".`,
             `Base your description on the generated document's actual returned text, not on memory of what you intended to generate.`,
             `Do not include download links, URLs, or markdown links to the document in your prose response; the document card is shown automatically by the UI.`,
-            `Give a concise description of the generated document and, if you make factual claims about its contents, cite it with [N] markers and a final <CITATIONS> block using doc_id "${newDocLabel}", not any source/template document.`,
+            `Give a concise description of the generated document and, if you make factual claims about its contents, cite it with [N] markers and citation entries using doc_id "${newDocLabel}", not any source/template document.`,
           ].join(" "),
         }
       : safeToolResult;
@@ -2030,7 +2030,7 @@ export async function runToolCalls(
                 `The edited document remains available as doc_id "${docId}".`,
                 `Before making factual claims about the edited document's final contents, call read_document with doc_id "${docId}" and base the response on that returned text.`,
                 `Do not include download links or URLs in your prose response; the edited document card is shown automatically by the UI.`,
-                `If you describe specific content from the edited document, cite it with [N] markers and a final <CITATIONS> block using doc_id "${docId}".`,
+                `If you describe specific content from the edited document, cite it with [N] markers and citation entries using doc_id "${docId}".`,
               ].join(" "),
             }),
           });

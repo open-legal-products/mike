@@ -60,7 +60,6 @@ import {
   type WorkflowStore,
   type ToolCall,
   devLog,
-  createDocLabelResolver,
   resolveDocLabel,
   TOOL_ERROR_MESSAGE,
 } from "./types";
@@ -104,6 +103,12 @@ import {
   type TurnReadState,
 } from "./tools/documentOps";
 import { verifyCitations } from "./verifyCitations";
+import {
+  CITE_SOURCES_TOOL,
+  CITE_SOURCES_TOOL_NAME,
+  createCitationRecorder,
+  onceEach,
+} from "./citeSources";
 import { buildMemoryTurn } from "../../../lib/memory/prompt";
 
 export type { AssistantEvent } from "@mike/contracts";
@@ -357,6 +362,13 @@ export async function runLLMStream(params: {
    */
   maxIterations?: number;
   buildCitations?: (fullText: string) => unknown[];
+  /**
+   * The model records its citations with the cite_sources tool before it
+   * writes the answer (the system prompt must say so). Without it, citations
+   * come only from a <CITATIONS> block at the end of the answer, which is
+   * still read as a fallback either way. Ignored with `buildCitations`.
+   */
+  citeSources?: boolean;
   model?: string;
   /** AI SDK reasoning effort for this interactive request. */
   reasoning?: import("../../../lib/llm").ReasoningLevel;
@@ -430,6 +442,7 @@ export async function runLLMStream(params: {
     tabularStore,
     clientTools,
     buildCitations,
+    citeSources: citeSourcesRequested = false,
     model,
     apiKeys,
     orgId,
@@ -475,7 +488,9 @@ export async function runLLMStream(params: {
   );
   // An invalid model fails the answer below, before any tool runs.
   const chatModel = resolveModel(model, "");
+  const citeSources = citeSourcesRequested && !buildCitations;
   const baseTools = [
+    ...(citeSources ? [CITE_SOURCES_TOOL] : []),
     ...conversationTools,
     ...researchTools,
     ...WORKFLOW_TOOLS,
@@ -601,6 +616,47 @@ export async function runLLMStream(params: {
   // citations. The final frame bumps this too, so no partial outlives it.
   let citationSnapshotSeq = 0;
 
+  // A cited document's extracted text, read from bytes already in storage
+  // with emitEvents:false. The document may be edited later in the turn,
+  // so each check (a cite_sources call, the final block) reads it afresh,
+  // once per document.
+  const readSourceText = (docId: string): Promise<string> => {
+    const label = resolveDocLabel(docId, docStore, docIndex);
+    return label
+      ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
+          emitEvents: false,
+        })
+      : Promise.resolve("");
+  };
+  const getCaseOpinions = async (clusterId: number) =>
+    getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId);
+  const citationRecorder = citeSources
+    ? createCitationRecorder({
+        docIndex,
+        docStore,
+        casesByClusterId: courtlistenerTurnState.casesByClusterId,
+        readSourceText,
+        getCaseOpinions,
+      })
+    : null;
+
+  // Citations recorded with cite_sources come first; a block's entries
+  // fill only the refs no call recorded.
+  const withRecordedCitations = (fromBlock: unknown[]): unknown[] => {
+    const recorded = citationRecorder?.citations() ?? [];
+    if (!recorded.length) return fromBlock;
+    const refs = citationRecorder!.refs();
+    return [
+      ...recorded,
+      ...fromBlock.filter(
+        (c) => !refs.has((c as { ref?: unknown } | null)?.ref as number),
+      ),
+    ].sort(
+      (a, b) =>
+        ((a as { ref: number }).ref ?? 0) - ((b as { ref: number }).ref ?? 0),
+    );
+  };
+
   const emitCitationStreamSnapshot = (
     status: "started" | "partial",
     citations: unknown[],
@@ -608,7 +664,11 @@ export async function runLLMStream(params: {
     if (buildCitations) return;
     const snapshot = ++citationSnapshotSeq;
     write(
-      `data: ${JSON.stringify({ type: "citations", status, citations })}\n\n`,
+      `data: ${JSON.stringify({
+        type: "citations",
+        status,
+        citations: limitCitationPayload(withRecordedCitations(citations)),
+      })}\n\n`,
       { replay: () => snapshot === citationSnapshotSeq },
     );
   };
@@ -788,6 +848,8 @@ export async function runLLMStream(params: {
         nonce,
         webSearch,
         includeResearchTools,
+        // A subagent runs on its parent's system prompt.
+        citeSources,
         onActivity: params.onActivity,
         write: () => {},
         model: spawn.model,
@@ -1076,8 +1138,12 @@ export async function runLLMStream(params: {
         const isScriptCall = (c: NormalizedToolCall) =>
           !!scriptTool && c.name === SCRIPT_TOOL_NAME;
         const scriptCalls = permittedCalls.filter(isScriptCall);
+        const citeCalls = citationRecorder
+          ? permittedCalls.filter((c) => c.name === CITE_SOURCES_TOOL_NAME)
+          : [];
         const handledElsewhere = (c: NormalizedToolCall) =>
           webToolNames.has(c.name) ||
+          (!!citationRecorder && c.name === CITE_SOURCES_TOOL_NAME) ||
           c.name === DELEGATE_TOOL_NAME ||
           isScriptCall(c) ||
           !!clientTools?.owns(c.name);
@@ -1105,6 +1171,16 @@ export async function runLLMStream(params: {
           events.push(event);
           write(`data: ${JSON.stringify(event)}\n\n`);
         });
+        // In call order: a later call replaces the refs an earlier one set.
+        for (const call of citeCalls) {
+          clientResultByCallId.set(
+            call.id,
+            await citationRecorder!.record(call.input),
+          );
+          throwIfAborted(signal);
+        }
+        // The client can link the answer's markers as they stream.
+        if (citeCalls.length) emitCitationStreamSnapshot("partial", []);
         if (clientTools) {
           for (const call of permittedCalls) {
             if (!clientTools.owns(call.name)) continue;
@@ -1325,7 +1401,8 @@ export async function runLLMStream(params: {
 
   flushText();
 
-  // Parse and emit citations from <CITATIONS> block
+  // Emit the recorded citations, plus any from a <CITATIONS> block the
+  // model wrote anyway (or, without cite_sources, the only source).
   const { citations: parsedCitations, diagnostics: citationDiagnostics } =
     parseCitationsWithDiagnostics(fullText);
   let citations: unknown[];
@@ -1333,8 +1410,12 @@ export async function runLLMStream(params: {
     // Custom builders (tabular) bypass document-citation verification.
     citations = buildCitations(fullText);
   } else {
+    // Refs recorded with cite_sources were verified when recorded; a block
+    // (a model that still writes one) only fills the refs they left out.
+    const recordedRefs = citationRecorder?.refs() ?? new Set<number>();
     const rawCitations = limitCitationPayload(
       parsedCitations
+        .filter((c) => !recordedRefs.has(c.ref))
         .map((c) =>
           createCitation(
             c,
@@ -1345,34 +1426,19 @@ export async function runLLMStream(params: {
         )
         .filter((citation) => citation !== null),
     );
-    // Server-side quote verification. Fetch each document's extracted source
-    // text at most once per turn (memoized by doc_id), reading only bytes
-    // already in storage with emitEvents:false. Case citations are matched
-    // against the opinion text cached during this turn.
-    const sourceTextByDocId = new Map<string, Promise<string>>();
-    const labelFor = createDocLabelResolver(docStore, docIndex);
-    const getSourceText = (docId: string): Promise<string> => {
-      let pending = sourceTextByDocId.get(docId);
-      if (!pending) {
-        const label = labelFor(docId);
-        pending = label
-          ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
-              emitEvents: false,
-            })
-          : Promise.resolve("");
-        sourceTextByDocId.set(docId, pending);
-      }
-      return pending;
-    };
-    citations = await verifyCitations(
-      rawCitations,
-      getSourceText,
-      async (clusterId) =>
-        getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
+    // Server-side quote verification against each document's extracted text
+    // and the opinion text cached during this turn.
+    citations = withRecordedCitations(
+      await verifyCitations(
+        rawCitations,
+        onceEach(readSourceText),
+        getCaseOpinions,
+      ),
     );
   }
   citations = limitCitationPayload(citations);
   devLog("[chat/stream] final citations", {
+    recordedCitationCount: citationRecorder?.refs().size ?? 0,
     hasCitationsBlock: citationDiagnostics.hasBlock,
     citationsBlockLength: citationDiagnostics.rawLength,
     parseError: citationDiagnostics.error,

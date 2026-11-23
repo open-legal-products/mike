@@ -55,10 +55,10 @@ export function citationReminder(
   return [
     `[Citation requirement for ${docLabel}]:`,
     `Document filename: ${promptFilename}`,
-    `If your final answer makes any factual claim from this document, include inline [N] markers and append a final <CITATIONS> JSON block.`,
+    `If your final answer makes any factual claim from this document, include inline [N] markers, each with a citation entry.`,
     `Every citation entry for this document MUST use "doc_id": "${docLabel}".`,
     shapeLine,
-    `Do not use "marker" or "text" keys in the citation block; use "ref" and "quotes".`,
+    `Do not use "marker" or "text" keys in citation entries; use "ref" and "quotes".`,
   ].join("\n");
 }
 
