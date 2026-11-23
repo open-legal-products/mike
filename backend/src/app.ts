@@ -39,6 +39,7 @@ import {
 import { configuredAllowedOrigins } from "./lib/origins";
 import { envInt } from "./lib/runtimeConfig";
 import { requestDiagnostics } from "./middleware/requestDiagnostics";
+import { researchPackRouter } from "./modules/research-pack/researchPack.routes";
 
 export const app = express();
 const isProduction = process.env.NODE_ENV === "production";
@@ -345,6 +346,7 @@ app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);
 app.use("/playbooks", playbooksRouter);
 app.use("/upload-sessions", uploadSessionsRouter);
+app.use("/research-pack", researchPackRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

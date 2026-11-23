@@ -1,0 +1,331 @@
+{
+  "authenticity": "not_established",
+  "canonicalization": "cp-rwp-json-v1",
+  "complete": true,
+  "export": {
+    "export_sha256": "sha256:f16b846f05c192fa94ca24bc0de20d646f3f732bc460bdb4f45e3e717c7358a4",
+    "exported_at": "2026-11-13T12:02:00.000Z",
+    "head_portable_revision_sha256": "sha256:b9ac9d39c6673fe0f2251f34788d6ec488a802ba765b8b1a25e67b54ab1c98bf",
+    "limitations": [
+      "source_bytes_not_included",
+      "unkeyed_integrity_not_authorship",
+      "current_readback_is_export_time_observation",
+      "offline_copy_cannot_be_withdrawn"
+    ],
+    "readback": [
+      {
+        "basis": "saved_reference_matches_current_producer_readback",
+        "observation_id": "ob_93f3aadacc672ae95e77c0e0",
+        "observed_at": "2026-11-13T12:02:00.000Z",
+        "revision": 1,
+        "state": "current"
+      },
+      {
+        "basis": "saved_reference_matches_current_producer_readback",
+        "observation_id": "ob_d1dc3bd0e51993e53c228653",
+        "observed_at": "2026-11-13T12:02:00.000Z",
+        "revision": 1,
+        "state": "current"
+      },
+      {
+        "basis": "saved_reference_matches_current_producer_readback",
+        "observation_id": "ob_93f3aadacc672ae95e77c0e0",
+        "observed_at": "2026-11-13T12:02:00.000Z",
+        "revision": 2,
+        "state": "current"
+      },
+      {
+        "basis": "saved_reference_matches_current_producer_readback",
+        "observation_id": "ob_d1dc3bd0e51993e53c228653",
+        "observed_at": "2026-11-13T12:02:00.000Z",
+        "revision": 2,
+        "state": "current"
+      }
+    ]
+  },
+  "profile": "researcher_private_portable",
+  "revisions": [
+    {
+      "assessments": [
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "Synthetic researcher: the filing records allegations, not an adjudicated finding.",
+          "observation_id": "ob_93f3aadacc672ae95e77c0e0",
+          "proposition_id": "pr_records",
+          "stance": "supports"
+        },
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "Synthetic hostile stance for export preservation; an authored assessment is not a truth verdict.",
+          "observation_id": "ob_d1dc3bd0e51993e53c228653",
+          "proposition_id": "pr_records",
+          "stance": "conflicts"
+        }
+      ],
+      "context_selection": {
+        "items": [
+          {
+            "claimed_metadata": {
+              "dates": [],
+              "issuer": "SEC",
+              "origin": "source_reader",
+              "original_address": null,
+              "page": "/sources/TH-S01-SRC-0001",
+              "title": "Public SEC filing reference"
+            },
+            "review": {
+              "decision": "keep",
+              "note": "Synthetic context note; no source document is copied."
+            },
+            "source_occurrence": {
+              "id": "r01",
+              "namespace": "counterpedia.public_reference"
+            }
+          }
+        ],
+        "notes": {
+          "still_to_check": "Independent interpretation and factual truth have not been evaluated.",
+          "working_answer": "An allegation needs context."
+        },
+        "relationships": [],
+        "schema": "counterpedia.research_context.selection.v0.1",
+        "source_format": "counterpedia.public-reference-selection/v1"
+      },
+      "finding": {
+        "author": "user",
+        "text": "Initial reading: distinguish a recorded allegation from a finding."
+      },
+      "observations": [
+        {
+          "metadata_at_save": {
+            "href": "/sources/TH-S01-SRC-0001",
+            "label": null,
+            "posture": null,
+            "provenance_note": "Retained in content-addressed custody; pack manifest digest sha256:b31e19ba6e9a38a792dbe93d7185e4204a8ce0e27bdc891c20f461c08f2f1b71.",
+            "title": "SEC enforcement filing (captured public document)"
+          },
+          "observation_id": "ob_93f3aadacc672ae95e77c0e0",
+          "provenance_at_save": {
+            "public_research_release_id": "sha256:57fd24981b1fb85661853bc3f7b9e39b83a522ba4423d1adebc02a373a75c1b2",
+            "section_provenance_sha256": null
+          },
+          "reference": {
+            "kind": "public_reference",
+            "ref": {
+              "capture_referent_id": "urn:counterpedia.source-reference:sha256:ef30405a5454a1b65b9e82e2d348d8a220eecdd78faefcd20eb17a5c471af652:TH-S01",
+              "captured_bytes_sha256": "sha256:3ce565f81f038797a7803cef3f9370019c16676700c551ea31c639f2222e6826",
+              "family": "counterpedia.public_source_record",
+              "source_id": "TH-S01-SRC-0001"
+            }
+          },
+          "source_kind": "filing"
+        },
+        {
+          "metadata_at_save": {
+            "href": "/entries/th-s01",
+            "label": "Overview",
+            "posture": "Admitted-family reader · inspect its current record state",
+            "provenance_note": null,
+            "title": "U.S. SEC Enforcement Filing Concerning Theranos and Elizabeth Holmes (Captured Public Document)"
+          },
+          "observation_id": "ob_d1dc3bd0e51993e53c228653",
+          "provenance_at_save": {
+            "public_research_release_id": "sha256:57fd24981b1fb85661853bc3f7b9e39b83a522ba4423d1adebc02a373a75c1b2",
+            "section_provenance_sha256": "sha256:5a947b0f04f3cbdc7f768c284c06b6cf24846d0660b76548690474c86387ed55"
+          },
+          "reference": {
+            "kind": "public_reference",
+            "ref": {
+              "binding_sha256": "ff677b191a99c1669bbcfffdd796fe6b5d74052231365bc74dbbfbcba53ee7bc",
+              "family": "counterpedia.public_research_section",
+              "route": "/entries/th-s01",
+              "section": "th-s01-overview",
+              "text_sha256": "8c534f7615d0347f8de5b1674e5ab42078231d6c82d01495d404875aefbe1db7"
+            }
+          },
+          "source_kind": "counterpedia_public_work"
+        }
+      ],
+      "parent_portable_revision_sha256": null,
+      "portable_revision_sha256": "sha256:5f65932852e89fa716298dadbb36867167d8b26dbf278be76f53944f7a959ad9",
+      "propositions": [
+        {
+          "proposition_id": "pr_records",
+          "text": "The filing records allegations; the selected overview gives context."
+        }
+      ],
+      "question": "What do these public references record, and what remains unresolved?",
+      "research_context": [
+        {
+          "claimed_metadata": {
+            "dates": [],
+            "issuer": "SEC",
+            "origin": "source_reader",
+            "original_address": null,
+            "page": "/sources/TH-S01-SRC-0001",
+            "title": "Public SEC filing reference"
+          },
+          "context_id": "r01",
+          "observation_ids": [],
+          "related_context_ids": [],
+          "review": {
+            "decision": "keep",
+            "note": "Synthetic context note; no source document is copied."
+          },
+          "source_occurrence": {
+            "id": "r01",
+            "namespace": "counterpedia.public_reference"
+          }
+        }
+      ],
+      "revision": 1,
+      "saved_at": "2026-11-13T12:00:00.000Z",
+      "schema": "counterpedia.research_workspace.portable_revision.v0.2",
+      "withholding": []
+    },
+    {
+      "assessments": [
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "Synthetic researcher: the filing records allegations, not an adjudicated finding.",
+          "observation_id": "ob_93f3aadacc672ae95e77c0e0",
+          "proposition_id": "pr_records",
+          "stance": "supports"
+        },
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "Synthetic hostile stance for export preservation; an authored assessment is not a truth verdict.",
+          "observation_id": "ob_d1dc3bd0e51993e53c228653",
+          "proposition_id": "pr_records",
+          "stance": "conflicts"
+        }
+      ],
+      "context_selection": {
+        "items": [
+          {
+            "claimed_metadata": {
+              "dates": [],
+              "issuer": "SEC",
+              "origin": "source_reader",
+              "original_address": null,
+              "page": "/sources/TH-S01-SRC-0001",
+              "title": "Public SEC filing reference"
+            },
+            "review": {
+              "decision": "keep",
+              "note": "Synthetic context note; no source document is copied."
+            },
+            "source_occurrence": {
+              "id": "r01",
+              "namespace": "counterpedia.public_reference"
+            }
+          }
+        ],
+        "notes": {
+          "still_to_check": "Independent interpretation and factual truth have not been evaluated.",
+          "working_answer": "An allegation needs context."
+        },
+        "relationships": [],
+        "schema": "counterpedia.research_context.selection.v0.1",
+        "source_format": "counterpedia.public-reference-selection/v1"
+      },
+      "finding": {
+        "author": "user",
+        "text": "Revised reading: these references preserve provenance; they do not establish factual truth."
+      },
+      "observations": [
+        {
+          "metadata_at_save": {
+            "href": "/sources/TH-S01-SRC-0001",
+            "label": null,
+            "posture": null,
+            "provenance_note": "Retained in content-addressed custody; pack manifest digest sha256:b31e19ba6e9a38a792dbe93d7185e4204a8ce0e27bdc891c20f461c08f2f1b71.",
+            "title": "SEC enforcement filing (captured public document)"
+          },
+          "observation_id": "ob_93f3aadacc672ae95e77c0e0",
+          "provenance_at_save": {
+            "public_research_release_id": "sha256:57fd24981b1fb85661853bc3f7b9e39b83a522ba4423d1adebc02a373a75c1b2",
+            "section_provenance_sha256": null
+          },
+          "reference": {
+            "kind": "public_reference",
+            "ref": {
+              "capture_referent_id": "urn:counterpedia.source-reference:sha256:ef30405a5454a1b65b9e82e2d348d8a220eecdd78faefcd20eb17a5c471af652:TH-S01",
+              "captured_bytes_sha256": "sha256:3ce565f81f038797a7803cef3f9370019c16676700c551ea31c639f2222e6826",
+              "family": "counterpedia.public_source_record",
+              "source_id": "TH-S01-SRC-0001"
+            }
+          },
+          "source_kind": "filing"
+        },
+        {
+          "metadata_at_save": {
+            "href": "/entries/th-s01",
+            "label": "Overview",
+            "posture": "Admitted-family reader · inspect its current record state",
+            "provenance_note": null,
+            "title": "U.S. SEC Enforcement Filing Concerning Theranos and Elizabeth Holmes (Captured Public Document)"
+          },
+          "observation_id": "ob_d1dc3bd0e51993e53c228653",
+          "provenance_at_save": {
+            "public_research_release_id": "sha256:57fd24981b1fb85661853bc3f7b9e39b83a522ba4423d1adebc02a373a75c1b2",
+            "section_provenance_sha256": "sha256:5a947b0f04f3cbdc7f768c284c06b6cf24846d0660b76548690474c86387ed55"
+          },
+          "reference": {
+            "kind": "public_reference",
+            "ref": {
+              "binding_sha256": "ff677b191a99c1669bbcfffdd796fe6b5d74052231365bc74dbbfbcba53ee7bc",
+              "family": "counterpedia.public_research_section",
+              "route": "/entries/th-s01",
+              "section": "th-s01-overview",
+              "text_sha256": "8c534f7615d0347f8de5b1674e5ab42078231d6c82d01495d404875aefbe1db7"
+            }
+          },
+          "source_kind": "counterpedia_public_work"
+        }
+      ],
+      "parent_portable_revision_sha256": "sha256:5f65932852e89fa716298dadbb36867167d8b26dbf278be76f53944f7a959ad9",
+      "portable_revision_sha256": "sha256:b9ac9d39c6673fe0f2251f34788d6ec488a802ba765b8b1a25e67b54ab1c98bf",
+      "propositions": [
+        {
+          "proposition_id": "pr_records",
+          "text": "The filing records allegations; the selected overview gives context."
+        }
+      ],
+      "question": "What do these public references record, and what remains unresolved?",
+      "research_context": [
+        {
+          "claimed_metadata": {
+            "dates": [],
+            "issuer": "SEC",
+            "origin": "source_reader",
+            "original_address": null,
+            "page": "/sources/TH-S01-SRC-0001",
+            "title": "Public SEC filing reference"
+          },
+          "context_id": "r01",
+          "observation_ids": [],
+          "related_context_ids": [],
+          "review": {
+            "decision": "keep",
+            "note": "Synthetic context note; no source document is copied."
+          },
+          "source_occurrence": {
+            "id": "r01",
+            "namespace": "counterpedia.public_reference"
+          }
+        }
+      ],
+      "revision": 2,
+      "saved_at": "2026-11-13T12:01:00.000Z",
+      "schema": "counterpedia.research_workspace.portable_revision.v0.2",
+      "withholding": []
+    }
+  ],
+  "schema": "counterpedia.research_workspace.portable_pack.v0.2",
+  "selected_revision": 2
+}

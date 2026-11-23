@@ -1,0 +1,455 @@
+{
+  "authenticity": "not_established",
+  "canonicalization": "cp-rwp-json-v1",
+  "complete": true,
+  "export": {
+    "export_sha256": "sha256:5f31cbe395002f83eb74a7e664065210c02da6f7e5dd6ad9e5f40575ccc331b0",
+    "exported_at": "2026-11-23T10:02:00.000Z",
+    "head_portable_revision_sha256": "sha256:d2a432ddf926c5e26ece43d43cc8ea0e9699b414d1e7cce8b1c386d6f66204b7",
+    "limitations": [
+      "source_bytes_not_included",
+      "unkeyed_integrity_not_authorship",
+      "current_readback_is_export_time_observation",
+      "offline_copy_cannot_be_withdrawn"
+    ],
+    "readback": [
+      {
+        "basis": "saved_reference_matches_current_producer_readback",
+        "observation_id": "ob_a754956601a40cb24beaf622",
+        "observed_at": "2026-11-22T10:01:00.000Z",
+        "revision": 1,
+        "state": "current"
+      },
+      {
+        "basis": "source_not_available",
+        "observation_id": "ob_56ee471d5de8af7f5c653abf",
+        "observed_at": "2026-11-22T10:01:00.000Z",
+        "revision": 1,
+        "state": "unavailable"
+      },
+      {
+        "basis": "source_changed_since_saved",
+        "observation_id": "ob_a754956601a40cb24beaf622",
+        "observed_at": "2026-11-23T10:01:00.000Z",
+        "revision": 2,
+        "state": "stale"
+      },
+      {
+        "basis": "saved_reference_matches_current_producer_readback",
+        "observation_id": "ob_56ee471d5de8af7f5c653abf",
+        "observed_at": "2026-11-23T10:01:00.000Z",
+        "revision": 2,
+        "state": "current"
+      }
+    ]
+  },
+  "profile": "researcher_private_portable",
+  "revisions": [
+    {
+      "assessments": [
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "The memorandum dates the meeting to Monday.",
+          "observation_id": "ob_a754956601a40cb24beaf622",
+          "proposition_id": "pr_supportsalpha",
+          "stance": "supports"
+        },
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "The memorandum records one dissent.",
+          "observation_id": "ob_a754956601a40cb24beaf622",
+          "proposition_id": "pr_conflictsalpha",
+          "stance": "conflicts"
+        },
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "The minutes give a different date.",
+          "observation_id": "ob_56ee471d5de8af7f5c653abf",
+          "proposition_id": "pr_supportsalpha",
+          "stance": "conflicts"
+        },
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "The minutes describe a unanimous vote.",
+          "observation_id": "ob_56ee471d5de8af7f5c653abf",
+          "proposition_id": "pr_conflictsalpha",
+          "stance": "supports"
+        }
+      ],
+      "context_selection": {
+        "items": [
+          {
+            "claimed_metadata": {
+              "dates": [],
+              "issuer": "Synthetic Archive",
+              "origin": "source_reader",
+              "original_address": null,
+              "page": "/sources/synthetic-source-alpha",
+              "title": "Synthetic archive memorandum A"
+            },
+            "review": {
+              "decision": "unmarked",
+              "note": "Review the meeting date."
+            },
+            "source_occurrence": {
+              "id": "r01",
+              "namespace": "counterpedia.public_reference"
+            }
+          },
+          {
+            "claimed_metadata": {
+              "dates": [],
+              "issuer": "Synthetic Archive",
+              "origin": "source_reader",
+              "original_address": null,
+              "page": "/sources/synthetic-source-beta",
+              "title": "Synthetic archive memorandum B"
+            },
+            "review": {
+              "decision": "hold",
+              "note": "Selected context review: availability requires follow-up."
+            },
+            "source_occurrence": {
+              "id": "r02",
+              "namespace": "counterpedia.public_reference"
+            }
+          }
+        ],
+        "notes": {
+          "still_to_check": "Independent interpretation and factual truth have not been evaluated.",
+          "working_answer": "Two propositions receive distinct, authored assessments."
+        },
+        "relationships": [],
+        "schema": "counterpedia.research_context.selection.v0.1",
+        "source_format": "counterpedia.public-reference-selection/v1"
+      },
+      "finding": {
+        "author": "user",
+        "text": "Initial saved review: the observations divide support and conflict across two propositions."
+      },
+      "observations": [
+        {
+          "metadata_at_save": {
+            "href": "/sources/synthetic-source-alpha",
+            "label": "Synthetic source",
+            "posture": "Recorded offline reference",
+            "provenance_note": "Synthetic fixture source a; no source document is copied.",
+            "title": "Synthetic archive memorandum A"
+          },
+          "observation_id": "ob_a754956601a40cb24beaf622",
+          "provenance_at_save": {
+            "public_research_release_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "section_provenance_sha256": null
+          },
+          "reference": {
+            "kind": "public_reference",
+            "ref": {
+              "capture_referent_id": "urn:counterpedia.synthetic:a",
+              "captured_bytes_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "family": "counterpedia.public_source_record",
+              "source_id": "synthetic-source-alpha"
+            }
+          },
+          "source_kind": "memorandum"
+        },
+        {
+          "metadata_at_save": {
+            "href": "/sources/synthetic-source-beta",
+            "label": "Synthetic source",
+            "posture": "Recorded offline reference",
+            "provenance_note": "Synthetic fixture source b; no source document is copied.",
+            "title": "Synthetic archive memorandum B"
+          },
+          "observation_id": "ob_56ee471d5de8af7f5c653abf",
+          "provenance_at_save": {
+            "public_research_release_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "section_provenance_sha256": null
+          },
+          "reference": {
+            "kind": "public_reference",
+            "ref": {
+              "capture_referent_id": "urn:counterpedia.synthetic:b",
+              "captured_bytes_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "family": "counterpedia.public_source_record",
+              "source_id": "synthetic-source-beta"
+            }
+          },
+          "source_kind": "memorandum"
+        }
+      ],
+      "parent_portable_revision_sha256": null,
+      "portable_revision_sha256": "sha256:b61b58c1911e2878cde73f09a8cc5395e7e7fe45fbfafdc7f2cfa082b37b978e",
+      "propositions": [
+        {
+          "proposition_id": "pr_supportsalpha",
+          "text": "The committee met on Monday."
+        },
+        {
+          "proposition_id": "pr_conflictsalpha",
+          "text": "The committee approved the motion unanimously."
+        }
+      ],
+      "question": "How do these synthetic observations support or conflict with the paired propositions?",
+      "research_context": [
+        {
+          "claimed_metadata": {
+            "dates": [],
+            "issuer": "Synthetic Archive",
+            "origin": "source_reader",
+            "original_address": null,
+            "page": "/sources/synthetic-source-alpha",
+            "title": "Synthetic archive memorandum A"
+          },
+          "context_id": "r01",
+          "observation_ids": [
+            "ob_a754956601a40cb24beaf622"
+          ],
+          "related_context_ids": [],
+          "review": {
+            "decision": "keep",
+            "note": "The memorandum records the meeting date."
+          },
+          "source_occurrence": {
+            "id": "r01",
+            "namespace": "counterpedia.public_reference"
+          }
+        },
+        {
+          "claimed_metadata": {
+            "dates": [],
+            "issuer": "Synthetic Archive",
+            "origin": "source_reader",
+            "original_address": null,
+            "page": "/sources/synthetic-source-beta",
+            "title": "Synthetic archive memorandum B"
+          },
+          "context_id": "r02",
+          "observation_ids": [
+            "ob_56ee471d5de8af7f5c653abf"
+          ],
+          "related_context_ids": [],
+          "review": {
+            "decision": "hold",
+            "note": "Selected context review: availability requires follow-up."
+          },
+          "source_occurrence": {
+            "id": "r02",
+            "namespace": "counterpedia.public_reference"
+          }
+        }
+      ],
+      "revision": 1,
+      "saved_at": "2026-11-22T10:00:00.000Z",
+      "schema": "counterpedia.research_workspace.portable_revision.v0.2",
+      "withholding": []
+    },
+    {
+      "assessments": [
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "The memorandum dates the meeting to Monday.",
+          "observation_id": "ob_a754956601a40cb24beaf622",
+          "proposition_id": "pr_supportsalpha",
+          "stance": "supports"
+        },
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "The memorandum records one dissent.",
+          "observation_id": "ob_a754956601a40cb24beaf622",
+          "proposition_id": "pr_conflictsalpha",
+          "stance": "conflicts"
+        },
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "The minutes give a different date.",
+          "observation_id": "ob_56ee471d5de8af7f5c653abf",
+          "proposition_id": "pr_supportsalpha",
+          "stance": "conflicts"
+        },
+        {
+          "author": "user",
+          "authorship_basis": "declared_by_saving_client",
+          "note": "The minutes describe a unanimous vote.",
+          "observation_id": "ob_56ee471d5de8af7f5c653abf",
+          "proposition_id": "pr_conflictsalpha",
+          "stance": "supports"
+        }
+      ],
+      "context_selection": {
+        "items": [
+          {
+            "claimed_metadata": {
+              "dates": [],
+              "issuer": "Synthetic Archive",
+              "origin": "source_reader",
+              "original_address": null,
+              "page": "/sources/synthetic-source-alpha",
+              "title": "Synthetic archive memorandum A"
+            },
+            "review": {
+              "decision": "unmarked",
+              "note": "Review the meeting date."
+            },
+            "source_occurrence": {
+              "id": "r01",
+              "namespace": "counterpedia.public_reference"
+            }
+          },
+          {
+            "claimed_metadata": {
+              "dates": [],
+              "issuer": "Synthetic Archive",
+              "origin": "source_reader",
+              "original_address": null,
+              "page": "/sources/synthetic-source-beta",
+              "title": "Synthetic archive memorandum B"
+            },
+            "review": {
+              "decision": "hold",
+              "note": "Selected context review: availability requires follow-up."
+            },
+            "source_occurrence": {
+              "id": "r02",
+              "namespace": "counterpedia.public_reference"
+            }
+          }
+        ],
+        "notes": {
+          "still_to_check": "Independent interpretation and factual truth have not been evaluated.",
+          "working_answer": "Two propositions receive distinct, authored assessments."
+        },
+        "relationships": [],
+        "schema": "counterpedia.research_context.selection.v0.1",
+        "source_format": "counterpedia.public-reference-selection/v1"
+      },
+      "finding": {
+        "author": "user",
+        "text": "Revised saved review: availability changed while the original context review remains unchanged."
+      },
+      "observations": [
+        {
+          "metadata_at_save": {
+            "href": "/sources/synthetic-source-alpha",
+            "label": "Synthetic source",
+            "posture": "Recorded offline reference",
+            "provenance_note": "Synthetic fixture source a; no source document is copied.",
+            "title": "Amended archive memorandum A"
+          },
+          "observation_id": "ob_a754956601a40cb24beaf622",
+          "provenance_at_save": {
+            "public_research_release_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "section_provenance_sha256": null
+          },
+          "reference": {
+            "kind": "public_reference",
+            "ref": {
+              "capture_referent_id": "urn:counterpedia.synthetic:a",
+              "captured_bytes_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "family": "counterpedia.public_source_record",
+              "source_id": "synthetic-source-alpha"
+            }
+          },
+          "source_kind": "memorandum"
+        },
+        {
+          "metadata_at_save": {
+            "href": "/sources/synthetic-source-beta",
+            "label": "Synthetic source",
+            "posture": "Recorded offline reference",
+            "provenance_note": "Synthetic fixture source b; no source document is copied.",
+            "title": "Synthetic archive memorandum B"
+          },
+          "observation_id": "ob_56ee471d5de8af7f5c653abf",
+          "provenance_at_save": {
+            "public_research_release_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "section_provenance_sha256": null
+          },
+          "reference": {
+            "kind": "public_reference",
+            "ref": {
+              "capture_referent_id": "urn:counterpedia.synthetic:b",
+              "captured_bytes_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "family": "counterpedia.public_source_record",
+              "source_id": "synthetic-source-beta"
+            }
+          },
+          "source_kind": "memorandum"
+        }
+      ],
+      "parent_portable_revision_sha256": "sha256:b61b58c1911e2878cde73f09a8cc5395e7e7fe45fbfafdc7f2cfa082b37b978e",
+      "portable_revision_sha256": "sha256:d2a432ddf926c5e26ece43d43cc8ea0e9699b414d1e7cce8b1c386d6f66204b7",
+      "propositions": [
+        {
+          "proposition_id": "pr_supportsalpha",
+          "text": "The committee met on Monday."
+        },
+        {
+          "proposition_id": "pr_conflictsalpha",
+          "text": "The committee approved the motion unanimously."
+        }
+      ],
+      "question": "How do these synthetic observations support or conflict with the paired propositions?",
+      "research_context": [
+        {
+          "claimed_metadata": {
+            "dates": [],
+            "issuer": "Synthetic Archive",
+            "origin": "source_reader",
+            "original_address": null,
+            "page": "/sources/synthetic-source-alpha",
+            "title": "Synthetic archive memorandum A"
+          },
+          "context_id": "r01",
+          "observation_ids": [
+            "ob_a754956601a40cb24beaf622"
+          ],
+          "related_context_ids": [],
+          "review": {
+            "decision": "hold",
+            "note": "Compare the meeting date against the amended minutes."
+          },
+          "source_occurrence": {
+            "id": "r01",
+            "namespace": "counterpedia.public_reference"
+          }
+        },
+        {
+          "claimed_metadata": {
+            "dates": [],
+            "issuer": "Synthetic Archive",
+            "origin": "source_reader",
+            "original_address": null,
+            "page": "/sources/synthetic-source-beta",
+            "title": "Synthetic archive memorandum B"
+          },
+          "context_id": "r02",
+          "observation_ids": [
+            "ob_56ee471d5de8af7f5c653abf"
+          ],
+          "related_context_ids": [],
+          "review": {
+            "decision": "hold",
+            "note": "Selected context review: availability requires follow-up."
+          },
+          "source_occurrence": {
+            "id": "r02",
+            "namespace": "counterpedia.public_reference"
+          }
+        }
+      ],
+      "revision": 2,
+      "saved_at": "2026-11-23T10:00:00.000Z",
+      "schema": "counterpedia.research_workspace.portable_revision.v0.2",
+      "withholding": []
+    }
+  ],
+  "schema": "counterpedia.research_workspace.portable_pack.v0.2",
+  "selected_revision": 2
+}

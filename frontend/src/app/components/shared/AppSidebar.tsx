@@ -80,6 +80,7 @@ const NAV_ITEMS = [
     { href: "/ide", label: "IDE", icon: IdeSkeuoIcon },
     { href: "/projects", label: "Projects", icon: FolderSkeuoIcon },
     { href: "/library", label: "Library", icon: LibrarySkeuoIcon },
+    { href: "/research-pack", label: "Research Pack", icon: LibrarySkeuoIcon },
     {
         href: "/tabular-reviews",
         label: "Tabular Review",
