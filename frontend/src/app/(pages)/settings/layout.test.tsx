@@ -69,6 +69,11 @@ describe("SettingsLayout", () => {
             "My Activity",
             "Organizations",
         ]);
+        // Each section has an icon beside its name, hidden from assistive tech.
+        for (const button of within(nav).getAllByRole("button"))
+            expect(
+                button.querySelector('svg[aria-hidden="true"]'),
+            ).not.toBeNull();
     });
 
     it("marks Account current at the root of Settings, under Personal", () => {

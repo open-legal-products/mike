@@ -2,7 +2,21 @@
 
 import { useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import {
+    Brain,
+    Building2,
+    Cpu,
+    HatGlasses,
+    History,
+    KeyRound,
+    Loader2,
+    Palette,
+    Plug,
+    ShieldCheck,
+    ToggleRight,
+    UserPen,
+    UserRound,
+} from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOrganizationInvitationCount } from "@/app/hooks/useOrganizationInvitationCount";
 import { useMemberDataActions } from "@/app/hooks/useMemberDataActions";
@@ -26,16 +40,23 @@ const GROUPS: SettingsShellGroup[] = [
         id: "workspace",
         label: "Workspace",
         tabs: [
-            { id: "memory", label: "Memory", href: "/settings/memory" },
+            {
+                id: "memory",
+                label: "Memory",
+                href: "/settings/memory",
+                icon: Brain,
+            },
             {
                 id: "connectors",
                 label: "Connectors",
                 href: "/settings/connectors",
+                icon: Plug,
             },
             {
                 id: "privacy-data",
                 label: "Privacy & Data",
                 href: "/settings/privacy-data",
+                icon: HatGlasses,
             },
         ],
     },
@@ -43,33 +64,53 @@ const GROUPS: SettingsShellGroup[] = [
         id: "personal",
         label: "Personal",
         tabs: [
-            { id: "account", label: "Account", href: "/settings" },
+            {
+                id: "account",
+                label: "Account",
+                href: "/settings",
+                icon: UserRound,
+            },
             {
                 id: "personalisation",
                 label: "Personalisation",
                 href: "/settings/personalisation",
+                icon: UserPen,
             },
             {
                 id: "appearance",
                 label: "Appearance",
                 href: "/settings/appearance",
+                icon: Palette,
             },
-            { id: "features", label: "Features", href: "/settings/features" },
+            {
+                id: "features",
+                label: "Features",
+                href: "/settings/features",
+                icon: ToggleRight,
+            },
             {
                 id: "models",
                 label: "Model Preferences",
                 href: "/settings/models",
+                icon: Cpu,
             },
             {
                 id: "byok",
                 label: "Bring Your Own Keys",
                 href: "/settings/byok",
+                icon: KeyRound,
             },
-            { id: "security", label: "Security", href: "/settings/security" },
+            {
+                id: "security",
+                label: "Security",
+                href: "/settings/security",
+                icon: ShieldCheck,
+            },
             {
                 id: "my-activity",
                 label: "My Activity",
                 href: "/settings/my-activity",
+                icon: History,
             },
             // The organizations the person belongs to, and their invitations.
             // Each organization's own settings are a separate area, opened
@@ -78,6 +119,7 @@ const GROUPS: SettingsShellGroup[] = [
                 id: "organizations",
                 label: "Organizations",
                 href: "/settings/organizations",
+                icon: Building2,
             },
         ],
     },

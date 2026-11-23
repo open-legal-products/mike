@@ -2,12 +2,15 @@
 
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import type { LucideIcon } from "lucide-react";
 import { settingsTabButtonClassName } from "@/app/(pages)/settings/settingsStyles";
 
 export interface SettingsShellTab {
     id: string;
     label: string;
     href: string;
+    /** Drawn before the label; decorative, as the label names the tab. */
+    icon?: LucideIcon;
     badge?: ReactNode;
 }
 
@@ -154,6 +157,7 @@ function SettingsNavGroup({
             >
                 {group.tabs.map((tab) => {
                     const active = isActive(tab);
+                    const Icon = tab.icon;
                     return (
                         <li key={tab.id}>
                             <button
@@ -163,8 +167,16 @@ function SettingsNavGroup({
                                 onClick={() => router.push(tab.href)}
                                 className={settingsTabButtonClassName(active)}
                             >
-                                {tab.label}
-                                {tab.badge ? <> {tab.badge}</> : null}
+                                {Icon ? (
+                                    <Icon
+                                        aria-hidden="true"
+                                        className="h-4 w-4 shrink-0"
+                                    />
+                                ) : null}
+                                <span>
+                                    {tab.label}
+                                    {tab.badge ? <> {tab.badge}</> : null}
+                                </span>
                             </button>
                         </li>
                     );
