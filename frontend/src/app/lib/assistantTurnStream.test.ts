@@ -80,6 +80,43 @@ describe("consumeAssistantTurnStream", () => {
     ]);
     turn.finish();
   });
+  it("shows the citations step as in progress until its result arrives", async () => {
+    const turn = begin();
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "tool_call_start", name: "cite_sources" }),
+      frame(2, { type: "citations_recorded_start" }),
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events).toEqual([
+      { type: "citations_recorded", refs: [], sources: [], quotes_not_found: 0, rejected: 0, isStreaming: true },
+    ]);
+    turn.finish();
+  });
+
+  it("keeps the citations step before the answer and drops malformed fields", async () => {
+    const turn = begin();
+    const step = {
+      type: "citations_recorded" as const,
+      refs: [1, 2],
+      sources: [{ name: "Lease.pdf", type: "pdf" as const, ref: 1 }],
+      quotes_not_found: 1,
+      rejected: 0,
+    };
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "citations_recorded_start" }),
+      frame(2, step),
+      frame(2, { type: "content_delta", text: "Either party may terminate [1]." }),
+      frame(3, { type: "citations_recorded", refs: [3, "4"], sources: [{ name: "Act", type: "legislation", ref: 3 }] }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events?.slice(0, 2)).toEqual([
+      step,
+      { type: "content", text: "Either party may terminate [1]." },
+    ]);
+    expect(turn.turn.assistant.events?.[2]).toEqual({
+      type: "citations_recorded", refs: [3], sources: [{ name: "Act", type: "legislation", ref: 3 }], quotes_not_found: 0, rejected: 0,
+    });
+    turn.finish();
+  });
   it("records what the answer ran on and drops malformed details", async () => {
     const turn = begin();
     await consumeAssistantTurnStream(sseResponse([
@@ -1739,20 +1776,16 @@ describe("ask_inputs frames", () => {
 describe("citation frames", () => {
   const citations = [{ id: "c1", document_id: "doc-1", quote: "a quote" }];
 
-  it.each([["started"], ["partial"]])(
-    "publishes %s citations without touching the streaming answer",
-    async (status) => {
-      const message = await run([
-        { type: "content_delta", text: "answer" },
-        { type: "citations", status, citations },
-      ]);
-      expect(message.citations).toEqual(citations);
-      expect(message.citationStatus).toBe(status);
-      expect(message.events).toEqual([
-        { type: "content", text: "answer", isStreaming: true },
-      ]);
-    },
-  );
+  it("publishes partial citations without touching the streaming answer", async () => {
+    const message = await run([
+      { type: "content_delta", text: "answer" },
+      { type: "citations", status: "partial", citations },
+    ]);
+    expect(message.citations).toEqual(citations);
+    expect(message.events).toEqual([
+      { type: "content", text: "answer", isStreaming: true },
+    ]);
+  });
 
   it("finalizes the answer and scrubs placeholders on the last citation frame", async () => {
     const message = await run([
@@ -1761,14 +1794,12 @@ describe("citation frames", () => {
       { type: "citations", status: "final", citations },
     ]);
     expect(message.citations).toEqual(citations);
-    expect(message.citationStatus).toBe("final");
     expect(message.events).toEqual([{ type: "content", text: "answer" }]);
   });
 
-  it("treats an unknown status as final and leaves no status when there are no citations", async () => {
+  it("treats an unknown status as final", async () => {
     const message = await run([{ type: "citations", status: "halfway" }]);
     expect(message.citations).toEqual([]);
-    expect(message.citationStatus).toBeUndefined();
   });
 });
 

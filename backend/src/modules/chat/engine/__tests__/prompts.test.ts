@@ -26,7 +26,8 @@ describe("buildSystemPrompt", () => {
             expect(prompt).toContain(
                 `Record citations with the ${CITE_SOURCES_TOOL_NAME} tool BEFORE writing the answer`,
             );
-            expect(prompt).toContain("Never write a <CITATIONS> block");
+            expect(prompt).toContain("Never list the citations or their JSON in the answer");
+            expect(prompt).not.toContain("<CITATIONS>");
             expect(prompt).toContain(
                 `Every [N] marker in the answer must have a recorded entry with "ref": N`,
             );

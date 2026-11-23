@@ -26,9 +26,8 @@ function responseContent(body) {
         // the browser assertion; it is deliberately not supplied by this server.
         const toolText = textOf(result.content);
         // The tool prefixes citation instructions and a fenced filename; its
-        // final untrusted-content block is the extracted document body. Echoing
-        // the instructions would feed their <CITATIONS> example into the app's
-        // citation parser and hide the rest of the answer.
+        // final untrusted-content block is the extracted document body, the
+        // only part the answer should quote.
         const source = [...toolText.matchAll(/<untrusted-content\b[^>]*>\n([\s\S]*?)\n<\/untrusted-content\b[^>]*>/g)].at(-1)?.[1] ?? toolText;
         return [{ type: "text", text: `Document tool result:\n\n\`\`\`text\n${source}\n\`\`\`` }];
     }

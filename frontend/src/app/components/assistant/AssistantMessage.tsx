@@ -42,6 +42,7 @@ import { EditCardsSection } from "./message/EditCardsSection";
 import {
     AskInputsBlock,
     CourtListenerBlock,
+    CitationsRecordedBlock,
     DocCreatedBlock,
     DocDownloadBlock,
     DocEditBlock,
@@ -69,7 +70,6 @@ interface Props {
     /** Human-readable error text rendered alongside the red Mike icon. */
     errorMessage?: string;
     citations?: Citation[];
-    citationStatus?: "started" | "partial" | "final";
     activeCitation?: Citation | null;
     onCitationClick?: (citation: Citation) => void;
     onOpenCitationSource?: (citation: Citation) => void;
@@ -141,7 +141,6 @@ function AssistantMessageImpl({
     isError = false,
     errorMessage,
     citations = EMPTY_CITATIONS,
-    citationStatus,
     activeCitation,
     onCitationClick,
     onOpenCitationSource,
@@ -283,9 +282,18 @@ function AssistantMessageImpl({
     const canOpenCitationSource = (citation: Citation) =>
         !!onOpenCitationSource ||
         (citation.kind !== "case" && !!onOpenDocument);
+    // A cited source opens through the first citation that cites it.
+    const openCitedSource = ({ ref }: { ref: number }) => {
+        const citation = citations.find((c) => c.ref === ref);
+        return citation && canOpenCitationSource(citation)
+            ? () => handleOpenCitationSource(citation)
+            : undefined;
+    };
     const eventsWithDelegated = withDelegationEvents(events ?? []);
-    const showCitationBlock =
-        !!citationStatus || (!isStreaming && citations.length > 0);
+    // The list waits until the answer is finished: citations recorded
+    // before the answer arrive first, and the list must not sit under prose
+    // that is still being written.
+    const showCitationBlock = !isStreaming && citations.length > 0;
     const handleCopy = async () => {
         try {
             let html = "";
@@ -635,6 +643,21 @@ function AssistantMessageImpl({
                                   })
                             : undefined
                     }
+                />
+            );
+        }
+        if (event.type === "citations_recorded") {
+            return (
+                <CitationsRecordedBlock
+                    key={globalIdx}
+                    refs={event.refs}
+                    sources={event.sources}
+                    quotesNotFound={event.quotes_not_found}
+                    rejected={event.rejected}
+                    isStreaming={!!event.isStreaming}
+                    interrupted={!!event.interrupted}
+                    showConnector={showConnector}
+                    openSource={openCitedSource}
                 />
             );
         }
@@ -1265,11 +1288,6 @@ function AssistantMessageImpl({
                         onCitationClick={onCitationClick}
                         onOpenSource={handleOpenCitationSource}
                         canOpenSource={canOpenCitationSource}
-                        showWhenEmpty={!!citationStatus}
-                        isLoading={
-                            citationStatus === "started" ||
-                            citationStatus === "partial"
-                        }
                     />
                 )}
 

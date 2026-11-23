@@ -14,7 +14,6 @@ import type {
 } from "../../../../lib/llm";
 import { REASONING_LEVELS, type ReasoningLevel } from "../../../../lib/llm/types";
 import { DELEGATION_MODEL_TIERS, subagentModelFor } from "../../../../lib/modelSelection";
-import { CITATIONS_OPEN_TAG } from "../citations";
 import { spotlight, withDocumentList } from "../contextBuilders";
 import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
 import {
@@ -276,11 +275,6 @@ function minLevel<T>(order: readonly T[], a: T, b: T): T {
     return order.indexOf(b) < order.indexOf(a) ? b : a;
 }
 
-function proseOf(fullText: string): string {
-    const end = fullText.indexOf(CITATIONS_OPEN_TAG);
-    return (end >= 0 ? fullText.slice(0, end) : fullText).trim();
-}
-
 function briefOf(prose: string): string {
     return prose.length > MAX_BRIEF_CHARS
         ? `${prose.slice(0, MAX_BRIEF_CHARS)}\n[The rest of the brief was cut.]`
@@ -312,11 +306,12 @@ function sourceLines(citations: unknown[]): string[] {
 
 /** runLLMStream's errors carry the turn so far. */
 function partialRun(error: unknown): SubagentResult {
-    const { fullText, events } = (error ?? {}) as Partial<SubagentResult>;
+    const { fullText, events, citations } = (error ?? {}) as Partial<SubagentResult>;
     return {
         fullText: typeof fullText === "string" ? fullText : "",
         events: Array.isArray(events) ? events : [],
-        citations: [],
+        // Recorded with cite_sources before the run ended.
+        citations: Array.isArray(citations) ? citations : [],
     };
 }
 
@@ -690,7 +685,7 @@ export async function runDelegateCall(
         stopper.dispose();
     }
 
-    const brief = briefOf(proseOf(outcome.fullText));
+    const brief = briefOf(outcome.fullText.trim());
     // The answer puts these to the user and holds the one stored copy.
     const approvals = subagentApprovals(outcome.events, title);
     const event = delegationEvent(identity, {

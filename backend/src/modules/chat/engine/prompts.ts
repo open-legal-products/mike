@@ -39,7 +39,7 @@ Record citations with the cite_sources tool BEFORE writing the answer that relie
 3. If the result lists quotes it could not find or entries it rejected, call cite_sources again with corrected entries under the same refs, or leave those claims out.
 4. Write the answer, putting each marker [1], [2], etc. exactly where the claim it supports appears. If you then need one more citation, call cite_sources with its entry before using its marker.
 
-Never write a <CITATIONS> block or list the citation JSON in the answer. Skip cite_sources when the answer cites nothing.
+Never list the citations or their JSON in the answer. Skip cite_sources when the answer cites nothing.
 
 Citation rules:
 - Every [N] marker in the answer must have a recorded entry with "ref": N, and every recorded ref should appear as a marker.

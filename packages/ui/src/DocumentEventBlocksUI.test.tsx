@@ -5,6 +5,7 @@ import {
     DocEditBlockUI,
     DocFindBlockUI,
     DocReadBlockUI,
+    EventSourceUI,
 } from "./DocumentEventBlocksUI";
 
 describe("DocumentEventBlocksUI", () => {
@@ -66,5 +67,31 @@ describe("DocumentEventBlocksUI", () => {
         expect(screen.getByTestId("edit-file-icon")).toBeVisible();
         expect(screen.getByText("agreement.docx")).toBeVisible();
         expect(screen.getByText("Selection moved")).toBeVisible();
+    });
+
+    it("names a source with its icon, and opens it only once the step is done", async () => {
+        const onClick = vi.fn();
+        const user = userEvent.setup();
+        const { rerender } = render(
+            <EventSourceUI
+                name="Companies Act 2006"
+                icon={<span data-testid="source-icon" />}
+                onClick={onClick}
+                isStreaming
+            />,
+        );
+        expect(screen.queryByRole("button")).toBeNull();
+        expect(screen.getByText("Companies Act 2006...")).toBeVisible();
+
+        rerender(
+            <EventSourceUI
+                name="Companies Act 2006"
+                icon={<span data-testid="source-icon" />}
+                onClick={onClick}
+            />,
+        );
+        await user.click(screen.getByRole("button", { name: "Companies Act 2006" }));
+        expect(onClick).toHaveBeenCalledOnce();
+        expect(screen.getByTestId("source-icon")).toBeVisible();
     });
 });

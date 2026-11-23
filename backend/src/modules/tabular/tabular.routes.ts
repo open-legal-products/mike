@@ -92,7 +92,6 @@ import {
     deleteTabularReviewChat,
     ensureReviewChatReadAccess,
     ensureReviewChatWriteAccess,
-    extractTabularAnnotations,
     listTabularReviewChatMessages,
     listTabularReviewChats,
     markSavedTabularChatTurnStopped,
@@ -1106,7 +1105,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
     // turn a second time.
     let assistantSaved = false;
     try {
-        const { fullText, events } = await runLLMStream({
+        const { fullText, events, citations } = await runLLMStream({
             onActivity: run?.touch,
             apiMessages,
             docStore: new Map(),
@@ -1118,8 +1117,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             nonce,
             includeResearchTools: false,
             tabularStore,
-            buildCitations: (text) =>
-                extractTabularAnnotations(text, tabularStore),
+            citationSources: "tabular_cells",
             model: selectedChatModel,
             reasoning: selectedReasoningLevel,
             apiKeys: api_keys,
@@ -1133,10 +1131,10 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         });
         // A stream that returns after the turn was stopped must not be saved
         // as a completed answer: the abort handler below stores the stop.
-        throwIfTurnStopped(stream.signal, { fullText, events });
+        throwIfTurnStopped(stream.signal, { fullText, events, citations });
 
         const persistedEvents = stripTransientAssistantEvents(events);
-        const annotations = extractTabularAnnotations(fullText, tabularStore);
+        const annotations = citations;
 
         if (chatId) {
             const saved = await saveTabularChatTurn(db, {
@@ -1160,7 +1158,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         // was being saved. A stop seen here still ends it as stopped: no
         // title, no memory consolidation, and the stored answer gets the stop
         // label.
-        throwIfTurnStopped(stream.signal, { fullText, events });
+        throwIfTurnStopped(stream.signal, { fullText, events, citations });
 
         // Generate title on first exchange
         if (chatId && isFirstExchange && !chatTitle && lastUser.content) {
@@ -1179,7 +1177,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             }
             // Titling is a model call of its own; a stop during it ends the
             // turn as stopped too, before it is curated.
-            throwIfTurnStopped(stream.signal, { fullText, events });
+            throwIfTurnStopped(stream.signal, { fullText, events, citations });
         }
 
         // Only a durably saved, successful turn is worth consolidating: an
@@ -1211,10 +1209,8 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             if (chatId && err instanceof AssistantStreamError) {
                 const partial = buildStoppedAssistantMessage({
                     stopReason: run?.stopReason,
-                    fullText: err.fullText,
                     events: err.events,
-                    buildCitations: (fullText) =>
-                        extractTabularAnnotations(fullText, tabularStore),
+                    citations: err.citations,
                 });
                 // Once the finished answer is stored, only mark that row as
                 // stopped; inserting it again would fail on its id.
@@ -1255,8 +1251,6 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             err instanceof AssistantStreamError
                 ? stripTransientAssistantEvents(err.events)
                 : [{ type: "error" as const, message }];
-        const errorFullText =
-            err instanceof AssistantStreamError ? err.fullText : "";
         if (chatId) {
             try {
                 const { error: saveError } = await saveTabularChatTurn(db, {
@@ -1265,10 +1259,8 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                     authorUserId: userId,
                     memoryInputMessageId: inputMessageId,
                     content: errorEvents,
-                    annotations: extractTabularAnnotations(
-                        errorFullText,
-                        tabularStore,
-                    ),
+                    annotations:
+                        err instanceof AssistantStreamError ? err.citations : [],
                     touch: "never",
                 });
                 if (saveError)

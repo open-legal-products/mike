@@ -884,7 +884,6 @@ export function ProjectChatPanel({
                                         }
                                         isError={!!msg.error}
                                         citations={msg.citations}
-                                        citationStatus={msg.citationStatus}
                                         activeCitation={activeCitation}
                                         onCitationClick={onCitationClick}
                                         onCaseClick={onCaseClick}

@@ -42,8 +42,14 @@ import {
     DocReadBlock,
     EventBlock,
     ReasoningBlock,
+    CitationsRecordedBlock,
 } from "../assistant/message/EventBlocks";
 import { readSseFrames } from "@/app/lib/sse";
+import {
+    citationsRecordedEvent,
+    isRecordingCitations,
+    recordingCitationsEvent,
+} from "@/app/lib/citationsRecorded";
 import { chatRequestError } from "@/app/lib/assistantTurnStream";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { notifyError, notifyInfo } from "@/app/lib/userFacingError";
@@ -245,6 +251,14 @@ function TRAssistantMessage({
         return false;
     };
 
+    // A cited document opens at the first cell that cites it.
+    const openCitedCell = ({ ref }: { ref: number }) => {
+        const cell = annotations.find((annotation) => annotation.ref === ref);
+        return cell
+            ? () => onCitationClick(cell.col_index, cell.row_index)
+            : undefined;
+    };
+
     const renderPreEvent = (
         event: AssistantEvent,
         index: number,
@@ -273,6 +287,21 @@ function TRAssistantMessage({
                     isStreaming={event.isStreaming}
                     showConnector={showConnector}
                     showFileIcon={false}
+                />
+            );
+        }
+        if (event.type === "citations_recorded") {
+            return (
+                <CitationsRecordedBlock
+                    key={key}
+                    refs={event.refs}
+                    sources={event.sources}
+                    quotesNotFound={event.quotes_not_found}
+                    rejected={event.rejected}
+                    isStreaming={!!event.isStreaming}
+                    interrupted={!!event.interrupted}
+                    showConnector={showConnector}
+                    openSource={openCitedCell}
                 />
             );
         }
@@ -1849,6 +1878,27 @@ export function TRChatPanel({
                             continue;
                         }
 
+                        if (data.type === "citations_recorded_start") {
+                            pushEvent(recordingCitationsEvent());
+                            continue;
+                        }
+
+                        if (data.type === "citations_recorded") {
+                            const recorded = citationsRecordedEvent(data);
+                            // Completes the step its start frame opened, or adds it.
+                            if (
+                                !updateMatchingEvent(
+                                    isRecordingCitations,
+                                    () => recorded,
+                                )
+                            ) {
+                                pushEvent(recorded);
+                            }
+                            // The model writes the answer next.
+                            pushThinkingPlaceholder();
+                            continue;
+                        }
+
                         if (data.type === "doc_read_start") {
                             pushEvent({
                                 type: "doc_read",
@@ -1929,10 +1979,14 @@ export function TRChatPanel({
                         }
 
                         if (data.type === "citations") {
-                            // End-of-stream signal — scrub any lingering
-                            // placeholders so they don't persist into the
-                            // finalised message.
-                            clearStreamingPlaceholders();
+                            // The final frame ends the stream — scrub any
+                            // lingering placeholders so they don't persist
+                            // into the finalised message. Partial frames
+                            // arrive as cite_sources records citations,
+                            // before the answer.
+                            if (data.status === "final") {
+                                clearStreamingPlaceholders();
+                            }
                             const incoming = (data.citations ??
                                 []) as TRCitationAnnotation[];
                             setMessages((prev) => {

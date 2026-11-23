@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantMessage } from "./AssistantMessage";
-import type { AssistantEvent } from "../shared/types";
+import type { AssistantEvent, DocumentCitation } from "../shared/types";
 
 // Settings > Features > Response details, off unless a test turns it on.
 const profileState = vi.hoisted(() => ({ responseDetailsVisible: false }));
@@ -654,5 +654,101 @@ describe("AssistantMessage response details", () => {
         profileState.responseDetailsVisible = true;
         render(<AssistantMessage isStreaming events={answer()} />);
         expect(screen.queryByText(/1.3K tokens/)).toBeNull();
+    });
+});
+
+describe("AssistantMessage citations", () => {
+    beforeEach(() => {
+        vi.stubGlobal("ResizeObserver", class {
+            observe() {}
+            disconnect() {}
+            unobserve() {}
+        });
+    });
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    const citation: DocumentCitation = {
+        type: "citation_data",
+        kind: "document",
+        ref: 1,
+        doc_id: "doc-0",
+        document_id: "document-0",
+        filename: "Lease.pdf",
+        page: 2,
+        quote: "Either party may terminate",
+        quotes: [{ page: 2, quote: "Either party may terminate" }],
+    };
+    const events: AssistantEvent[] = [
+        {
+            type: "citations_recorded",
+            refs: [1, 2],
+            sources: [
+                { name: "Lease.pdf", type: "pdf", ref: 1 },
+                { name: "Companies Act 2006", type: "legislation", ref: 2 },
+            ],
+            quotes_not_found: 1,
+            rejected: 0,
+        },
+        { type: "content", text: "Either party may terminate [1]." },
+    ];
+
+    it("shows the recorded citations as a step, and the list only once the answer is finished", () => {
+        const { rerender } = render(
+            <AssistantMessage isStreaming events={events} citations={[citation]} />,
+        );
+        // Like every step, it folds away once the answer starts.
+        fireEvent.click(screen.getByRole("button", { name: /1 step/ }));
+        expect(screen.getByText("Recorded 2 citations")).toBeVisible();
+        expect(screen.getByText("Lease.pdf")).toBeVisible();
+        expect(screen.getByText("Companies Act 2006")).toBeVisible();
+        expect(screen.getByText("1 quote not found in the source")).toBeVisible();
+        expect(screen.queryByRole("heading", { name: "Citations" })).toBeNull();
+
+        rerender(<AssistantMessage events={events} citations={[citation]} />);
+        expect(screen.getByRole("heading", { name: "Citations" })).toBeVisible();
+    });
+
+    it("opens a cited source through the citation that cites it", () => {
+        const onOpenCitationSource = vi.fn();
+        render(
+            <AssistantMessage
+                isStreaming
+                events={events}
+                citations={[citation]}
+                onOpenCitationSource={onOpenCitationSource}
+            />,
+        );
+        fireEvent.click(screen.getByRole("button", { name: /1 step/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Lease.pdf" }));
+        expect(onOpenCitationSource).toHaveBeenCalledExactlyOnceWith(citation);
+        // No citation with ref 2 has arrived yet, so the statute is not a button.
+        expect(screen.queryByRole("button", { name: "Companies Act 2006" })).toBeNull();
+        expect(screen.getByText("Companies Act 2006")).toBeVisible();
+    });
+
+    it("shows a citations step in progress, and one the turn stopped", () => {
+        const step = (state: { isStreaming?: boolean; interrupted?: boolean }): AssistantEvent => ({
+            type: "citations_recorded", refs: [], sources: [], quotes_not_found: 0, rejected: 0, ...state,
+        });
+        const { rerender } = render(<AssistantMessage isStreaming events={[step({ isStreaming: true })]} />);
+        expect(screen.getByText("Recording citations...")).toBeVisible();
+        expect(screen.queryByText("Could not record citations")).toBeNull();
+
+        rerender(<AssistantMessage events={[step({ interrupted: true })]} />);
+        expect(screen.getByText("Citation recording stopped")).toBeVisible();
+        expect(screen.queryByText("Could not record citations")).toBeNull();
+    });
+
+    it("says when a call recorded nothing", () => {
+        render(
+            <AssistantMessage
+                isStreaming
+                events={[{ type: "citations_recorded", refs: [], sources: [], quotes_not_found: 0, rejected: 2 }]}
+            />,
+        );
+        expect(screen.getByText("Could not record citations")).toBeVisible();
+        expect(screen.getByText("2 citations refused")).toBeVisible();
     });
 });

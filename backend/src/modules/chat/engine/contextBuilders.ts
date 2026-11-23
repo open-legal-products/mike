@@ -34,7 +34,6 @@ import {
   userMessageTimeStamp,
 } from "../../../lib/userTime";
 import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
-import { parseCitations, createCitation, limitCitationPayload } from "./citations";
 import type { AssistantEvent } from "@mike/contracts";
 import { queryFailureCause } from "../../../lib/batchedQuery";
 import { activeAssistantPrompts, catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
@@ -1008,17 +1007,6 @@ export async function loadUserMessageSentTimes(
   return times;
 }
 
-export function extractCitations(
-  fullText: string,
-  docIndex: DocIndex,
-  docStore?: DocStore,
-): unknown[] {
-  return limitCitationPayload(
-    parseCitations(fullText)
-      .map((c) => createCitation(c, docIndex, undefined, docStore))
-      .filter((citation) => citation !== null),
-  );
-}
 
 export function stripTransientAssistantEvents(events: AssistantEvent[]) {
   return events.filter((event) => event.type !== "case_opinions");
@@ -1029,6 +1017,7 @@ export function stripTransientAssistantEvents(events: AssistantEvent[]) {
 // deliberately, instead of silently dropping an otherwise useful response.
 const COMPLETES_TEXTLESS_TURN = {
   text_card: true,
+  citations_recorded: false,
   reasoning: false,
   ask_inputs: true,
   ask_inputs_response: false,
@@ -1438,31 +1427,20 @@ export function appendCancelledAssistantEvent(events: AssistantEvent[]) {
   return [...events, buildStoppedAssistantEvent("user")];
 }
 
-export function buildCancelledAssistantMessage(args: {
-  fullText: string;
+/**
+ * Preserve partial output while distinguishing a deadline from an explicit
+ * Stop. The citations are the ones recorded before the turn stopped.
+ */
+export function buildStoppedAssistantMessage(args: {
   events: AssistantEvent[];
-  buildCitations: (fullText: string, events: AssistantEvent[]) => unknown[];
+  citations: unknown[];
+  stopReason?: StreamStopReason | null;
 }) {
-  const events = appendCancelledAssistantEvent(
-    stripTransientAssistantEvents(args.events),
-  );
-  return {
-    events,
-    citations: args.buildCitations(args.fullText, events),
-  };
-}
-
-/** Preserve partial output while distinguishing a deadline from an explicit Stop. */
-export function buildStoppedAssistantMessage(
-  args: Parameters<typeof buildCancelledAssistantMessage>[0] & {
-    stopReason?: StreamStopReason | null;
-  },
-) {
   const events: AssistantEvent[] = [
     ...stripTransientAssistantEvents(args.events),
     buildStoppedAssistantEvent(args.stopReason),
   ];
-  return { events, citations: args.buildCitations(args.fullText, events) };
+  return { events, citations: args.citations };
 }
 
 // ---------------------------------------------------------------------------

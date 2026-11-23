@@ -14,69 +14,11 @@ vi.mock("../../../../lib/integrations/googleDrive", () => ({ buildGoogleDriveToo
 vi.mock("../../../../lib/integrations/googleWorkspace", () => ({ buildGoogleWorkspaceTools: async () => [] }));
 
 import { runLLMStream } from "../streaming";
-import { MAX_PARSED_CITATIONS } from "../citations";
 import { runToolCalls } from "../tools/toolDispatcher";
 import { emptyToolCallBatchResult } from "../tools/toolBatchResult";
 
 describe("runLLMStream citation streaming", () => {
-  it("parses each streamed citation once and replays only the newest snapshot", async () => {
-    const count = 60;
-    const block =
-      "<CITATIONS>[" +
-      Array.from(
-        { length: count },
-        (_, i) => JSON.stringify({ ref: i + 1, doc_id: "doc-0", page: 1, quote: `quote ${i}` }),
-      ).join(",") +
-      "]</CITATIONS>";
-    const text = `Answer.\n${block}`;
-    streamChatWithTools.mockImplementation(async (params: {
-      callbacks?: { onContentDelta?: (delta: string) => void };
-    }) => {
-      // A provider streams small deltas; 8 characters keeps the test fast
-      // while every citation still spans several of them.
-      for (let i = 0; i < text.length; i += 8) {
-        params.callbacks?.onContentDelta?.(text.slice(i, i + 8));
-      }
-      return { fullText: text };
-    });
-    const frames: { line: string; replay?: () => boolean }[] = [];
-    const parse = vi.spyOn(JSON, "parse");
-    let citationParses = 0;
-    try {
-      await runLLMStream({
-        model: "gemini-3.8-flash",
-        apiMessages: [
-          { role: "system", content: "Base prompt." },
-          { role: "user", content: "Cite the lease." },
-        ],
-        docStore: new Map(),
-        docIndex: {},
-        userId: "u1",
-        db: {} as never,
-        write: (line: string, opts?: { replay?: () => boolean }) =>
-          void frames.push({ line, replay: opts?.replay }),
-        nonce: "turnnonce",
-      } as Parameters<typeof runLLMStream>[0]);
-      citationParses = parse.mock.calls.filter(([raw]) =>
-        typeof raw === "string" && raw.startsWith('{"ref":'),
-      ).length;
-    } finally {
-      parse.mockRestore();
-    }
-    // Rescanning the whole buffer per delta parses each citation once per
-    // later delta: thousands of parses for 60 citations. Streaming stops at
-    // the citation cap, so the citations past it are never parsed.
-    const streamed = Math.min(count, MAX_PARSED_CITATIONS);
-    expect(citationParses).toBe(streamed);
-
-    const citationFrames = frames.filter((f) => f.line.includes('"type":"citations"'));
-    expect(citationFrames).toHaveLength(streamed + 2); // started, one per citation, final
-    // What a client attaching after the answer would be replayed.
-    const replayed = citationFrames.filter((f) => f.replay?.() ?? true);
-    expect(replayed.map((f) => JSON.parse(f.line.slice(6)).status)).toEqual(["final"]);
-  });
-
-  it("records cite_sources before the answer and merges a stray block's other refs", async () => {
+  it("records cite_sources before the answer and keeps only what it recorded", async () => {
     const source =
       "[Page 1]\nThe Tenant shall pay rent monthly in advance.\n[Page 2]\nEither party may terminate on 30 days' written notice.";
     // The rest of the batch (none here) goes to the dispatcher.
@@ -103,10 +45,7 @@ describe("runLLMStream citation streaming", () => {
         },
       ]);
       toolResult = result.content;
-      const text =
-        "Either party may terminate [1]; rent is paid monthly [2]." +
-        '<CITATIONS>[{"ref": 1, "doc_id": "doc-0", "page": 1, "quote": "overridden"},' +
-        '{"ref": 2, "doc_id": "doc-0", "page": 1, "quote": "The Tenant shall pay rent monthly in advance"}]</CITATIONS>';
+      const text = "Either party may terminate [1].";
       params.callbacks?.onContentDelta?.(text);
       return { fullText: text };
     });
@@ -123,7 +62,6 @@ describe("runLLMStream citation streaming", () => {
       db: {} as never,
       write: (line: string) => void frames.push(line),
       nonce: "turnnonce",
-      citeSources: true,
     } as Parameters<typeof runLLMStream>[0]);
 
     expect(toolNames[0]).toBe("cite_sources");
@@ -139,21 +77,40 @@ describe("runLLMStream citation streaming", () => {
       status: "partial",
       citations: [{ ref: 1, quote: "Either party may terminate on 30 days' written notice" }],
     });
-    // The block is hidden, and fills only the ref no call recorded.
-    expect(frames.join("")).not.toContain("CITATIONS");
     const final = citationFrames.at(-1)!;
     expect(final.status).toBe("final");
     expect(final.citations).toMatchObject([
       { ref: 1, quote: "Either party may terminate on 30 days' written notice", verified: true },
-      { ref: 2, quote: "The Tenant shall pay rent monthly in advance", verified: true },
     ]);
     expect(result.citations).toEqual(final.citations);
+    expect(result.events).toContainEqual({ type: "content", text: "Either party may terminate [1]." });
+    // The call is a step of the stored turn, streamed before the answer.
+    const step = {
+      type: "citations_recorded",
+      refs: [1],
+      // An unpaginated text file is shown with the document icon.
+      sources: [{ name: "Lease.txt", type: "pdf", ref: 1 }],
+      quotes_not_found: 0,
+      rejected: 0,
+    };
+    expect(result.events).toContainEqual(step);
+    const startFrame = frames.indexOf(
+      `data: ${JSON.stringify({ type: "citations_recorded_start" })}\n\n`,
+    );
+    const stepFrame = frames.indexOf(`data: ${JSON.stringify(step)}\n\n`);
+    expect(startFrame).toBeGreaterThanOrEqual(0);
+    expect(startFrame).toBeLessThan(stepFrame);
+    expect(stepFrame).toBeLessThan(firstContent);
+    // The start frame is a progress signal, not a step of the stored turn.
+    expect(result.events.map((e) => e.type)).not.toContain("citations_recorded_start");
   });
 
-  it("does not offer cite_sources unless the caller's prompt asks for it", async () => {
-    let toolNames: string[] = [];
-    streamChatWithTools.mockImplementation(async (params: { tools: { function: { name: string } }[] }) => {
-      toolNames = params.tools.map((t) => t.function.name);
+  it("offers cite_sources for documents, or for a tabular review's cells", async () => {
+    const tools: { name: string; parameters: { properties: { citations: { items: { properties: object } } } } }[][] = [];
+    streamChatWithTools.mockImplementation(async (params: {
+      tools: { function: (typeof tools)[number][number] }[];
+    }) => {
+      tools.push(params.tools.map((t) => t.function));
       return { fullText: "" };
     });
     const base = {
@@ -165,10 +122,57 @@ describe("runLLMStream citation streaming", () => {
       db: {} as never,
       write: () => {},
     };
+    const entryFields = (run: number) =>
+      Object.keys(
+        tools[run].find((t) => t.name === "cite_sources")!.parameters.properties
+          .citations.items.properties,
+      );
+
     await runLLMStream(base as Parameters<typeof runLLMStream>[0]);
-    expect(toolNames).not.toContain("cite_sources");
-    // A custom citation builder (tabular) reads its own block.
-    await runLLMStream({ ...base, citeSources: true, buildCitations: () => [] } as Parameters<typeof runLLMStream>[0]);
-    expect(toolNames).not.toContain("cite_sources");
+    expect(entryFields(0)).toEqual(["ref", "doc_id", "cluster_id", "quotes"]);
+
+    await runLLMStream({
+      ...base,
+      citationSources: "tabular_cells",
+      tabularStore: { columns: [], documents: [], cells: new Map() },
+    } as Parameters<typeof runLLMStream>[0]);
+    expect(entryFields(1)).toEqual(["ref", "col_index", "row_index", "quote"]);
+  });
+
+  it("replays only the newest partial citations to a client that attaches later", async () => {
+    vi.mocked(runToolCalls).mockResolvedValue(emptyToolCallBatchResult());
+    streamChatWithTools.mockImplementation(async (params: {
+      runTools: (calls: { id: string; name: string; input: Record<string, unknown> }[]) => Promise<unknown>;
+    }) => {
+      for (const ref of [1, 2]) {
+        await params.runTools([{
+          id: `cite-${ref}`,
+          name: "cite_sources",
+          input: { citations: [{ ref, doc_id: "doc-0", quotes: [{ quote: "Rent is due monthly" }] }] },
+        }]);
+      }
+      return { fullText: "" };
+    });
+    const frames: { line: string; replay?: () => boolean }[] = [];
+    await runLLMStream({
+      model: "gemini-3.8-flash",
+      apiMessages: [{ role: "user", content: "Rent?" }],
+      docStore: new Map([
+        ["doc-0", { storage_path: "", file_type: "txt", filename: "Lease.txt", inline_text: "Rent is due monthly." }],
+      ]),
+      docIndex: {},
+      userId: "u1",
+      db: {} as never,
+      write: (line: string, opts?: { replay?: () => boolean }) => void frames.push({ line, replay: opts?.replay }),
+    } as Parameters<typeof runLLMStream>[0]);
+
+    const citationFrames = frames.filter((f) => f.line.includes('"type":"citations"'));
+    expect(citationFrames.map((f) => JSON.parse(f.line.slice(6)).status)).toEqual([
+      "partial",
+      "partial",
+      "final",
+    ]);
+    const replayed = citationFrames.filter((f) => f.replay?.() ?? true);
+    expect(replayed.map((f) => JSON.parse(f.line.slice(6)).status)).toEqual(["final"]);
   });
 });

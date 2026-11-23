@@ -5,6 +5,11 @@ import { streamChatTurn } from "@/app/lib/mikeApi";
 import { readSseFrames } from "@/app/lib/sse";
 import { reportGatewayLimit } from "@/app/lib/errorReporting";
 import { isPanelDocument } from "@/app/components/shared/types";
+import {
+  citationsRecordedEvent,
+  isRecordingCitations,
+  recordingCitationsEvent,
+} from "@/app/lib/citationsRecorded";
 import type { AssistantEvent, Citation } from "@/app/components/shared/types";
 import type { AssistantTurnHandle } from "@/app/lib/assistantTurnTypes";
 import type {
@@ -987,6 +992,24 @@ export async function consumeAssistantTurnStream(
           continue;
         }
 
+        if (data.type === "citations_recorded_start") {
+          pushEvent(recordingCitationsEvent());
+          continue;
+        }
+
+        if (data.type === "citations_recorded") {
+          const recorded = citationsRecordedEvent(data);
+          // Completes the step its start frame opened, or adds it.
+          if (
+            !updateMatchingEvent(isRecordingCitations, () => recorded)
+          ) {
+            pushEvent(recorded);
+          }
+          // The model writes the answer next.
+          pushThinkingPlaceholder();
+          continue;
+        }
+
         if (data.type === "text_card") {
           if (
             typeof data.card_id === "string" &&
@@ -1455,18 +1478,13 @@ export async function consumeAssistantTurnStream(
         }
 
         if (data.type === "citations") {
-          const status =
-            data.status === "started" ||
-            data.status === "partial" ||
-            data.status === "final"
-              ? data.status
-              : "final";
           const incoming = (data.citations ?? []) as Citation[];
-          if (status === "started" || status === "partial") {
+          // Recorded with cite_sources before the answer: the markers link
+          // as they stream.
+          if (data.status === "partial") {
             updateLatestAssistantMessage((message) => ({
               ...message,
               citations: incoming,
-              citationStatus: status,
             }));
             continue;
           }
@@ -1480,7 +1498,6 @@ export async function consumeAssistantTurnStream(
           updateLatestAssistantMessage((message) => ({
             ...message,
             citations: incoming,
-            citationStatus: incoming.length ? "final" : undefined,
           }));
           continue;
         }

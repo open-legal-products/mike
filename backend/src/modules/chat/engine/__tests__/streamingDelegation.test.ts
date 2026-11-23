@@ -540,7 +540,7 @@ describe("runDelegateCall", () => {
   it("fences the brief, lists only the sources the subagent verified, and saves the run", async () => {
     const ctx = context({
       spawn: async () => ({
-        fullText: "Rent is due monthly [1] and rises yearly [2].\n<CITATIONS>[]</CITATIONS>",
+        fullText: "Rent is due monthly [1] and rises yearly [2].",
         events: [{ type: "content", text: "Rent is due monthly" }],
         citations: [
           { kind: "document", ref: 1, doc_id: "doc-0", verified: true, quotes: [{ page: 2, quote: "monthly" }] },

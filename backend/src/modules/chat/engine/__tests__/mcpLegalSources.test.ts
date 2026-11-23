@@ -27,16 +27,27 @@ vi.mock("../../../../lib/mcp/oauth", async (original) => ({
 import { executeApprovedMcpToolCall, executeMcpToolCall, planMcpToolCall } from "../../../../lib/mcp/servers";
 import { runToolCalls } from "../tools/toolDispatcher";
 import { runApprovedConnectorActions } from "../tools/connectorApprovals";
-import { createCitation, parseCitations } from "../citations";
+import { createCitation, normalizeCitation, type ParsedCitation } from "../citations";
 import { readDocumentContent } from "../tools/documentOps";
 import { verifyCitations } from "../verifyCitations";
 import { runLLMStream } from "../streaming";
-import { extractCitations } from "../contextBuilders";
 import { externalSourceFromMcpCall, getSourceDocument, LEGAL_DATA_HUNTER_CONNECT_DETAIL } from "../../../source-documents/sourceDocuments.service";
 import { extractLegalDataHunterSource, legalDataHunterDocumentId } from "../../../source-documents/sourceDocuments.legalDataHunter";
 import { registerExternalSource } from "../tools/externalSources";
 
 const args = { source: "legifrance", source_id: "JORFTEXT0001" };
+/** The entries of one cite_sources call, as the recorder normalizes them. */
+const entries = (rows: unknown[]) =>
+  rows.map(normalizeCitation).filter((c): c is ParsedCitation => c !== null);
+/** Citations built from those entries, before their quotes are checked. */
+const built = (rows: unknown[], docIndex: DocIndex, docStore: DocStore) =>
+  entries(rows).map((c) => createCitation(c, docIndex, undefined, docStore)).filter((c) => c !== null);
+/** A model turn that records `rows` with cite_sources, then answers. */
+const citingTurn = (rows: unknown[], answer = "Answer [1].") => async (params: StreamParams) => {
+  await params.runTools?.([{ id: "cite", name: "cite_sources", input: { citations: rows } }]);
+  params.callbacks?.onContentDelta?.(answer);
+  return { fullText: answer };
+};
 const payload = {
   ...args, data_type: "legislation", title: "Article 1103",
   text: "Les contrats légalement formés tiennent lieu de loi à ceux qui les ont faits.",
@@ -109,19 +120,15 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     const f = fixture();
     await f.dispatch();
     const doc_id = alias === "title" ? payload.title : f.docIndex["doc-2"].document_id;
-    const invalid = `<CITATIONS>${JSON.stringify([{ ref: 1, doc_id, quote: payload.text.toLowerCase() }])}</CITATIONS>`;
-    expect(extractCitations(invalid, f.docIndex, f.docStore)).toEqual([]);
-    const fullText = `<CITATIONS>${JSON.stringify([{ ref: 1, doc_id, quote: payload.text }])}</CITATIONS>`;
-    mocks.stream.mockImplementationOnce(async (params) => {
-      params.callbacks?.onContentDelta?.(fullText);
-      return { fullText };
-    });
+    expect(built([{ ref: 1, doc_id, quote: payload.text.toLowerCase() }], f.docIndex, f.docStore)).toEqual([]);
+    mocks.stream.mockImplementationOnce(citingTurn([{ ref: 1, doc_id, quotes: [{ quote: payload.text }] }]));
     const chunks: string[] = [];
     const result = await runLLMStream({ model: "gemini-3.8-flash", apiMessages: [{ role: "user", content: "Find law" }], docIndex: f.docIndex, docStore: f.docStore, userId: "u1", db: f.db, write: (s) => chunks.push(s) });
     expect(result.citations).toMatchObject([{ doc_id: "doc-2", verified: true, document: { type: "legislation" } }]);
+    // Every frame that streams it carries it already verified.
     for (const chunk of chunks.filter((s) => s.startsWith("data: {"))) {
       const event = JSON.parse(chunk.slice(6));
-      if (event.type === "citations" && event.status === "partial") expect(event.citations).toEqual([]);
+      if (event.type === "citations") expect(event.citations).toMatchObject([{ verified: true }]);
     }
   });
   it("reports the handle it registered, so recorders can keep the reference instead of the text", async () => {
@@ -147,7 +154,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect(fuzzy).toMatchObject({ verified: true, quotes: [{ verification: { verified: true } }] });
   });
   it("suppresses unresolved external document identities", () => {
-    expect(extractCitations('<CITATIONS>[{"ref":1,"doc_id":"mcp:unknown","quote":"invented"}]</CITATIONS>', {}, new Map())).toEqual([]);
+    expect(built([{ ref: 1, doc_id: "mcp:unknown", quote: "invented" }], {}, new Map())).toEqual([]);
   });
   it("gives only the Legal Data Hunter connector the larger result allowance", async () => {
     const text = "x".repeat(210_000);
@@ -175,10 +182,10 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect(await read("doc-2")).toBe(text);
     // A quote from beyond the cut verifies against the full text; an
     // invented one is still dropped.
-    const parsed = parseCitations(`<CITATIONS>${JSON.stringify([
+    const parsed = entries([
       { ref: 1, doc_id: "doc-2", quote: tail },
       { ref: 2, doc_id: "doc-2", quote: "The court dismissed the appeal." },
-    ])}</CITATIONS>`);
+    ]);
     const citations = await verifyCitations(
       parsed.map((c) => createCitation(c, f.docIndex, undefined, f.docStore)),
       read,
@@ -191,15 +198,11 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     payload.text.toLowerCase(), payload.text.replaceAll(" ", "  "),
     payload.text.replace(".", "!"), "Les contrats ... ceux qui les ont faits.",
     "Les contrats [[PAGE_BREAK]] ceux qui les ont faits.",
-  ])("suppresses nonexact external quotes in fallback and final streams: %s", async (quote) => {
+  ])("refuses nonexact external quotes, so no citations frame carries them: %s", async (quote) => {
     const f = fixture();
     await f.dispatch();
-    const fullText = `<CITATIONS>${JSON.stringify([{ ref: 1, doc_id: "doc-2", quote }])}</CITATIONS>`;
-    expect(extractCitations(fullText, f.docIndex, f.docStore)).toEqual([]);
-    mocks.stream.mockImplementationOnce(async (params) => {
-      params.callbacks?.onContentDelta?.(fullText);
-      return { fullText };
-    });
+    expect(built([{ ref: 1, doc_id: "doc-2", quote }], f.docIndex, f.docStore)).toEqual([]);
+    mocks.stream.mockImplementationOnce(citingTurn([{ ref: 1, doc_id: "doc-2", quotes: [{ quote }] }]));
     const chunks: string[] = [];
     const result = await runLLMStream({ model: "gemini-3.8-flash", apiMessages: [{ role: "user", content: "Find law" }], docIndex: f.docIndex, docStore: f.docStore, userId: "u1", db: f.db, write: (s) => chunks.push(s) });
     expect(result.citations).toEqual([]);
@@ -208,7 +211,7 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
       if (event.type === "citations") expect(event.citations).toEqual([]);
     }
   });
-  it("bounds partial and final streamed citations after real MCP dispatch and exact verification", async () => {
+  it("bounds recorded citations after real MCP dispatch and exact verification", async () => {
     const f = fixture();
     const text = payload.text + "\n" + "é".repeat(50_000);
     mocks.callTool.mockResolvedValue({ structuredContent: { ...payload, text } });
@@ -216,14 +219,18 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
       if (!params.runTools) throw new Error("runTools missing");
       const result = await params.runTools([{ id: "call-1", name: f.tool.openai_tool_name, input: args }]);
       expect(JSON.stringify(result)).toContain("doc-2");
-      const fullText = `Answer [1].<CITATIONS>${JSON.stringify(Array.from({ length: 51 }, (_, i) => ({ ref: i + 1, doc_id: "doc-2", quote: payload.text })))}</CITATIONS>`;
-      params.callbacks?.onContentDelta?.(fullText);
-      return { fullText };
+      await params.runTools([{
+        id: "cite",
+        name: "cite_sources",
+        input: { citations: Array.from({ length: 51 }, (_, i) => ({ ref: i + 1, doc_id: "doc-2", quotes: [{ quote: payload.text }] })) },
+      }]);
+      params.callbacks?.onContentDelta?.("Answer [1].");
+      return { fullText: "Answer [1]." };
     });
     const chunks: string[] = [];
     const result = await runLLMStream({ model: "gemini-3.8-flash", apiMessages: [{ role: "user", content: "Find the law" }], docIndex: f.docIndex, docStore: f.docStore, userId: "u1", db: f.db, write: (s) => chunks.push(s) });
     const snapshots = chunks.filter((s) => s.startsWith("data: {")).map((s) => JSON.parse(s.slice(6))).filter((event) => event.type === "citations" && event.citations.length);
-    expect(snapshots.some((event) => event.status === "partial")).toBe(false);
+    expect(snapshots.map((event) => event.status)).toEqual(["partial", "final"]);
     for (const event of snapshots) {
       expect(event.citations.length).toBeLessThanOrEqual(50);
       expect(Buffer.byteLength(JSON.stringify(event.citations))).toBeLessThanOrEqual(5_000_000);
@@ -247,10 +254,10 @@ describe("MCP source → dispatcher → exact-quote citation", () => {
     expect((result.toolResults[0] as { content: string }).content).not.toContain("cut off");
     expect(f.docStore.get("doc-2")).toMatchObject({ inline_text: payload.text, external_source: { type } });
     const source = f.docStore.get("doc-2")!;
-    const parsed = parseCitations(`<CITATIONS>${JSON.stringify([
+    const parsed = entries([
       { ref: 1, doc_id: "doc-2", quote: payload.text },
       { ref: 2, doc_id: "doc-2", quote: "This wholly invented proposition is not in the source." },
-    ])}</CITATIONS>`);
+    ]);
     const caseReader = vi.fn();
     const citations = await verifyCitations(
       parsed.map((c) => createCitation(c, f.docIndex, undefined, f.docStore)),
@@ -399,7 +406,7 @@ describe("legal source identity and search", () => {
     );
     expect(first).not.toBe(second);
     const cite = (doc_id: string, quote: string) =>
-      createCitation(parseCitations(`<CITATIONS>${JSON.stringify([{ ref: 1, doc_id, quote }])}</CITATIONS>`)[0], f.docIndex, undefined, f.docStore);
+      createCitation(entries([{ ref: 1, doc_id, quote }])[0], f.docIndex, undefined, f.docStore);
     // The shared quote is in both: by title it cannot say which was meant.
     expect(cite(payload.title, payload.text)).toBeNull();
     expect(cite(payload.title, `${payload.text} B2`)).toBeNull();
@@ -411,7 +418,7 @@ describe("legal source identity and search", () => {
     const f = fixture();
     await f.dispatch();
     const citation = createCitation(
-      parseCitations(`<CITATIONS>${JSON.stringify([{ ref: 1, doc_id: payload.title, quote: payload.text }])}</CITATIONS>`)[0],
+      entries([{ ref: 1, doc_id: payload.title, quote: payload.text }])[0],
       f.docIndex, undefined, f.docStore,
     );
     expect(citation).toMatchObject({ doc_id: "doc-2", verified: true });

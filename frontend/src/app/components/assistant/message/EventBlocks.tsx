@@ -1,6 +1,6 @@
 import { useMarkdownCheckpoint } from "./markdownCheckpoint";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { useReasoningDisclosure, DocEditBlockUI, DocFindBlockUI, DocReadBlockUI } from "@mike/ui";
+import { useReasoningDisclosure, DocEditBlockUI, DocFindBlockUI, DocReadBlockUI, EventSourceUI } from "@mike/ui";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Download, Loader2 } from "lucide-react";
@@ -15,6 +15,7 @@ import { authenticatedFetch } from "@/app/lib/authEvents";
 import type { AssistantEvent } from "../../shared/types";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
 import { RESPONSE_GLASS_SURFACE, withoutMarkdownNode } from "./messageStyles";
+import { SourceTypeIcon } from "./CitationSources";
 
 const THINKING_PHRASES = [
     "Thinking...",
@@ -589,6 +590,100 @@ export function WorkflowAppliedBlock({
                     </span>
                 )}
             </div>
+        </EventBlock>
+    );
+}
+
+const plural = (count: number, one: string, many: string) =>
+    `${count} ${count === 1 ? one : many}`;
+
+type CitedSource = Extract<
+    AssistantEvent,
+    { type: "citations_recorded" }
+>["sources"][number];
+
+/** A cite_sources call: what the answer recorded as its citations. */
+export function CitationsRecordedBlock({
+    refs,
+    sources,
+    quotesNotFound,
+    rejected,
+    isStreaming,
+    interrupted,
+    showConnector,
+    openSource,
+}: {
+    refs: number[];
+    sources: CitedSource[];
+    quotesNotFound: number;
+    rejected: number;
+    isStreaming?: boolean;
+    /** The turn ended before the call reported its result. */
+    interrupted?: boolean;
+    showConnector?: boolean;
+    /** Opens a source, when its citation can be opened. */
+    openSource?: (source: CitedSource) => (() => void) | undefined;
+}) {
+    const recorded = refs.length > 0;
+    const failed = !isStreaming && !interrupted && !recorded;
+    const label = isStreaming
+        ? "Recording citations"
+        : interrupted
+          ? "Citation recording stopped"
+          : recorded
+            ? `Recorded ${plural(refs.length, "citation", "citations")}`
+            : "Could not record citations";
+    const problems =
+        isStreaming || interrupted
+            ? []
+            : [
+                  quotesNotFound > 0 &&
+                      `${plural(quotesNotFound, "quote", "quotes")} not found in the source`,
+                  rejected > 0 &&
+                      `${plural(rejected, "citation", "citations")} refused`,
+              ].filter((problem): problem is string => !!problem);
+    return (
+        <EventBlock
+            showConnector={showConnector}
+            isStreaming={isStreaming}
+            dotColor={failed ? "red" : interrupted ? "gray" : "green"}
+        >
+            {/* One flex row like the read step's, so each source's icon and
+                name sit on the label's line; several sources wrap. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                <EventLabel className="shrink-0">
+                    {label}
+                    {isStreaming ? "..." : null}
+                </EventLabel>
+                {recorded && !isStreaming && sources.length > 0 ? (
+                    <>
+                        <span className="shrink-0">from</span>
+                        {sources.map((source, index) => (
+                            <span
+                                key={`${source.type}:${source.name}`}
+                                className="flex min-w-0 max-w-full items-center"
+                            >
+                                <EventSourceUI
+                                    name={source.name}
+                                    icon={
+                                        <SourceTypeIcon
+                                            type={source.type}
+                                            filename={source.name}
+                                        />
+                                    }
+                                    onClick={openSource?.(source)}
+                                />
+                                {index < sources.length - 1 ? (
+                                    <span aria-hidden="true">,</span>
+                                ) : null}
+                            </span>
+                        ))}
+                    </>
+                ) : null}
+            </div>
+            {problems.length > 0 ? (
+                <span className="block">{problems.join("; ")}</span>
+            ) : null}
         </EventBlock>
     );
 }
