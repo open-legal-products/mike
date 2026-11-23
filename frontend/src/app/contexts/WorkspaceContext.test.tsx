@@ -508,6 +508,30 @@ describe("the active organization's preferences", () => {
         expect(shownPreferences()).toBe(BETA.id);
     });
 
+    it("takes the new organization's settings-page read and save after its own read failed", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        // Acme stays cached while the provider's read of Beta fails.
+        mocks.getOrgPreferences.mockRejectedValueOnce(new Error("network"));
+        act(() => latest.setWorkspace(BETA.id));
+        await waitFor(() => expect(mocks.getOrgPreferences).toHaveBeenCalledWith(
+            BETA.id, expect.any(AbortSignal),
+        ));
+        await waitFor(() => expect(latest.orgPreferences).toBeNull());
+
+        // The settings page's own read of Beta succeeds and is shown...
+        mocks.getOrgPreferences.mockResolvedValueOnce(preferencesFor(BETA.id));
+        await act(() => latest.loadOrgPreferences(BETA.id));
+        expect(shownPreferences()).toBe(BETA.id);
+
+        // ...and so is a save to Beta.
+        mocks.updateOrgPreferences.mockResolvedValueOnce(preferencesFor("beta-saved"));
+        await act(() => latest.saveOrgPreferences(BETA.id, { tabular_model: "beta-saved" }));
+        expect(shownPreferences()).toBe("beta-saved");
+    });
+
     it("drops queued writes when the account session ends", async () => {
         window.localStorage.setItem(STORAGE_KEY, ACME.id);
         const view = renderProvider();
