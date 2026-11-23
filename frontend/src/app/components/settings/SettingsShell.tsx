@@ -54,6 +54,11 @@ export function SettingsShell({
     const pathname = usePathname();
     const scrollerRef = useRef<HTMLDivElement>(null);
     const activeTabRef = useRef<HTMLButtonElement>(null);
+    // Changes when the listed sections do, such as when an organization's
+    // role loads and its sections join the row after the first render.
+    const tabIds = groups
+        .flatMap((group) => group.tabs.map((tab) => tab.id))
+        .join(",");
 
     // Across the top of a narrow page the sections scroll sideways, and the
     // open one can start out of view. Bring it in, with its group's label
@@ -72,7 +77,7 @@ export function SettingsShell({
         const start =
             open.right - groupLeft <= row.width ? groupLeft : open.left;
         scroller.scrollLeft += start - row.left;
-    }, [pathname]);
+    }, [pathname, tabIds]);
 
     const isActive = (tab: SettingsShellTab) =>
         pathname === tab.href ||

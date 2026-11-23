@@ -105,19 +105,25 @@ describe("UserMemoryPage", () => {
 
   // Settings lists Memory under Workspace, which says the memory is the
   // workspace's own; the page does not repeat it.
+  // The memory itself belongs to the workspace, which the Workspace group
+  // already says; only the account-wide project default names workspaces.
   it("says nothing about other workspaces, with one workspace or several", async () => {
     const { unmount } = render(<UserMemoryPage />);
     const description =
       "Let Mike curate useful details after your saved conversations and use them in future answers.";
 
+    const workspaceMentions = () =>
+      screen
+        .queryAllByText(/workspace/)
+        .filter((node) => !/^Choose whether memory/.test(node.textContent ?? ""));
     expect(await screen.findByText(description)).toBeInTheDocument();
-    expect(screen.queryByText(/workspace/)).toBeNull();
+    expect(workspaceMentions()).toEqual([]);
     unmount();
 
     workspaceState.organizations = [{ id: "org-1", name: "Acme LLP" }];
     render(<UserMemoryPage />);
     expect(await screen.findByText(description)).toBeInTheDocument();
-    expect(screen.queryByText(/workspace/)).toBeNull();
+    expect(workspaceMentions()).toEqual([]);
   });
 
   it("loads the current file independently and autosaves editor changes", async () => {
@@ -617,6 +623,10 @@ describe("UserMemoryPage", () => {
       name: "Project memory for new projects",
     });
     expect(toggle).toHaveAttribute("aria-checked", "true");
+    // One account-wide default, shown on a Workspace page: it says so.
+    expect(
+      screen.getByText(/for projects you create\s+in any workspace/),
+    ).toBeInTheDocument();
 
     await user.click(toggle);
 

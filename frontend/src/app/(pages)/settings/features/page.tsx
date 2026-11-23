@@ -16,6 +16,7 @@ import {
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useOrgPreferencesSettings } from "@/app/hooks/useOrgPreferencesSettings";
 import { useWorkspaceSettingsScope } from "@/app/hooks/useWorkspaceSettingsScope";
+import { WorkspaceScopePending } from "@/app/components/settings/WorkspaceScopePending";
 import { notifyError } from "@/app/lib/userFacingError";
 
 /**
@@ -25,7 +26,8 @@ import { notifyError } from "@/app/lib/userFacingError";
  */
 export default function FeaturesPage() {
   const scope = useWorkspaceSettingsScope();
-  if (scope.kind === "loading") return null;
+  if (scope.kind === "loading" || scope.kind === "unavailable")
+    return <WorkspaceScopePending unavailable={scope.kind === "unavailable"} />;
   if (scope.kind === "managed")
     return <ManagedByOrganization subject="Features" orgName={scope.orgName} />;
   if (scope.kind === "organization")

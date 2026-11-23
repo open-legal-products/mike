@@ -43,6 +43,7 @@ import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
 import { useModelRouterSelections } from "@/app/hooks/useModelRouterSelections";
 import { useOrgPreferencesSettings } from "@/app/hooks/useOrgPreferencesSettings";
 import { useWorkspaceSettingsScope } from "@/app/hooks/useWorkspaceSettingsScope";
+import { WorkspaceScopePending } from "@/app/components/settings/WorkspaceScopePending";
 import { ManagedByOrganization } from "@/app/components/settings/ManagedByOrganization";
 import { notifyError } from "@/app/lib/userFacingError";
 
@@ -74,7 +75,8 @@ const FIELD_LABELS: Record<PreferenceField, string> = {
  */
 export default function ModelPreferencesPage() {
   const scope = useWorkspaceSettingsScope();
-  if (scope.kind === "loading") return null;
+  if (scope.kind === "loading" || scope.kind === "unavailable")
+    return <WorkspaceScopePending unavailable={scope.kind === "unavailable"} />;
   if (scope.kind === "managed")
     return (
       <ManagedByOrganization
@@ -202,6 +204,16 @@ function ModelPreferencesView({
     const ok = await savePreference(field, id || null);
     setSavingField((current) => (current === field ? null : current));
     if (ok) {
+      // The saved preferences now hold this choice, so the dropdown reads
+      // them again (unless a later choice is still on its way). Holding on
+      // to the override would hide a value saved some other way since, such
+      // as by the Retry on an earlier, failed choice.
+      setOptimisticValues((current) => {
+        if (current[field] !== id) return current;
+        const next = { ...current };
+        delete next[field];
+        return next;
+      });
       setSavedField(field);
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => {

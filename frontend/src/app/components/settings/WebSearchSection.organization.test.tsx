@@ -22,7 +22,9 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
 
 const workspace = vi.hoisted(() => ({
   refreshOrgApiKeys: vi.fn(async () => {}),
-  orgApiKeys: { keys: {} } as { keys: Record<string, boolean> },
+  orgApiKeys: { keys: {} } as {
+    keys: Record<string, unknown> & { sources?: Record<string, string | null> };
+  },
 }));
 vi.mock("@/app/contexts/WorkspaceContext", () => ({
   useWorkspace: () => workspace,
@@ -62,6 +64,7 @@ const save = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  workspace.orgApiKeys = { keys: {} };
   vi.mocked(getOrgPreferences).mockResolvedValue({
     web_search: SETTINGS,
   } as never);
@@ -111,5 +114,24 @@ describe("OrganizationWebSearchSection", () => {
       expect(saveOrgApiKey).toHaveBeenCalledWith("org-1", "brave", "brave-key"),
     );
     expect(workspace.refreshOrgApiKeys).toHaveBeenCalled();
+  });
+
+  it("does not offer a deployment-wide key as the organization's to remove", async () => {
+    workspace.orgApiKeys = {
+      keys: { brave: true, sources: { brave: "env" } },
+    };
+    const { unmount } = render(
+      <OrganizationWebSearchSection orgId="org-1" save={save} />,
+    );
+    await screen.findByLabelText("Brave Search API Key");
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    unmount();
+
+    workspace.orgApiKeys = {
+      keys: { brave: true, sources: { brave: "org" } },
+    };
+    render(<OrganizationWebSearchSection orgId="org-1" save={save} />);
+    await screen.findByLabelText("Brave Search API Key");
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
   });
 });

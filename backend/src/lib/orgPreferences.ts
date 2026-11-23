@@ -11,7 +11,7 @@
 // Only team organizations have a workspace of their own; a person's own
 // organization (personalOrgs.ts) is Personal, which reads the profile.
 
-import { getOrgRole } from "./access";
+import { getOrgRoleOrThrow } from "./access";
 import type { ReasoningLevel } from "./llm";
 import { normalizeReasoningLevel } from "./modelSelection";
 import { teamOrgIdOf } from "./personalOrgs";
@@ -144,6 +144,8 @@ export async function loadWorkspacePreferences(
 ): Promise<OrgPreferences | null> {
     const teamOrgId = await teamOrgIdOf(db, orgId);
     if (!teamOrgId) return null;
-    if (!(await getOrgRole(userId, teamOrgId, db))) return null;
+    // A failed membership read throws rather than reading as "not a
+    // member": that would run the organization's work on personal choices.
+    if (!(await getOrgRoleOrThrow(userId, teamOrgId, db))) return null;
     return loadOrgPreferences(db, teamOrgId);
 }

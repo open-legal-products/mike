@@ -9,6 +9,7 @@ import { reportError } from "../../lib/observability/sentry";
 import type { Db } from "../../lib/supabase";
 import { getUserModelSettings } from "../user/user.service";
 import { failure } from "../../lib/serviceResult";
+import { PERSONAL_WORKSPACE, resolveWorkspaceFilter } from "../../lib/workspace";
 import { statusFailure, type TabularResult } from "./tabular.shared";
 
 // ---------------------------------------------------------------------------
@@ -64,11 +65,26 @@ export async function draftColumnPrompt(
         format: string;
         documentName: string;
         tags: string[];
+        /**
+         * The workspace the column is drafted in: "personal" or an
+         * organization's id. In a team organization's workspace the
+         * organization's tabular model drafts it, as it runs the review.
+         */
+        workspace?: unknown;
     },
 ): Promise<TabularResult<DraftedColumnPrompt>> {
     const { userId, title, format, documentName, tags } = args;
 
     if (!title) return failure("validation", "title is required");
+    const scope = await resolveWorkspaceFilter(db, userId, args.workspace);
+    if (!scope.ok)
+        return scope.kind === "validation"
+            ? failure("validation", "workspace is invalid")
+            : failure("not_found", "Workspace not found");
+    const orgId =
+        scope.workspace && scope.workspace !== PERSONAL_WORKSPACE
+            ? scope.workspace
+            : null;
 
     const formatDescriptions: Record<string, string> = {
         text: "free-form text",
@@ -101,11 +117,13 @@ export async function draftColumnPrompt(
         const { tabular_model: promptModel, api_keys } =
             // Pass the request's client through: omitting it built a second
             // Supabase client (and a second connection) per draft.
-            await getUserModelSettings(userId, db);
+            await getUserModelSettings(userId, db, { orgId });
         if (!promptModel) {
             return statusFailure(409, {
                 code: "model_required",
-                detail: "Select a default tabular review model in Settings → Model Preferences before generating a column prompt.",
+                detail: orgId
+                    ? "This organization has no default tabular review model. An owner or admin can choose one in Settings → Model Preferences."
+                    : "Select a default tabular review model in Settings → Model Preferences before generating a column prompt.",
             });
         }
         const raw = await completeText({

@@ -3453,7 +3453,13 @@ export async function revokeTabularReviewAccess(
 
 export async function generateTabularColumnPrompt(
     title: string,
-    options?: { format?: string; documentName?: string; tags?: string[] },
+    options?: {
+        format?: string;
+        documentName?: string;
+        tags?: string[];
+        /** "personal" or an organization's id: whose tabular model drafts it. */
+        workspace?: string;
+    },
 ): Promise<{ prompt: string; source: "preset" | "llm" | "fallback" }> {
     return apiRequest<{
         prompt: string;
@@ -3466,6 +3472,7 @@ export async function generateTabularColumnPrompt(
             format: options?.format,
             documentName: options?.documentName,
             tags: options?.tags,
+            workspace: options?.workspace,
         }),
     });
 }

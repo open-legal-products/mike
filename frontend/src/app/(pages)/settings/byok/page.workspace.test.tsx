@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ByokPage from "./page";
 
@@ -9,10 +9,15 @@ const state = vi.hoisted(() => ({
     scope: { kind: "personal" } as
         | { kind: "personal" }
         | { kind: "loading" }
+        | { kind: "unavailable" }
         | { kind: "organization"; orgId: string; orgName: string }
         | { kind: "managed"; orgName: string },
 }));
 
+const refreshOrganizations = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("@/app/contexts/WorkspaceContext", () => ({
+    useWorkspace: () => ({ refreshOrganizations }),
+}));
 vi.mock("@/app/hooks/useWorkspaceSettingsScope", () => ({
     useWorkspaceSettingsScope: () => state.scope,
 }));
@@ -61,9 +66,21 @@ describe("Settings > Bring Your Own Keys", () => {
         expect(screen.queryByText("Your keys")).toBeNull();
     });
 
-    it("shows nobody's keys before the organization has loaded", () => {
+    it("shows nobody's keys, only a skeleton, before the organization has loaded", () => {
         state.scope = { kind: "loading" };
-        const { container } = render(<ByokPage />);
-        expect(container).toBeEmptyDOMElement();
+        render(<ByokPage />);
+        expect(screen.getByTestId("workspace-settings-loading")).toBeInTheDocument();
+        expect(screen.queryByText("Your keys")).toBeNull();
+    });
+
+    it("offers Retry when the organizations could not be read", () => {
+        state.scope = { kind: "unavailable" };
+        render(<ByokPage />);
+        expect(screen.getByRole("alert")).toHaveTextContent(
+            "Could not load this workspace's settings.",
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(refreshOrganizations).toHaveBeenCalledOnce();
+        expect(screen.queryByText("Your keys")).toBeNull();
     });
 });

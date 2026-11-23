@@ -116,6 +116,9 @@ export function parseOrgPreferencesUpdate(
     return { ok: true, update: { columns, webSearch } };
 }
 
+/** How often a web search change re-merges after losing a race. */
+const WEB_SEARCH_WRITE_ATTEMPTS = 3;
+
 /**
  * Any member may read them: they decide what the member's work in the
  * organization shows and runs on. None of it is a secret.
@@ -160,41 +163,61 @@ export async function updateOrgPreferences(
     const parsed = parseOrgPreferencesUpdate(params.body);
     if (!parsed.ok) return { ok: false, kind: "validation", detail: parsed.detail };
 
-    const { data: before, error: readError } = await db
-        .from("organizations")
-        .select(ORG_PREFERENCE_COLUMNS)
-        .eq("id", params.orgId)
-        .maybeSingle();
-    if (readError)
-        return {
-            ok: false,
-            kind: "db_error",
-            detail: isOrgPreferencesNotMigrated(readError)
-                ? "Organization preferences are not available until the database is migrated"
-                : readError.message,
-        };
-    if (!before) return { ok: false, kind: "not_found" };
+    // `web_search` is merged over the stored choices. The write only lands
+    // while the stored value is still the one merged over; if another admin
+    // changed it in between, read again and merge over theirs, so neither
+    // change is lost.
+    let previous: OrgPreferences | null = null;
+    let saved: unknown;
+    for (let attempt = 0; attempt < WEB_SEARCH_WRITE_ATTEMPTS; attempt++) {
+        const { data: before, error: readError } = await db
+            .from("organizations")
+            .select(ORG_PREFERENCE_COLUMNS)
+            .eq("id", params.orgId)
+            .maybeSingle();
+        if (readError)
+            return {
+                ok: false,
+                kind: "db_error",
+                detail: isOrgPreferencesNotMigrated(readError)
+                    ? "Organization preferences are not available until the database is migrated"
+                    : readError.message,
+            };
+        if (!before) return { ok: false, kind: "not_found" };
 
-    const previous = orgPreferencesFromRow(before);
-    const write: Record<string, unknown> = { ...parsed.update.columns };
-    if (parsed.update.webSearch) {
-        // Read, merge and write back: two owners changing different web
-        // search choices at the same moment is the only way to lose one.
-        write.web_search = webSearchSettingsToStored({
-            ...previous.web_search,
-            ...parsed.update.webSearch,
-        });
+        previous = orgPreferencesFromRow(before);
+        const write: Record<string, unknown> = { ...parsed.update.columns };
+        if (parsed.update.webSearch)
+            write.web_search = webSearchSettingsToStored({
+                ...previous.web_search,
+                ...parsed.update.webSearch,
+            });
+        let query = db
+            .from("organizations")
+            .update({ ...write, updated_at: new Date().toISOString() })
+            .eq("id", params.orgId);
+        if (parsed.update.webSearch)
+            query = query.eq(
+                "web_search",
+                JSON.stringify(
+                    (before as { web_search?: unknown }).web_search ?? {},
+                ),
+            );
+        const { data, error } = await query.select(ORG_PREFERENCE_COLUMNS);
+        if (error) return { ok: false, kind: "db_error", detail: error.message };
+        saved = (data as unknown[] | null)?.[0];
+        if (saved || !parsed.update.webSearch) break;
     }
-
-    const { data, error } = await db
-        .from("organizations")
-        .update({ ...write, updated_at: new Date().toISOString() })
-        .eq("id", params.orgId)
-        .select(ORG_PREFERENCE_COLUMNS);
-    if (error) return { ok: false, kind: "db_error", detail: error.message };
-    const saved = (data as unknown[] | null)?.[0];
-    if (!saved) return { ok: false, kind: "not_found" };
+    if (!saved || !previous)
+        return parsed.update.webSearch
+            ? {
+                  ok: false,
+                  kind: "conflict",
+                  detail: "Web search settings changed while saving. Try again.",
+              }
+            : { ok: false, kind: "not_found" };
     const preferences = orgPreferencesFromRow(saved);
+    const before = previous;
 
     // One event naming what changed; the values are model ids and switches,
     // which the audit log can show without exposing anybody's work.
@@ -202,7 +225,7 @@ export async function updateOrgPreferences(
         .filter(
             (field) =>
                 JSON.stringify(preferences[field]) !==
-                JSON.stringify(previous[field]),
+                JSON.stringify(before[field]),
         );
     if (changed.length > 0)
         await recordAudit(db, {
