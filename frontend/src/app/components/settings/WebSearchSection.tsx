@@ -14,12 +14,19 @@ import {
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { useWorkspace } from "@/app/contexts/WorkspaceContext";
 import { useAssignLatest } from "@/app/hooks/useLatestRef";
+import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
 import { isProviderAvailable } from "@/app/lib/modelAvailability";
 import {
+  getOrgPreferences,
   getWebSearchSettings,
+  saveOrgApiKey,
   updateWebSearchSettings,
   WEB_SEARCH_BACKENDS,
+  type ApiKeyState,
+  type OrgPreferences,
+  type OrgPreferencesUpdate,
   type WebSearchBackend,
   type WebSearchSettings,
 } from "@/app/lib/mikeApi";
@@ -60,25 +67,34 @@ type Family = Exclude<Field, "enabled">;
 const PROVIDER_FAMILIES: Array<{
   family: "claude" | "openai";
   label: string;
-  provider: { label: string; description: string };
+  provider: { label: string; runs: string; key: string };
 }> = [
   {
     family: "claude",
     label: "Claude models",
-    provider: {
-      label: "Anthropic Search",
-      description: "Anthropic runs the search. Billed to your Claude API key.",
-    },
+    provider: { label: "Anthropic Search", runs: "Anthropic", key: "Claude" },
   },
   {
     family: "openai",
     label: "OpenAI models",
-    provider: {
-      label: "OpenAI Search",
-      description: "OpenAI runs the search. Billed to your OpenAI API key.",
-    },
+    provider: { label: "OpenAI Search", runs: "OpenAI", key: "OpenAI" },
   },
 ];
+
+/**
+ * Where the section's settings and search-service keys live: the caller's
+ * own in Personal, the organization's in its workspace.
+ */
+export interface WebSearchStore {
+  load: (signal: AbortSignal) => Promise<WebSearchSettings>;
+  save: (update: Partial<WebSearchSettings>) => Promise<WebSearchSettings>;
+  /** The keys that decide which model families can search; unknown while loading. */
+  apiKeys: ApiKeyState | undefined;
+  hasSavedKey: (service: WebSearchBackend) => boolean;
+  saveKey: (service: WebSearchBackend, value: string | null) => Promise<boolean>;
+  /** Whose keys a search is billed to, and whose settings these are. */
+  owner: "your" | "the organization's";
+}
 
 const OFF_OPTION = {
   value: "off",
@@ -94,8 +110,53 @@ function saveAction(field: Field, next: WebSearchSettings[Field]): string {
   return `change web search for ${family?.label ?? "other models"}`;
 }
 
+/** The caller's own web search settings, for the Personal workspace. */
 export function WebSearchSection() {
   const { profile, updateApiKey } = useUserProfile();
+  const store: WebSearchStore = {
+    load: getWebSearchSettings,
+    save: updateWebSearchSettings,
+    apiKeys: profile?.apiKeys,
+    hasSavedKey: (service) => profile?.apiKeys[service].source === "user",
+    saveKey: (service, value) => updateApiKey(service, value),
+    owner: "your",
+  };
+  return <WebSearchCard store={store} />;
+}
+
+/**
+ * An organization's web search settings, which govern work in its workspace:
+ * its owners and admins choose them, and searches run on its keys.
+ */
+export function OrganizationWebSearchSection({
+  orgId,
+  save,
+}: {
+  orgId: string;
+  /** Saves the organization's preferences and puts the answer in place. */
+  save: (update: OrgPreferencesUpdate) => Promise<OrgPreferences>;
+}) {
+  const { orgApiKeys, refreshOrgApiKeys } = useWorkspace();
+  const apiKeys = useModelApiKeys();
+  const store: WebSearchStore = {
+    load: (signal) =>
+      getOrgPreferences(orgId, signal).then((loaded) => loaded.web_search),
+    save: (update) =>
+      save({ web_search: update }).then((saved) => saved.web_search),
+    apiKeys,
+    hasSavedKey: (service) => orgApiKeys?.keys[service] === true,
+    saveKey: async (service, value) => {
+      await saveOrgApiKey(orgId, service, value);
+      await refreshOrgApiKeys();
+      return true;
+    },
+    owner: "the organization's",
+  };
+  return <WebSearchCard key={orgId} store={store} />;
+}
+
+function WebSearchCard({ store }: { store: WebSearchStore }) {
+  const { apiKeys } = store;
   const [settings, setSettings] = useState<WebSearchSettings | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [loadVersion, setLoadVersion] = useState(0);
@@ -114,7 +175,8 @@ export function WebSearchSection() {
 
   useEffect(() => {
     const controller = new AbortController();
-    getWebSearchSettings(controller.signal)
+    store
+      .load(controller.signal)
       .then((loaded) => {
         if (!controller.signal.aborted) setSettings(loaded);
       })
@@ -122,6 +184,8 @@ export function WebSearchSection() {
         if (!controller.signal.aborted) setLoadError(true);
       });
     return () => controller.abort();
+    // Loaded once per store owner (the caller keys the card by it) and on Retry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadVersion]);
 
   const save = async <F extends Field>(field: F, next: WebSearchSettings[F]) => {
@@ -134,7 +198,7 @@ export function WebSearchSection() {
       );
     settle(next);
     try {
-      const saved = await updateWebSearchSettings({ [field]: next });
+      const saved = await store.save({ [field]: next });
       if (request !== latestRequestRef.current[field]) return;
       settle(saved[field]);
     } catch (error) {
@@ -155,12 +219,16 @@ export function WebSearchSection() {
   };
 
   const providerFamilies = PROVIDER_FAMILIES.filter(
-    ({ family }) => profile && isProviderAvailable(family, profile.apiKeys),
+    ({ family }) => apiKeys && isProviderAvailable(family, apiKeys),
   ).map(({ family, label, provider }) => ({
     family,
     label,
     options: [
-      { value: "provider", ...provider },
+      {
+        value: "provider",
+        label: provider.label,
+        description: `${provider.runs} runs the search. Billed to ${store.owner} ${provider.key} API key.`,
+      },
       ...SEARCH_SERVICE_OPTIONS,
       OFF_OPTION,
     ],
@@ -178,7 +246,7 @@ export function WebSearchSection() {
     },
   ];
   const chosenServices =
-    settings?.enabled && profile
+    settings?.enabled && apiKeys
       ? WEB_SEARCH_BACKENDS.filter((backend) =>
           families.some(({ family }) => settings[family] === backend),
         )
@@ -191,7 +259,7 @@ export function WebSearchSection() {
         {loadError ? (
           <SettingsRow>
             <p className="text-sm text-red-600" role="alert">
-              Could not load your web search settings.
+              Could not load {store.owner} web search settings.
             </p>
             <PillButtonUI
               tone="white"
@@ -230,7 +298,7 @@ export function WebSearchSection() {
               )}
             </SettingsRow>
             {settings?.enabled &&
-              profile &&
+              apiKeys &&
               families.map(({ family, label, options }) => (
                 <SettingsSelectRow
                   key={family}
@@ -247,9 +315,9 @@ export function WebSearchSection() {
               <ApiKeyField
                 key={service}
                 label={SEARCH_SERVICES[service].keyLabel}
-                hasSavedKey={profile?.apiKeys[service].source === "user"}
-                onSave={(value) => updateApiKey(service, value.trim() || null)}
-                onRemove={() => updateApiKey(service, null)}
+                hasSavedKey={store.hasSavedKey(service)}
+                onSave={(value) => store.saveKey(service, value.trim() || null)}
+                onRemove={() => store.saveKey(service, null)}
               />
             ))}
           </>

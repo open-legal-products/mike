@@ -21,9 +21,11 @@ import {
 import { useAuth } from "@/app/contexts/AuthContext";
 import {
     getOrgApiKeys,
+    getOrgPreferences,
     listOrgs,
     type Org,
     type OrgApiKeySettings,
+    type OrgPreferences,
 } from "@/app/lib/mikeApi";
 
 export const PERSONAL_WORKSPACE = "personal";
@@ -51,10 +53,21 @@ interface WorkspaceContextValue {
      * than on the caller's own keys.
      */
     orgApiKeys: OrgApiKeySettings | null;
+    /**
+     * The active organization's Features and Model Preferences, which govern
+     * work in its workspace in place of the caller's own; `null` in the
+     * personal workspace, until first loaded, and when the read failed.
+     */
+    orgPreferences: OrgPreferences | null;
     setWorkspace: (workspaceId: string) => void;
     refreshOrganizations: () => Promise<void>;
     /** Re-read `orgApiKeys`, after they were changed in settings. */
     refreshOrgApiKeys: () => Promise<void>;
+    /**
+     * Put the active organization's preferences in place after settings saved
+     * them, so the app follows without a re-read.
+     */
+    setOrgPreferences: (orgId: string, preferences: OrgPreferences) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue>({
@@ -62,9 +75,11 @@ const WorkspaceContext = createContext<WorkspaceContextValue>({
     organizations: null,
     activeOrganization: null,
     orgApiKeys: null,
+    orgPreferences: null,
     setWorkspace: () => {},
     refreshOrganizations: async () => {},
     refreshOrgApiKeys: async () => {},
+    setOrgPreferences: () => {},
 });
 
 // A convenience remembered per account and per browser: it can come back
@@ -200,6 +215,42 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const orgApiKeys =
         orgKeys && orgKeys.orgId === activeOrgId ? orgKeys.settings : null;
 
+    // What the active organization sets in place of the caller's own
+    // Features and Model Preferences, held with its id like the keys above.
+    const [orgPrefs, setOrgPrefs] = useState<{
+        orgId: string;
+        preferences: OrgPreferences;
+    } | null>(null);
+    useEffect(() => {
+        if (!activeOrgId) return;
+        const controller = new AbortController();
+        getOrgPreferences(activeOrgId, controller.signal)
+            .then((preferences) => {
+                if (!controller.signal.aborted)
+                    setOrgPrefs({ orgId: activeOrgId, preferences });
+            })
+            .catch(() => {
+                // Unknown: readers fall back to the app's defaults until a
+                // later read succeeds, and the server applies the real ones.
+            });
+        return () => controller.abort();
+    }, [activeOrgId]);
+    const orgPreferences =
+        orgPrefs && orgPrefs.orgId === activeOrgId
+            ? orgPrefs.preferences
+            : null;
+    // A save that lands after the caller switched to another organization
+    // must not replace that one's answer.
+    const setOrgPreferences = useCallback(
+        (orgId: string, preferences: OrgPreferences) =>
+            setOrgPrefs((current) =>
+                current && current.orgId !== orgId
+                    ? current
+                    : { orgId, preferences },
+            ),
+        [],
+    );
+
     const setWorkspace = useCallback(
         (next: string) => {
             const known =
@@ -239,9 +290,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             organizations,
             activeOrganization,
             orgApiKeys,
+            orgPreferences,
             setWorkspace,
             refreshOrganizations,
             refreshOrgApiKeys,
+            setOrgPreferences,
         }),
         [
             userId,
@@ -249,9 +302,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             organizations,
             activeOrganization,
             orgApiKeys,
+            orgPreferences,
             setWorkspace,
             refreshOrganizations,
             refreshOrgApiKeys,
+            setOrgPreferences,
         ],
     );
 

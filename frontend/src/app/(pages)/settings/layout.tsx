@@ -20,6 +20,7 @@ import {
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOrganizationInvitationCount } from "@/app/hooks/useOrganizationInvitationCount";
 import { useMemberDataActions } from "@/app/hooks/useMemberDataActions";
+import { useWorkspaceSettingsScope } from "@/app/hooks/useWorkspaceSettingsScope";
 import {
     SettingsShell,
     type SettingsShellGroup,
@@ -29,12 +30,10 @@ import { SETTINGS_SEARCH_ENTRIES } from "@/app/lib/settingsSearch";
 
 // Settings come in two groups. Workspace settings belong to the workspace in
 // view (Personal, or one of the person's organizations): each workspace keeps
-// its own, and switching workspace switches them. Personal settings are the
+// its own, and switching workspace switches them. In Personal they are the
+// person's own; in an organization's workspace, Features, Model Preferences
+// and Bring Your Own Keys are the organization's. Personal settings are the
 // person's own and follow them into every workspace.
-//
-// Bring Your Own Keys is listed under Personal: the keys are the person's,
-// though only their Personal workspace runs on them (an organization runs on
-// its own, set in its settings), which the page says.
 const GROUPS: SettingsShellGroup[] = [
     {
         id: "workspace",
@@ -51,6 +50,24 @@ const GROUPS: SettingsShellGroup[] = [
                 label: "Connectors",
                 href: "/settings/connectors",
                 icon: Plug,
+            },
+            {
+                id: "features",
+                label: "Features",
+                href: "/settings/features",
+                icon: ToggleRight,
+            },
+            {
+                id: "models",
+                label: "Model Preferences",
+                href: "/settings/models",
+                icon: Cpu,
+            },
+            {
+                id: "byok",
+                label: "Bring Your Own Keys",
+                href: "/settings/byok",
+                icon: KeyRound,
             },
             {
                 id: "privacy-data",
@@ -83,24 +100,6 @@ const GROUPS: SettingsShellGroup[] = [
                 icon: Palette,
             },
             {
-                id: "features",
-                label: "Features",
-                href: "/settings/features",
-                icon: ToggleRight,
-            },
-            {
-                id: "models",
-                label: "Model Preferences",
-                href: "/settings/models",
-                icon: Cpu,
-            },
-            {
-                id: "byok",
-                label: "Bring Your Own Keys",
-                href: "/settings/byok",
-                icon: KeyRound,
-            },
-            {
                 id: "security",
                 label: "Security",
                 href: "/settings/security",
@@ -125,6 +124,11 @@ const GROUPS: SettingsShellGroup[] = [
     },
 ];
 
+// In an organization's workspace these are the organization's, set by its
+// owners and admins for everyone working there; a member has nothing to
+// change, so they are not listed (useWorkspaceSettingsScope).
+const GOVERNED_TAB_IDS = new Set(["features", "models", "byok"]);
+
 export default function SettingsLayout({
     children,
 }: {
@@ -140,15 +144,19 @@ export default function SettingsLayout({
     // owners allow neither exports nor bulk deletes, so it is not listed.
     const { canExport, canDelete } = useMemberDataActions();
     const hidePrivacyData = !canExport && !canDelete;
+    const scope = useWorkspaceSettingsScope().kind;
+    const hideGoverned = scope !== "personal" && scope !== "organization";
     const visibleGroups = useMemo(
         () =>
             GROUPS.map((group) => ({
                 ...group,
                 tabs: group.tabs.filter(
-                    (tab) => !(hidePrivacyData && tab.id === "privacy-data"),
+                    (tab) =>
+                        !(hidePrivacyData && tab.id === "privacy-data") &&
+                        !(hideGoverned && GOVERNED_TAB_IDS.has(tab.id)),
                 ),
             })),
-        [hidePrivacyData],
+        [hideGoverned, hidePrivacyData],
     );
     // Search only what is listed: an entry on a hidden tab would open a page
     // the person is not offered.

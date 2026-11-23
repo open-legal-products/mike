@@ -6,6 +6,7 @@ import quickActionsIcon from "../../../../public/icons/features/quick-actions.sv
 import { MoreHorizontal } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { useWorkspacePreferences } from "@/app/hooks/useWorkspacePreferences";
 import { MikeIcon, LIQUID_GLASS_HOVER_CLASS, LIQUID_GLASS_SUBTLE_CLASS } from "@mike/ui";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import type { Document, Message, QuickAction } from "../shared/types";
@@ -29,6 +30,7 @@ export function InitialView({
 }: InitialViewProps) {
     const { user } = useAuth();
     const { profile } = useUserProfile();
+    const { quickActionsVisible } = useWorkspacePreferences();
     const [loaded, setLoaded] = useState(false);
     const [iconOffset, setIconOffset] = useState(0);
     const [textOffset, setTextOffset] = useState(0);
@@ -128,7 +130,7 @@ export function InitialView({
                     </p>
                 </div>
 
-                {profile?.quickActionsVisible !== false && (
+                {quickActionsVisible !== false && (
                     <div className="flex flex-col items-center">
                         <div className="group relative flex h-5 items-center justify-center">
                             <span className="flex items-center gap-1.5 text-xs font-medium text-gray-800">

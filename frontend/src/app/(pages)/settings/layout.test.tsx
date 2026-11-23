@@ -31,6 +31,15 @@ vi.mock("@/app/hooks/useMemberDataActions", () => ({
     useMemberDataActions: () => dataActions,
 }));
 
+// Whose Features, Model Preferences and keys the active workspace shows;
+// Personal unless a test says otherwise.
+const settingsScope = vi.hoisted(() => ({
+    current: { kind: "personal" } as { kind: string; orgName?: string },
+}));
+vi.mock("@/app/hooks/useWorkspaceSettingsScope", () => ({
+    useWorkspaceSettingsScope: () => settingsScope.current,
+}));
+
 describe("SettingsLayout", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -38,7 +47,44 @@ describe("SettingsLayout", () => {
         vi.mocked(listMyOrgInvitations).mockResolvedValue([]);
         dataActions.canExport = true;
         dataActions.canDelete = true;
+        settingsScope.current = { kind: "personal" };
     });
+
+    const WORKSPACE_TABS = [
+        "Memory",
+        "Connectors",
+        "Features",
+        "Model Preferences",
+        "Bring Your Own Keys",
+        "Privacy & Data",
+    ];
+
+    it("lists the organization's Features, Model Preferences and keys for its owners and admins", () => {
+        settingsScope.current = { kind: "organization", orgName: "Acme LLP" };
+        render(
+            <SettingsLayout>
+                <div />
+            </SettingsLayout>,
+        );
+        expect(
+            tabNames(screen.getByRole("list", { name: "Workspace" })),
+        ).toEqual(WORKSPACE_TABS);
+    });
+
+    it.each(["managed", "loading"])(
+        "does not list Features, Model Preferences or keys in an organization's workspace when %s",
+        (kind) => {
+            settingsScope.current = { kind, orgName: "Acme LLP" };
+            render(
+                <SettingsLayout>
+                    <div />
+                </SettingsLayout>,
+            );
+            expect(
+                tabNames(screen.getByRole("list", { name: "Workspace" })),
+            ).toEqual(["Memory", "Connectors", "Privacy & Data"]);
+        },
+    );
 
     const tabNames = (list: HTMLElement) =>
         within(list)
@@ -55,16 +101,13 @@ describe("SettingsLayout", () => {
 
         expect(
             tabNames(within(nav).getByRole("list", { name: "Workspace" })),
-        ).toEqual(["Memory", "Connectors", "Privacy & Data"]);
+        ).toEqual(WORKSPACE_TABS);
         expect(
             tabNames(within(nav).getByRole("list", { name: "Personal" })),
         ).toEqual([
             "Account",
             "Personalisation",
             "Appearance",
-            "Features",
-            "Model Preferences",
-            "Bring Your Own Keys",
             "Security",
             "My Activity",
             "Organizations",
@@ -118,7 +161,7 @@ describe("SettingsLayout", () => {
         ).toBeNull();
         expect(
             tabNames(screen.getByRole("list", { name: "Workspace" })),
-        ).toEqual(["Memory", "Connectors"]);
+        ).toEqual(WORKSPACE_TABS.filter((tab) => tab !== "Privacy & Data"));
     });
 
     it("exposes Memory as a dedicated settings page and marks it current", async () => {

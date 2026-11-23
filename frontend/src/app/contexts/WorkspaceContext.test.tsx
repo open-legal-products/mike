@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     userId: "u1" as string | null,
     listOrgs: vi.fn(),
     getOrgApiKeys: vi.fn(),
+    getOrgPreferences: vi.fn(),
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
@@ -23,6 +24,7 @@ vi.mock("@/app/contexts/AuthContext", () => ({
 vi.mock("@/app/lib/mikeApi", () => ({
     listOrgs: mocks.listOrgs,
     getOrgApiKeys: mocks.getOrgApiKeys,
+    getOrgPreferences: mocks.getOrgPreferences,
 }));
 
 const ACME = { id: "org-acme", name: "Acme LLP", role: "member" };
@@ -58,6 +60,9 @@ const keysFor = (orgId: string) => ({
     effective: { marker: orgId },
     can_manage: false,
 });
+// The tabular model stands in for the whole answer, naming whose it is.
+const preferencesFor = (orgId: string) => ({ tabular_model: orgId });
+const shownPreferences = () => latest.orgPreferences?.tabular_model ?? null;
 const shownKeys = () =>
     (latest.orgApiKeys?.effective as { marker?: string } | undefined)?.marker ??
     null;
@@ -73,6 +78,9 @@ beforeEach(() => {
     mocks.listOrgs.mockResolvedValue([ACME, BETA]);
     mocks.getOrgApiKeys.mockImplementation(async (orgId: string) =>
         keysFor(orgId),
+    );
+    mocks.getOrgPreferences.mockImplementation(async (orgId: string) =>
+        preferencesFor(orgId),
     );
 });
 
@@ -315,6 +323,83 @@ describe("the active organization's model provider keys", () => {
         mocks.getOrgApiKeys.mockRejectedValueOnce(new Error("network"));
         await act(() => latest.refreshOrgApiKeys());
         expect(shownKeys()).toBe(ACME.id);
+    });
+});
+
+describe("the active organization's preferences", () => {
+    it("are not read in the personal workspace", async () => {
+        renderProvider();
+        await screen.findByText("personal|personal|loaded|none");
+        expect(mocks.getOrgPreferences).not.toHaveBeenCalled();
+        expect(latest.orgPreferences).toBeNull();
+    });
+
+    it("are read for the organization the caller is working in", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+        expect(mocks.getOrgPreferences).toHaveBeenCalledExactlyOnceWith(
+            ACME.id,
+            expect.any(AbortSignal),
+        );
+    });
+
+    it("never show one organization's preferences under another's name", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        let arrive: (value: unknown) => void = () => {};
+        mocks.getOrgPreferences.mockImplementation(
+            () => new Promise((resolve) => (arrive = resolve)),
+        );
+        act(() => latest.setWorkspace(BETA.id));
+        await screen.findByText(`${BETA.id}|${BETA.id}|loaded|Beta Chambers`);
+        expect(latest.orgPreferences).toBeNull();
+
+        await act(async () => arrive(preferencesFor(BETA.id)));
+        await waitFor(() => expect(shownPreferences()).toBe(BETA.id));
+    });
+
+    it("are dropped on returning to the personal workspace", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        act(() => latest.setWorkspace(PERSONAL_WORKSPACE));
+        await screen.findByText("personal|personal|loaded|none");
+        expect(latest.orgPreferences).toBeNull();
+    });
+
+    it("take a saved answer in place, for the organization it was saved for only", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        act(() =>
+            latest.setOrgPreferences(ACME.id, {
+                ...preferencesFor(ACME.id),
+                tabular_model: "saved",
+            } as never),
+        );
+        expect(shownPreferences()).toBe("saved");
+
+        // A save that lands after switching away is not shown as Beta's.
+        act(() => latest.setWorkspace(BETA.id));
+        await waitFor(() => expect(shownPreferences()).toBe(BETA.id));
+        act(() =>
+            latest.setOrgPreferences(ACME.id, preferencesFor("late") as never),
+        );
+        expect(shownPreferences()).toBe(BETA.id);
+    });
+
+    it("stay unknown when they cannot be read", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        mocks.getOrgPreferences.mockRejectedValueOnce(new Error("network"));
+        renderProvider();
+        await screen.findByText(`${ACME.id}|${ACME.id}|loaded|Acme LLP`);
+        await waitFor(() => expect(mocks.getOrgPreferences).toHaveBeenCalled());
+        expect(latest.orgPreferences).toBeNull();
     });
 });
 

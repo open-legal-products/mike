@@ -37,6 +37,7 @@ import {
     type NoModelsReason,
 } from "@mike/client";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { useWorkspacePreferences } from "@/app/hooks/useWorkspacePreferences";
 import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
 import { useModelRouterSelections } from "@/app/hooks/useModelRouterSelections";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
@@ -117,6 +118,9 @@ function NewTRModalForWorkspace({
     const [noModelsWarning, setNoModelsWarning] =
         useState<NoModelsReason | null>(null);
     const { profile, loading: profileLoading } = useUserProfile();
+    // The model the workspace preselects: the caller's in Personal, the
+    // organization's in its workspace.
+    const { tabularModel: workspaceTabularModel } = useWorkspacePreferences();
     const { user } = useAuth();
     const apiKeys = useModelApiKeys();
     const modelRouterSelections = useModelRouterSelections();
@@ -217,8 +221,8 @@ function NewTRModalForWorkspace({
     }, [open, workflowReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
-        if (!open || !profile?.tabularModel) return;
-        const defaultModel = profile.tabularModel;
+        if (!open || !workspaceTabularModel) return;
+        const defaultModel = workspaceTabularModel;
         // Unknown lists (an organization's, still loading) preselect nothing.
         const routerSelectionValid =
             !!modelRouterSelections &&
@@ -229,7 +233,13 @@ function NewTRModalForWorkspace({
         if (routerSelectionValid && providerAvailable) {
             setSelectedModel((current) => current || defaultModel);
         }
-    }, [apiKeys, configuredModelIds, modelRouterSelections, open, profile]);
+    }, [
+        apiKeys,
+        configuredModelIds,
+        modelRouterSelections,
+        open,
+        workspaceTabularModel,
+    ]);
 
     // Preselect every project document once, as soon as they're available —
     // which may be after the modal opened, since the parent's list is empty

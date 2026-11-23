@@ -25,6 +25,7 @@ import {
 } from "@mike/client";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { useWorkspacePreferences } from "@/app/hooks/useWorkspacePreferences";
 import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
 import { useModelRouterSelections } from "@/app/hooks/useModelRouterSelections";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
@@ -107,6 +108,9 @@ function UseWorkflowModalForWorkspace({ workflow, onClose, skipSelect = false }:
     const [noModelsWarning, setNoModelsWarning] =
         useState<NoModelsReason | null>(null);
     const { profile, loading: profileLoading } = useUserProfile();
+    // The model the workspace preselects: the caller's in Personal, the
+    // organization's in its workspace.
+    const { tabularModel: workspaceTabularModel } = useWorkspacePreferences();
     const apiKeys = useModelApiKeys();
     const modelRouterSelections = useModelRouterSelections();
     const configuredModels = useConfiguredModels();
@@ -151,11 +155,11 @@ function UseWorkflowModalForWorkspace({ workflow, onClose, skipSelect = false }:
         if (
             screen !== "details" ||
             activeWorkflow?.metadata.type !== "tabular" ||
-            !profile?.tabularModel
+            !workspaceTabularModel
         ) {
             return;
         }
-        const defaultModel = profile.tabularModel;
+        const defaultModel = workspaceTabularModel;
         // Unknown lists (an organization's, still loading) preselect nothing.
         const routerSelectionValid =
             !!modelRouterSelections &&
@@ -171,10 +175,10 @@ function UseWorkflowModalForWorkspace({ workflow, onClose, skipSelect = false }:
         apiKeys,
         configuredModelIds,
         modelRouterSelections,
-        profile,
         screen,
         selected,
         workflow,
+        workspaceTabularModel,
     ]);
 
     // Reset configure state on back

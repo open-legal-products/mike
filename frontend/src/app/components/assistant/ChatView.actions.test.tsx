@@ -97,9 +97,10 @@ vi.mock("./ChatInput", () => ({
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({ user: { id: "user-1", email: "user@example.com" } }),
 }));
-vi.mock("@/app/contexts/UserProfileContext", () => ({
-    useUserProfile: () => ({ profile: null }),
-}));
+vi.mock("@/app/contexts/UserProfileContext", () => {
+    const useUserProfile = () => ({ profile: null });
+    return { useUserProfile, useOptionalUserProfile: useUserProfile };
+});
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
     listDocumentVersions: vi.fn(),

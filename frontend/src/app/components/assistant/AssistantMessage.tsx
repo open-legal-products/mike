@@ -14,7 +14,7 @@ import type {
 } from "../shared/types";
 import { ConnectorSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { notifyError } from "@/app/lib/userFacingError";
-import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
+import { useWorkspacePreferences } from "@/app/hooks/useWorkspacePreferences";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
@@ -910,9 +910,10 @@ function AssistantMessageImpl({
     // subagents Mike ran in parallel; they render as one group.
     const tints = subagentTints(events ?? []);
     // Settings > Features > Response details: the model, effort and tokens
-    // under the answer and in each subagent's details. Off without a profile.
+    // under the answer and in each subagent's details, as the workspace sets
+    // it. Off until that is known, and without a profile.
     const showDetails =
-        useOptionalUserProfile()?.profile?.responseDetailsVisible === true;
+        useWorkspacePreferences().responseDetailsVisible === true;
     const answerDetails = showDetails
         ? (events ?? []).findLast((e) => e.type === "response_details")
         : undefined;
