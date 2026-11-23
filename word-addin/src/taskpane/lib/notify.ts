@@ -46,12 +46,8 @@ import {
 } from "./supportHandoff";
 
 export {
-  SUPPORT_EMAIL,
   UserVisibleError,
-  buildSupportMailto,
   describeError,
-  isAbortError,
-  isNetworkError,
   type UserErrorKind,
   type UserFacingError,
 } from "@mike/client";
