@@ -14,11 +14,13 @@ import {
     useCallback,
     useContext,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
     type ReactNode,
 } from "react";
+import { useLatestRef } from "@/app/hooks/useLatestRef";
 import { useAuth } from "@/app/contexts/AuthContext";
 import {
     getOrgApiKeys,
@@ -33,6 +35,11 @@ import {
 
 export const PERSONAL_WORKSPACE = "personal";
 export const PERSONAL_WORKSPACE_LABEL = "Personal";
+
+interface OrgPreferenceWrites {
+    completed: number;
+    pending?: Promise<OrgPreferences>;
+}
 
 const STORAGE_PREFIX = "mike.activeWorkspace.";
 
@@ -73,8 +80,8 @@ interface WorkspaceContextValue {
     organizationsFailed: boolean;
     /**
      * Read an organization's preferences afresh, for its settings pages.
-     * The answer replaces the app-wide copy unless a save started after
-     * this read did, whose answer is newer. Rejects when the read fails.
+     * The answer replaces the app-wide copy unless a save for the same organization
+     * succeeded while this read was in flight. Rejects when the read fails.
      */
     loadOrgPreferences: (
         orgId: string,
@@ -250,33 +257,56 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         orgId: string;
         preferences: OrgPreferences;
     } | null>(null);
-    // Counts saves. A read that started before a save finished answers with
-    // what was stored before it, so it must not replace the saved answer.
-    const saveGeneration = useRef(0);
+    const currentOrgId = useLatestRef(activeOrgId);
+    const writesByOrg = useRef(new Map<string, OrgPreferenceWrites>());
+    useLayoutEffect(() => {
+        // Queued edits belong to the account that submitted them.
+        return () => {
+            writesByOrg.current = new Map();
+        };
+    }, [userId]);
+
     const loadOrgPreferences = useCallback(
         async (orgId: string, signal?: AbortSignal) => {
-            const generation = saveGeneration.current;
+            const writes = writesByOrg.current;
+            const completed = writes.get(orgId)?.completed ?? 0;
             const preferences = await getOrgPreferences(orgId, signal);
-            if (!signal?.aborted && generation === saveGeneration.current)
+            if (
+                !signal?.aborted &&
+                writes === writesByOrg.current &&
+                currentOrgId.current === orgId &&
+                completed === (writes.get(orgId)?.completed ?? 0)
+            ) {
                 setOrgPrefs({ orgId, preferences });
+            }
             return preferences;
         },
-        [],
+        [currentOrgId],
     );
     const saveOrgPreferences = useCallback(
-        async (orgId: string, update: OrgPreferencesUpdate) => {
-            saveGeneration.current += 1;
-            const preferences = await updateOrgPreferences(orgId, update);
-            // A save that lands after the caller switched to another
-            // organization must not replace that one's answer.
-            setOrgPrefs((current) =>
-                current && current.orgId !== orgId
-                    ? current
-                    : { orgId, preferences },
-            );
-            return preferences;
+        (orgId: string, update: OrgPreferencesUpdate) => {
+            const writes = writesByOrg.current;
+            const entry = writes.get(orgId) ?? { completed: 0 };
+            writes.set(orgId, entry);
+            const save = async () => {
+                if (writes !== writesByOrg.current)
+                    throw new DOMException("Workspace session ended", "AbortError");
+                const preferences = await updateOrgPreferences(orgId, update);
+                entry.completed += 1;
+                if (writes === writesByOrg.current && currentOrgId.current === orgId) {
+                    setOrgPrefs({ orgId, preferences });
+                }
+                return preferences;
+            };
+            // Each PATCH returns the full row. Send edits in order within an
+            // organization, including when the preceding edit failed.
+            const pending = entry.pending ? entry.pending.then(save, save) : save();
+            entry.pending = pending;
+            return pending.finally(() => {
+                if (entry.pending === pending) delete entry.pending;
+            });
         },
-        [],
+        [currentOrgId],
     );
     const refreshOrgPreferences = useCallback(
         (signal?: AbortSignal) => {

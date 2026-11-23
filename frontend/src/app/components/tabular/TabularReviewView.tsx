@@ -411,9 +411,8 @@ export function TRView({ reviewId, projectId }: Props) {
 
     // A review opened by link may change the active workspace. Its move
     // destinations follow the review itself, including while that switch loads.
-    const reviewWorkspace = review?.id === reviewId
-        ? (review.org_id ?? PERSONAL_WORKSPACE)
-        : undefined;
+    const reviewOrgId = review?.id === reviewId ? (review.org_id ?? null) : undefined;
+    const reviewWorkspace = reviewOrgId === null ? PERSONAL_WORKSPACE : reviewOrgId;
     useEffect(() => {
         let cancelled = false;
         setAvailableProjects([]);
@@ -2044,64 +2043,66 @@ export function TRView({ reviewId, projectId }: Props) {
                                 );
                             }}
                         >
-                            <TRTable
-                                ref={tableRef}
-                                loading={loading}
-                                documentGrouping={
-                                    review?.document_grouping ?? "document"
-                                }
-                                columns={columns}
-                                rows={filteredRows}
-                                documents={documents}
-                                cells={cells}
-                                cellStore={cellStore}
-                                highlightedCell={highlightedCell}
-                                savingColumn={savingColumn}
-                                savingColumnsConfig={savingColumnsConfig}
-                                selectedRowIds={selectedRowIds}
-                                uploadingFilenames={uploadingDroppedFilenames}
-                                dragOverFiles={dragOverReviewFiles}
-                                onSelectionChange={setSelectedRowIds}
-                                rightClickDropdown={(row, close) => renderReviewRowActions(rowActionSelectionIds(row.id, selectedRowIds), close)}
-                                onDocumentOpen={handleDocumentOpen}
-                                onExpand={(cell) => {
-                                    setExpandedCell(cell);
-                                    setExpandedCellCitation(undefined);
-                                    setExpandedDocumentId(undefined);
-                                }}
-                                onCitationClick={(
-                                    cell,
-                                    page,
-                                    quote,
-                                    citationRef,
-                                    sheet,
-                                    citationCell,
-                                    documentId,
-                                ) => {
-                                    setExpandedCell(cell);
-                                    setExpandedCellCitation({
-                                        quote,
+                            <DocumentWorkspaceScope orgId={reviewOrgId}>
+                                <TRTable
+                                    ref={tableRef}
+                                    loading={loading}
+                                    documentGrouping={
+                                        review?.document_grouping ?? "document"
+                                    }
+                                    columns={columns}
+                                    rows={filteredRows}
+                                    documents={documents}
+                                    cells={cells}
+                                    cellStore={cellStore}
+                                    highlightedCell={highlightedCell}
+                                    savingColumn={savingColumn}
+                                    savingColumnsConfig={savingColumnsConfig}
+                                    selectedRowIds={selectedRowIds}
+                                    uploadingFilenames={uploadingDroppedFilenames}
+                                    dragOverFiles={dragOverReviewFiles}
+                                    onSelectionChange={setSelectedRowIds}
+                                    rightClickDropdown={(row, close) => renderReviewRowActions(rowActionSelectionIds(row.id, selectedRowIds), close)}
+                                    onDocumentOpen={handleDocumentOpen}
+                                    onExpand={(cell) => {
+                                        setExpandedCell(cell);
+                                        setExpandedCellCitation(undefined);
+                                        setExpandedDocumentId(undefined);
+                                    }}
+                                    onCitationClick={(
+                                        cell,
                                         page,
-                                        sheet,
-                                        cell: citationCell,
-                                        documentId,
+                                        quote,
                                         citationRef,
-                                    });
-                                    setExpandedDocumentId(undefined);
-                                }}
-                                onUpdateColumn={handleUpdateColumn}
-                                onDeleteColumn={handleDeleteColumn}
-                                onAddColumn={openAddColumns}
-                                onAddDocuments={() => {
-                                    if (
-                                        !requireStructure(
-                                            "edit the document set",
+                                        sheet,
+                                        citationCell,
+                                        documentId,
+                                    ) => {
+                                        setExpandedCell(cell);
+                                        setExpandedCellCitation({
+                                            quote,
+                                            page,
+                                            sheet,
+                                            cell: citationCell,
+                                            documentId,
+                                            citationRef,
+                                        });
+                                        setExpandedDocumentId(undefined);
+                                    }}
+                                    onUpdateColumn={handleUpdateColumn}
+                                    onDeleteColumn={handleDeleteColumn}
+                                    onAddColumn={openAddColumns}
+                                    onAddDocuments={() => {
+                                        if (
+                                            !requireStructure(
+                                                "edit the document set",
+                                            )
                                         )
-                                    )
-                                        return;
-                                    setAddDocsOpen(true);
-                                }}
-                            />
+                                            return;
+                                        setAddDocsOpen(true);
+                                    }}
+                                />
+                            </DocumentWorkspaceScope>
                         </div>
                     </div>
                     {chatOpen && (
@@ -2184,18 +2185,13 @@ export function TRView({ reviewId, projectId }: Props) {
                     );
                 })()}
 
-            <AddColumnModal
-                open={addColOpen}
-                existingCount={columns.length}
-                onClose={() => setAddColOpen(false)}
-                onAdd={handleAddColumn}
-            />
-
-            {/* The review's own workspace, which the dialogs list and
-                upload into: it takes documents from nowhere else. */}
-            <DocumentWorkspaceScope
-                orgId={review ? (review.org_id ?? null) : undefined}
-            >
+            <DocumentWorkspaceScope orgId={reviewOrgId}>
+                <AddColumnModal
+                    open={addColOpen}
+                    existingCount={columns.length}
+                    onClose={() => setAddColOpen(false)}
+                    onAdd={handleAddColumn}
+                />
                 {project ? (
                     <AddDocumentsModal
                         open={addDocsOpen}

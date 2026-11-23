@@ -1101,30 +1101,30 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
         />
       )}
 
-      {/* Add column modal */}
-      <AddColumnModal
-        open={addColumnOpen}
-        existingCount={columns.length}
-        onClose={() => setAddColumnOpen(false)}
-        onAdd={handleColumnsAdded}
-      />
-
-      {/* Edit column modal */}
-      {editingColumn && (
-        <WFEditColumnModal
-          column={editingColumn}
-          onClose={() => setEditingColumn(null)}
-          onSave={handleColumnSaved}
-          onDelete={() => {
-            const next = columns
-              .filter((c) => c.index !== editingColumn.index)
-              .map((c, i) => ({ ...c, index: i }));
-            setColumns(next);
-            saveColumns(next);
-            setEditingColumn(null);
-          }}
+      <DocumentWorkspaceScope orgId={workflow.org_id ?? null}>
+        <AddColumnModal
+          open={addColumnOpen}
+          existingCount={columns.length}
+          onClose={() => setAddColumnOpen(false)}
+          onAdd={handleColumnsAdded}
         />
-      )}
+
+        {editingColumn && (
+          <WFEditColumnModal
+            column={editingColumn}
+            onClose={() => setEditingColumn(null)}
+            onSave={handleColumnSaved}
+            onDelete={() => {
+              const next = columns
+                .filter((c) => c.index !== editingColumn.index)
+                .map((c, i) => ({ ...c, index: i }));
+              setColumns(next);
+              saveColumns(next);
+              setEditingColumn(null);
+            }}
+          />
+        )}
+      </DocumentWorkspaceScope>
     </div>
   );
 }

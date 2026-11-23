@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
     deleteWorkflowShare,
+    generateTabularColumnPrompt,
     getWorkflow,
     getWorkflowPeople,
     listWorkflowShares,
@@ -23,6 +24,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
     deleteWorkflow: vi.fn(),
     deleteWorkflowShare: vi.fn(),
+    generateTabularColumnPrompt: vi.fn(async () => ({ prompt: "Extract the term." })),
     getWorkflow: vi.fn(),
     getWorkflowPeople: vi.fn(),
     listWorkflowShares: vi.fn(),
@@ -132,6 +134,28 @@ describe("WorkflowDetailPage access mutations", () => {
             await user.click(screen.getByRole("menuitem", { name: "Delete 2 columns" }));
             expect(updateWorkflow).toHaveBeenCalledWith("workflow-1", { columns_config: [] });
         }
+    });
+
+    it.each(["add", "edit"])("drafts with the workflow's workspace on column %s", async (action) => {
+        const orgId = "ebbdcdba-f239-4bb9-b469-93d0dc61c3ee";
+        const user = userEvent.setup();
+        vi.mocked(getWorkflow).mockResolvedValue({
+            ...workflow,
+            org_id: orgId,
+            metadata: { ...workflow.metadata, type: "tabular" },
+            columns_config: [{ index: 0, name: "Term", prompt: "Extract the term" }],
+        });
+        render(<WorkflowDetailPage id={workflow.id} workflowType="tabular" />);
+        if (action === "add") {
+            await user.click(await screen.findByRole("button", { name: "Add Column" }));
+            await user.type(screen.getByPlaceholderText("Column name"), "Term");
+        } else {
+            await user.click(await screen.findByText("Term"));
+        }
+        await user.click(screen.getByText("Auto-Generate Prompt"));
+        expect(generateTabularColumnPrompt).toHaveBeenCalledWith(
+            "Term", expect.objectContaining({ workspace: orgId }),
+        );
     });
 
     async function openAccess(user: ReturnType<typeof userEvent.setup>) {

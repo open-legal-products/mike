@@ -429,6 +429,101 @@ describe("the active organization's preferences", () => {
         expect(shownPreferences()).toBe("fresh");
     });
 
+    it("keeps a save over a stale visibility refresh started during the save", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        const patch = Promise.withResolvers<unknown>();
+        const read = Promise.withResolvers<unknown>();
+        mocks.updateOrgPreferences.mockReturnValueOnce(patch.promise);
+        mocks.getOrgPreferences.mockReturnValueOnce(read.promise);
+        const saving = latest.saveOrgPreferences(ACME.id, { tabular_model: "new" });
+        act(() => {
+            document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await act(async () => {
+            patch.resolve(preferencesFor("new"));
+            await saving;
+        });
+        await act(async () => read.resolve(preferencesFor("old")));
+        expect(shownPreferences()).toBe("new");
+    });
+
+    it("saves overlapping edits in order and publishes both changes", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        const first = Promise.withResolvers<unknown>();
+        mocks.updateOrgPreferences
+            .mockReturnValueOnce(first.promise)
+            .mockResolvedValueOnce({ tabular_model: "new", quick_actions_visible: false });
+        const toggle = latest.saveOrgPreferences(ACME.id, { quick_actions_visible: false });
+        const model = latest.saveOrgPreferences(ACME.id, { tabular_model: "new" });
+        expect(mocks.updateOrgPreferences).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            first.resolve({ tabular_model: "old", quick_actions_visible: false });
+            await Promise.all([toggle, model]);
+        });
+        expect(latest.orgPreferences).toMatchObject({
+            tabular_model: "new",
+            quick_actions_visible: false,
+        });
+    });
+
+    it("continues a queued edit after an earlier save fails", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        const first = Promise.withResolvers<unknown>();
+        mocks.updateOrgPreferences
+            .mockReturnValueOnce(first.promise)
+            .mockResolvedValueOnce(preferencesFor("new"));
+        const toggle = latest.saveOrgPreferences(ACME.id, { quick_actions_visible: false });
+        const model = latest.saveOrgPreferences(ACME.id, { tabular_model: "new" });
+        await act(async () => {
+            first.reject(new Error("network"));
+            await expect(toggle).rejects.toThrow("network");
+            await model;
+        });
+        expect(shownPreferences()).toBe("new");
+    });
+
+    it("keeps a new organization's load when a save is retried for the old one", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        const read = Promise.withResolvers<unknown>();
+        mocks.getOrgPreferences.mockReturnValueOnce(read.promise);
+        act(() => latest.setWorkspace(BETA.id));
+        await waitFor(() => expect(mocks.getOrgPreferences).toHaveBeenCalledWith(
+            BETA.id, expect.any(AbortSignal),
+        ));
+        mocks.updateOrgPreferences.mockResolvedValueOnce(preferencesFor("retry"));
+        await act(() => latest.saveOrgPreferences(ACME.id, { tabular_model: "retry" }));
+        await act(async () => read.resolve(preferencesFor(BETA.id)));
+        expect(shownPreferences()).toBe(BETA.id);
+    });
+
+    it("drops queued writes when the account session ends", async () => {
+        window.localStorage.setItem(STORAGE_KEY, ACME.id);
+        const view = renderProvider();
+        await waitFor(() => expect(shownPreferences()).toBe(ACME.id));
+
+        const first = Promise.withResolvers<unknown>();
+        mocks.updateOrgPreferences.mockReturnValueOnce(first.promise);
+        const toggle = latest.saveOrgPreferences(ACME.id, { quick_actions_visible: false });
+        const model = latest.saveOrgPreferences(ACME.id, { tabular_model: "new" });
+        view.unmount();
+        first.resolve(preferencesFor("old"));
+        await expect(model).rejects.toMatchObject({ name: "AbortError" });
+        await toggle;
+        expect(mocks.updateOrgPreferences).toHaveBeenCalledTimes(1);
+    });
+
     it("stay unknown when they cannot be read, and are read again on returning to the tab", async () => {
         window.localStorage.setItem(STORAGE_KEY, ACME.id);
         mocks.getOrgPreferences.mockRejectedValueOnce(new Error("network"));
