@@ -297,6 +297,7 @@ function TRAssistantMessage({
                 <CitationsRecordedBlock
                     key={key}
                     refs={event.refs}
+                    removedRefs={event.removed_refs}
                     sources={event.sources}
                     quotesNotFound={event.quotes_not_found}
                     rejected={event.rejected}
@@ -938,10 +939,13 @@ export function TRChatPanel({
         return e.type === "thinking" && !!e.isStreaming;
     }
 
-    function clearStreamingPlaceholders() {
+    function finishStreamingSteps() {
         const before = eventsRef.current;
-        const after = before.filter((e) => !isStreamingPlaceholder(e));
-        if (after.length === before.length) return;
+        if (!before.some(e => isStreamingPlaceholder(e) || isRecordingCitations(e))) return;
+        const after = before.filter(e => !isStreamingPlaceholder(e)).map(e =>
+            e.type === "citations_recorded" && e.isStreaming
+                ? { ...e, isStreaming: false, interrupted: true } : e,
+        );
         eventsRef.current = after;
         const snapshot = [...after];
         setMessages((prev) => {
@@ -1449,7 +1453,7 @@ export function TRChatPanel({
                             // tab. The server has already stored the partial
                             // answer and [DONE] follows immediately, so all
                             // that is left is to stop pretending to think.
-                            clearStreamingPlaceholders();
+                            finishStreamingSteps();
                             continue;
                         }
 
@@ -1945,7 +1949,7 @@ export function TRChatPanel({
                                 },
                             );
                             flushDrip();
-                            clearStreamingPlaceholders();
+                            finishStreamingSteps();
                             pushEvent({
                                 type: "error",
                                 message: failure.message,
@@ -1987,7 +1991,7 @@ export function TRChatPanel({
                             // arrive as cite_sources records citations,
                             // before the answer.
                             if (data.status === "final") {
-                                clearStreamingPlaceholders();
+                                finishStreamingSteps();
                             }
                             const incoming = (data.citations ??
                                 []) as TRCitationAnnotation[];
@@ -2121,7 +2125,7 @@ export function TRChatPanel({
             if (streamGenerationRef.current !== gen) return;
 
             flushDrip();
-            clearStreamingPlaceholders();
+            finishStreamingSteps();
             setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -2158,7 +2162,7 @@ export function TRChatPanel({
                 !isAbort &&
                 isUncertainDelivery(err, Boolean(serverChatId && serverTurnId));
             stopDrip();
-            clearStreamingPlaceholders();
+            finishStreamingSteps();
             setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];

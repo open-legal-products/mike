@@ -49,3 +49,14 @@ it("withholds source actions while a replacement call is in flight", () => {
     expect(owners.get(1)).toBe(replacement);
     expect(owners.get(2)).toBe(first);
 });
+
+it("removes source actions for withdrawn refs until they are recorded again", () => {
+    const first = citationsRecordedEvent({ refs: [1, 2] });
+    const removal = citationsRecordedEvent({ removed_refs: [1, "2"] });
+    expect(removal).toMatchObject({ removed_refs: [1] });
+    const owners = currentCitationSteps([first, removal]);
+    expect(owners.has(1)).toBe(false);
+    expect(owners.get(2)).toBe(first);
+    const reuse = citationsRecordedEvent({ refs: [1] });
+    expect(currentCitationSteps([first, removal, reuse]).get(1)).toBe(reuse);
+});

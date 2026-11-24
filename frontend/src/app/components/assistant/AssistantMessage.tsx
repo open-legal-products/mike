@@ -653,6 +653,7 @@ function AssistantMessageImpl({
                 <CitationsRecordedBlock
                     key={globalIdx}
                     refs={event.refs}
+                    removedRefs={event.removed_refs}
                     sources={event.sources}
                     quotesNotFound={event.quotes_not_found}
                     rejected={event.rejected}

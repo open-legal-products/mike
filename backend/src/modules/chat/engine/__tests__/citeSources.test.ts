@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CITE_DOCUMENTS_TOOL,
   createCitationRecorder,
   documentCitations,
   tabularCitations,
 } from "../citeSources";
+import { loadToolInputChecker } from "../../../../lib/llm/toolInputValidation";
+import { citationReminder } from "../tools/documentOps";
 import { renderTableCells } from "../tools/tableCells";
 import type { TabularCellStore } from "../types";
 
@@ -127,6 +130,26 @@ describe("cite_sources", () => {
     ]);
   });
 
+  it("accepts the PDF read reminder example under enforced tool validation", async () => {
+    const reminder = citationReminder("doc-0", "Lease.pdf", "Lease.pdf");
+    const example = reminder.match(/Use this citation object shape: (\{[^\n]+\})\./)?.[1];
+    expect(example).toBeDefined();
+    const checker = await loadToolInputChecker("enforce");
+    const tool = CITE_DOCUMENTS_TOOL.function;
+    const check = checker(tool.name, tool.parameters);
+    expect(check?.({ citations: [JSON.parse(example!)] }).success).toBe(true);
+  });
+
+  it("refuses numbers that cannot be positive integer answer markers", async () => {
+    const { rec, readSourceText } = setup();
+    const result = JSON.parse(await rec.record({
+      citations: [0, -1, 1.5, 2 ** 53].map(ref => entry(ref, "Tenant")),
+    }));
+    expect(result.recorded_refs).toEqual([]);
+    expect(result.rejected).toHaveLength(4);
+    expect(readSourceText).not.toHaveBeenCalled();
+  });
+
   it("keeps distinct identities with the same filename and canonicalizes upload aliases", async () => {
     const doc = { filename: "Lease.pdf", file_type: "pdf", storage_path: "fixture" };
     const index = {
@@ -151,6 +174,20 @@ describe("cite_sources", () => {
     const replacement = await recorder.record({ citations: [rows[0], { ...rows[3], ref: 1 }] });
     expect(replacement.event.sources).toHaveLength(1);
     expect(recorder.citations()[0].document_id).toBe("other");
+  });
+
+  it("removes an abandoned ref, reuses its number and ignores malformed removal calls", async () => {
+    const { rec, events } = setup();
+    const row = entry(1, "The Tenant shall pay rent monthly in advance.");
+    await rec.record({ citations: [row, { ...row, ref: 2 }] });
+    const invalid = await rec.record({ citations: [{ ...row, ref: 3 }], drop_refs: [1, "2"] });
+    expect(JSON.parse(invalid).error).toBeDefined();
+    expect(rec.citations().map(c => c.ref)).toEqual([1, 2]);
+    const result = JSON.parse(await rec.record({ citations: [], drop_refs: [2] }));
+    expect(result.recorded_refs).toEqual([1]);
+    expect(events.at(-1)).toMatchObject({ removed_refs: [2] });
+    await rec.record({ citations: [{ ...row, ref: 2 }] });
+    expect(rec.citations().map(c => c.ref)).toEqual([1, 2]);
   });
 
   it("flags refs with gaps", async () => {
@@ -216,6 +253,17 @@ describe("cite_sources in a tabular review", () => {
     const { content, event } = await rec.record({ citations });
     return { result: JSON.parse(content), event };
   };
+
+  it("supports withdrawal and rejects unsafe ref numbers for table cells", async () => {
+    const rec = createCitationRecorder(tabularCitations(store()));
+    const cell = { ref: 1, col_index: 0, row_index: 0, quote: "Rent is $5,000 per month" };
+    const { result } = await record(rec, [cell, { ...cell, ref: 2 ** 53 }]);
+    expect(result.recorded_refs).toEqual([1]);
+    expect(result.rejected).toHaveLength(1);
+    const { event } = await rec.record({ citations: [], drop_refs: [1] });
+    expect(event).toMatchObject({ refs: [], removed_refs: [1] });
+    expect(rec.citations()).toEqual([]);
+  });
 
   it("records cells the model read, checked against their summaries", async () => {
     const rec = createCitationRecorder(tabularCitations(store()));

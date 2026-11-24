@@ -51,7 +51,7 @@ export function citationReminder(
   );
   const shapeLine = isSpreadsheet
     ? `Use this citation object shape for this spreadsheet: {"ref": 1, "doc_id": "${docLabel}", "quotes": [{"sheet": "Sheet name", "cell": "B7", "quote": "plain cell value"}]}. Cite by "sheet" + "cell" (A1 address or range), not by page.`
-    : `Use this citation object shape: {"ref": 1, "doc_id": "${docLabel}", "quotes": [{"page": 1, "quote": "exact verbatim text from the document"}]}. Include top-level "page" and "quote" too only if they match the first quote.`;
+    : `Use this citation object shape: {"ref": 1, "doc_id": "${docLabel}", "quotes": [{"page": "1", "quote": "exact verbatim text from the document"}]}.`;
   return [
     `[Citation requirement for ${docLabel}]:`,
     `Document filename: ${promptFilename}`,

@@ -40,6 +40,15 @@ describe("bounded citation payloads", () => {
     expect(rec.citations()).toHaveLength(MAX_CITATIONS);
   });
 
+  it("frees capacity for new citations in the same call as a withdrawal", async () => {
+    const rec = recorder(lease);
+    await rec.record({ citations: entries(MAX_CITATIONS) });
+    const next = MAX_CITATIONS + 1;
+    const { event } = await rec.record({ drop_refs: [1, 1, 2], citations: [...entries(1, 2), ...entries(1, next)] });
+    expect(event).toMatchObject({ removed_refs: [1], refs: [2, next], rejected: 0 });
+    expect(rec.citations().map(c => c.ref)).toEqual(entries(MAX_CITATIONS, 2).map(c => c.ref));
+  });
+
   it("measures serialized UTF-8 bytes including escaping and array separators", () => {
     const rows = [{ text: "é".repeat(2_499_987) }, { text: "too large" }, { text: "" }];
     const limited = limitCitationPayload(rows);

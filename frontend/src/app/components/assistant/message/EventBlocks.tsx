@@ -605,6 +605,7 @@ type CitedSource = Extract<
 /** A cite_sources call: what the answer recorded as its citations. */
 export function CitationsRecordedBlock({
     refs,
+    removedRefs = [],
     sources,
     quotesNotFound,
     rejected,
@@ -614,6 +615,7 @@ export function CitationsRecordedBlock({
     openSource,
 }: {
     refs: number[];
+    removedRefs?: number[];
     sources: CitedSource[];
     quotesNotFound: number;
     rejected: number;
@@ -625,14 +627,16 @@ export function CitationsRecordedBlock({
     openSource?: (source: CitedSource) => (() => void) | undefined;
 }) {
     const recorded = refs.length > 0;
-    const failed = !isStreaming && !interrupted && !recorded;
+    const changes = [
+        removedRefs.length > 0 && `Removed ${plural(removedRefs.length, "citation", "citations")}`,
+        recorded && `${removedRefs.length ? "recorded" : "Recorded"} ${plural(refs.length, "citation", "citations")}`,
+    ].filter(Boolean).join(" and ");
+    const failed = !isStreaming && !interrupted && !changes;
     const label = isStreaming
         ? "Recording citations"
         : interrupted
           ? "Citation recording stopped"
-          : recorded
-            ? `Recorded ${plural(refs.length, "citation", "citations")}`
-            : "Could not record citations";
+          : changes || "Could not record citations";
     const problems =
         isStreaming || interrupted
             ? []
@@ -660,7 +664,7 @@ export function CitationsRecordedBlock({
                         <span className="shrink-0">from</span>
                         {sources.map((source, index) => (
                             <span
-                                key={`${source.type}:${source.name}`}
+                                key={source.ref}
                                 className="flex min-w-0 max-w-full items-center"
                             >
                                 <EventSourceUI

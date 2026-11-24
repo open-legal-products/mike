@@ -64,7 +64,7 @@ export function normalizeCitation(raw: unknown): ParsedCitation | null {
       : Number.isFinite(markerRef)
         ? markerRef
         : null;
-  if (typeof ref !== "number") return null;
+  if (typeof ref !== "number" || !Number.isSafeInteger(ref) || ref < 1) return null;
   const quote = typeof c.quote === "string" ? c.quote : c.text;
 
   const rawClusterId =
