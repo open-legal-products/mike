@@ -1,4 +1,15 @@
 import type { AuditEvent, OrgPrivateContentKind } from "@/app/lib/mikeApi";
+import { PERSONAL_WORKSPACE_LABEL } from "@/app/contexts/WorkspaceContext";
+
+/**
+ * The workspace a personal activity row happened in: Personal, or its
+ * organization by current name. An organization whose name is no longer
+ * available is still named as one rather than passed off as Personal.
+ */
+export function auditWorkspace(event: AuditEvent): string {
+  if (!event.org_id) return PERSONAL_WORKSPACE_LABEL;
+  return event.org_name?.trim() || "Organization";
+}
 
 export interface AuditPrivateAccess {
   kind: OrgPrivateContentKind;
@@ -84,7 +95,7 @@ export const ACTION_LABELS: Record<string, string> = {
 export const SURFACE_LABELS: Record<string, string> = {
   assistant: "Assistant",
   project: "Project",
-  word: "Word",
+  word: "Word add-in",
   tabular: "Tabular",
   playbooks: "Playbooks",
   workflows: "Workflows",

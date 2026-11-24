@@ -3,6 +3,7 @@ import { UserRound } from "lucide-react";
 import {
   ChatSkeuoIcon,
   OrganizationSkeuoIcon,
+  PlaybookSkeuoIcon,
   TabularReviewSkeuoIcon,
   WorkflowSkeuoIcon,
 } from "@/app/components/shared/AppSidebarSkeuoIcons";
@@ -18,6 +19,7 @@ export const HISTORY_APPLICATION_ICONS: Partial<
     <FileTypeIcon fileType="docx" className={className} />
   ),
   tabular: TabularReviewSkeuoIcon,
+  playbooks: PlaybookSkeuoIcon,
   workflows: WorkflowSkeuoIcon,
   account: ({ className }) => (
     <UserRound aria-hidden="true" className={className} />

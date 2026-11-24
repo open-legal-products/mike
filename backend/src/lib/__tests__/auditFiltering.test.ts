@@ -226,7 +226,10 @@ describe("personal activity", () => {
         expect(csv).toContain("Own organization action");
         expect(csv).not.toContain("Colleague action");
         expect(csv).not.toContain("Unattributed action");
-        expect(calls.filter((call) => call[0] === "read").every((call) => call[1] === "audit_events")).toBe(true);
+        // Never project access: only the events and, to name each row's
+        // workspace, the organizations they happened in.
+        expect(calls.filter((call) => call[0] === "read").every((call) =>
+            call[1] === "audit_events" || call[1] === "organizations")).toBe(true);
     });
 });
 

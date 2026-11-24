@@ -9,6 +9,7 @@ import {
   auditSubjectEmail,
   auditSummary,
   auditTimestamp,
+  auditWorkspace,
 } from "./auditPresentation";
 
 const event: AuditEvent = {
@@ -33,6 +34,13 @@ const event: AuditEvent = {
 };
 
 describe("audit event presentation", () => {
+  it("names the workspace a personal activity row happened in", () => {
+    expect(auditWorkspace({ ...event, org_id: null })).toBe("Personal");
+    expect(auditWorkspace({ ...event, org_id: "org-a", org_name: " Acme LLP " })).toBe("Acme LLP");
+    // A purged organization is still an organization, never Personal.
+    expect(auditWorkspace({ ...event, org_id: "org-a", org_name: null })).toBe("Organization");
+  });
+
   it.each(["org.member.role_changed", "org.invite.created", "org.private_content.permission_changed"])("prefers the affected person's name for %s and retains the recorded email", (action) => {
     const named = { ...event, action, affected_user_display_name: " Jamie Morgan " };
     expect(auditSubject(named).name).toBe("Jamie Morgan");
