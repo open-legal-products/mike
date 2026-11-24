@@ -55,3 +55,15 @@ export function citationsRecordedEvent(
 /** Whether `event` is the citations step still waiting for its result. */
 export const isRecordingCitations = (event: AssistantEvent) =>
     event.type === "citations_recorded" && !!event.isStreaming;
+
+/** A numeric ref belongs to the latest top-level call that recorded it.
+ * Nested runs number their own refs; their events never enter this map. */
+export function currentCitationSteps(events: readonly AssistantEvent[]) {
+    const owners = new Map<number, CitationsRecordedEvent>();
+    for (const event of events) {
+        if (event.type !== "citations_recorded") continue;
+        if (event.isStreaming) return new Map<number, CitationsRecordedEvent>();
+        for (const ref of event.refs) owners.set(ref, event);
+    }
+    return owners;
+}

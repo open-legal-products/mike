@@ -5,6 +5,7 @@ import {
   documentCitations,
   tabularCitations,
 } from "../citeSources";
+import { renderTableCells } from "../tools/tableCells";
 import type { TabularCellStore } from "../types";
 
 const SOURCE =
@@ -126,6 +127,32 @@ describe("cite_sources", () => {
     ]);
   });
 
+  it("keeps distinct identities with the same filename and canonicalizes upload aliases", async () => {
+    const doc = { filename: "Lease.pdf", file_type: "pdf", storage_path: "fixture" };
+    const index = {
+      "doc-0": { document_id: "lease", filename: doc.filename, version_id: "old" },
+      "doc-1": { document_id: "lease", filename: doc.filename, version_id: "new" },
+      "doc-2": { document_id: "other", filename: doc.filename, version_id: "third" },
+    };
+    const docs = new Map(Object.keys(index).map(label => [label, doc]));
+    const recorder = createCitationRecorder(documentCitations({
+      docIndex: index, docStore: docs, casesByClusterId: new Map(),
+      readSourceText: async () => SOURCE, getCaseOpinions: async () => [],
+    }));
+    const rows = ["doc-0", "doc-0", "doc-1", "other", doc.filename].map((doc_id, i) =>
+      entry(i + 1, "The Tenant shall pay rent monthly in advance.", { doc_id }));
+    const { event } = await recorder.record({ citations: rows });
+    expect(event.sources.map(s => s.ref)).toEqual([1, 3, 4]);
+    expect(event.rejected).toBe(1); // The shared filename cannot select a document.
+    expect(recorder.citations()[3]).toMatchObject({
+      doc_id: "doc-2", document: { document_id: "other", version_id: "third" },
+    });
+
+    const replacement = await recorder.record({ citations: [rows[0], { ...rows[3], ref: 1 }] });
+    expect(replacement.event.sources).toHaveLength(1);
+    expect(recorder.citations()[0].document_id).toBe("other");
+  });
+
   it("flags refs with gaps", async () => {
     const { rec } = setup();
     const result = JSON.parse(
@@ -222,6 +249,25 @@ describe("cite_sources in a tabular review", () => {
       quotes_not_found: 1,
       rejected: 0,
     });
+  });
+
+  it("verifies against the column read even when its stored index differs from COL:n", async () => {
+    const review = store();
+    review.columns = [{ index: 1, name: "Rent" }, { index: 4, name: "Term" }];
+    review.cells = new Map([
+      ["1:row-a", { summary: "Monthly rent is five thousand dollars." }],
+      ["4:row-a", { summary: "The lease expires in June." }],
+    ]);
+    const quote = "The lease expires in June.";
+    const read = await renderTableCells(review, [1], [0]);
+    expect(read.content).toContain('[COL:1 "Term" | ROW:0 "Lease A.pdf"]\nSummary: ' + quote);
+    const rec = createCitationRecorder(tabularCitations(review));
+    const { result } = await record(rec, [{ ref: 1, col_index: 1, row_index: 0, quote }]);
+    expect(result.quotes_not_found).toBeUndefined();
+    expect(rec.citations()).toMatchObject([{ col_index: 1, col_name: "Term", verified: true }]);
+    review.cells.delete("4:row-a");
+    const retry = await record(rec, [{ ref: 2, col_index: 1, row_index: 0, quote }]);
+    expect(retry.result.rejected).toMatchObject([{ ref: 2 }]);
   });
 
   it("refuses cells outside the review, unread, or empty", async () => {

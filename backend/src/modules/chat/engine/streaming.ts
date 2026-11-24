@@ -1055,18 +1055,6 @@ export async function runLLMStream(params: {
           events.push(event);
           write(`data: ${JSON.stringify(event)}\n\n`);
         });
-        // In call order: a later call replaces the refs an earlier one set.
-        for (const call of citeCalls) {
-          // The step shows as in progress while the quotes are checked.
-          write(`data: ${JSON.stringify({ type: "citations_recorded_start" })}\n\n`);
-          const { content, event } = await citationRecorder.record(call.input);
-          clientResultByCallId.set(call.id, content);
-          events.push(event);
-          write(`data: ${JSON.stringify(event)}\n\n`);
-          throwIfAborted(signal);
-        }
-        // The client can link the answer's markers as they stream.
-        if (citeCalls.length) emitCitations("partial");
         if (clientTools) {
           for (const call of permittedCalls) {
             if (!clientTools.owns(call.name)) continue;
@@ -1181,6 +1169,20 @@ export async function runLLMStream(params: {
           clientResultByCallId.set(delegateCalls[index].id, content),
         );
         await recordDelegations();
+        // Edits, document creation and cell reads in this provider step can
+        // change the version or evidence available to the citation recorder.
+        // In call order: a later call replaces the refs an earlier one set.
+        for (const call of citeCalls) {
+          // The step shows as in progress while the quotes are checked.
+          write(`data: ${JSON.stringify({ type: "citations_recorded_start" })}\n\n`);
+          const { content, event } = await citationRecorder.record(call.input);
+          clientResultByCallId.set(call.id, content);
+          events.push(event);
+          // Publish the backing rows before enabling the finished step's source actions.
+          emitCitations("partial");
+          write(`data: ${JSON.stringify(event)}\n\n`);
+          throwIfAborted(signal);
+        }
         addApprovalItems(
           askInputsEvents,
           delegated.flatMap(({ approvals }) => approvals ?? []),

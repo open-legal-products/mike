@@ -282,25 +282,36 @@ function briefOf(prose: string): string {
 }
 
 type VerifiedCitation = {
+    type?: unknown;
+    row_index?: unknown;
+    col_index?: unknown;
+    quote?: unknown;
     kind?: unknown;
     ref?: unknown;
     doc_id?: unknown;
     cluster_id?: unknown;
     verified?: unknown;
-    quotes?: { verification?: unknown }[];
+    quotes?: { quote?: unknown; page?: unknown; opinionId?: unknown; sheet?: unknown; cell?: unknown }[];
 };
 
 function sourceLines(citations: unknown[]): string[] {
     return (citations as VerifiedCitation[]).flatMap((citation) => {
         if (citation?.verified !== true) return [];
-        const quotes = (citation.quotes ?? []).map(
-            ({ verification: _verification, ...quote }) => quote,
-        );
-        const source =
-            citation.kind === "case"
-                ? { cluster_id: citation.cluster_id }
-                : { doc_id: citation.doc_id };
-        return [JSON.stringify({ ref: citation.ref, ...source, quotes })];
+        const brief_ref = citation.ref;
+        if (citation.type === "tabular_citation") {
+            const { col_index, row_index, quote } = citation;
+            return [JSON.stringify({ brief_ref, col_index, row_index, quote })];
+        }
+        if (citation.kind === "case") {
+            const quotes = citation.quotes?.map(({ quote, opinionId }) => ({
+                quote, ...(typeof opinionId === "number" ? { opinion_id: opinionId } : {}),
+            }));
+            return [JSON.stringify({ brief_ref, cluster_id: citation.cluster_id, quotes })];
+        }
+        const quotes = citation.quotes?.map(({ page, quote, sheet, cell }) => ({
+            ...(page == null ? {} : { page: String(page) }), quote, sheet, cell,
+        }));
+        return [JSON.stringify({ brief_ref, doc_id: citation.doc_id, quotes })];
     });
 }
 
@@ -349,7 +360,7 @@ function childMessages(
 }
 
 const CITE_INSTRUCTION =
-    "To rely on a finding, record its source with cite_sources, copying doc_id or cluster_id, page and quote exactly from the Sources lines; the brief's [N] markers are their ref. Keep web pages as markdown links.";
+    "To rely on a finding, record its source with cite_sources, copying the source fields and quote from its Sources line; brief_ref identifies [N] only within this brief. Assign each new source an unused ref in your own answer, including across parallel briefs. Never reuse a brief_ref as a parent ref solely because the numbers match. Keep web pages as markdown links.";
 
 const CANNOT_CONTINUE = "That delegation cannot be continued. Start a new delegation.";
 

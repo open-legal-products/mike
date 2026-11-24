@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
     citationsRecordedEvent,
+    currentCitationSteps,
     isRecordingCitations,
     recordingCitationsEvent,
 } from "./citationsRecorded";
@@ -37,4 +38,14 @@ describe("citationsRecordedEvent", () => {
         expect(isRecordingCitations(recordingCitationsEvent())).toBe(true);
         expect(isRecordingCitations(citationsRecordedEvent({}))).toBe(false);
     });
+});
+
+it("withholds source actions while a replacement call is in flight", () => {
+    const first = citationsRecordedEvent({ refs: [1, 2] });
+    const replacement = citationsRecordedEvent({ refs: [1] });
+    expect(currentCitationSteps([first, recordingCitationsEvent()]).size).toBe(0);
+
+    const owners = currentCitationSteps([first, { type: "content", text: "See [1]" }, replacement]);
+    expect(owners.get(1)).toBe(replacement);
+    expect(owners.get(2)).toBe(first);
 });

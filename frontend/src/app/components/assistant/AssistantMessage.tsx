@@ -37,6 +37,7 @@ import {
 import { preprocessCitations, internalCaseHref } from "./message/citationUtils";
 import { useSmoothedReveal } from "./message/useSmoothedReveal";
 import { MarkdownContent } from "./message/MarkdownContent";
+import { currentCitationSteps } from "@/app/lib/citationsRecorded";
 import { CitationsBlock, buildCitationAppendix } from "./message/CitationSources";
 import { EditCardsSection } from "./message/EditCardsSection";
 import {
@@ -283,6 +284,7 @@ function AssistantMessageImpl({
         !!onOpenCitationSource ||
         (citation.kind !== "case" && !!onOpenDocument);
     // A cited source opens through the first citation that cites it.
+    const citationSteps = currentCitationSteps(events ?? []);
     const openCitedSource = ({ ref }: { ref: number }) => {
         const citation = citations.find((c) => c.ref === ref);
         return citation && canOpenCitationSource(citation)
@@ -657,7 +659,7 @@ function AssistantMessageImpl({
                     isStreaming={!!event.isStreaming}
                     interrupted={!!event.interrupted}
                     showConnector={showConnector}
-                    openSource={openCitedSource}
+                    openSource={source => citationSteps.get(source.ref) === event ? openCitedSource(source) : undefined}
                 />
             );
         }

@@ -710,6 +710,35 @@ describe("AssistantMessage citations", () => {
         expect(screen.getByRole("heading", { name: "Citations" })).toBeVisible();
     });
 
+    it("opens only the current recording when the same ref changes sources", () => {
+        const onOpenCitationSource = vi.fn();
+        const step = (name: string): AssistantEvent => ({
+            type: "citations_recorded", refs: [1], sources: [{ name, type: "pdf", ref: 1 }],
+            rejected: 0, quotes_not_found: 0,
+        });
+        render(<AssistantMessage isStreaming events={[step("Old.pdf"), step("Lease.pdf"), events[1]]}
+            citations={[citation]} onOpenCitationSource={onOpenCitationSource} />);
+        fireEvent.click(screen.getByRole("button", { name: /2 steps/ }));
+        expect(screen.getByText("Old.pdf")).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Old.pdf" })).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: "Lease.pdf" }));
+        expect(onOpenCitationSource).toHaveBeenCalledExactlyOnceWith(citation);
+    });
+
+    it("keeps a delegated recording with ref 1 separate from the parent", () => {
+        const child: AssistantEvent = {
+            type: "delegation", delegation_id: "d", title: "Research", task: "Read memo", status: "completed",
+            effort: "standard", model: "test", events: [{ type: "citations_recorded", refs: [1],
+                sources: [{ name: "Memo.pdf", type: "pdf", ref: 1 }], rejected: 0, quotes_not_found: 0 }],
+        };
+        render(<AssistantMessage isStreaming events={[child, ...events]} citations={[citation]} onOpenCitationSource={vi.fn()} />);
+        fireEvent.click(screen.getByRole("button", { name: /2 steps.*1 subagent/ }));
+        fireEvent.click(screen.getByRole("button", { name: /^Research,/ }));
+        expect(screen.getByText("Memo.pdf")).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Memo.pdf" })).toBeNull();
+        expect(screen.getByRole("button", { name: "Lease.pdf" })).toBeVisible();
+    });
+
     it("opens a cited source through the citation that cites it", () => {
         const onOpenCitationSource = vi.fn();
         render(

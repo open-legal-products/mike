@@ -47,6 +47,7 @@ import {
 import { readSseFrames } from "@/app/lib/sse";
 import {
     citationsRecordedEvent,
+    currentCitationSteps,
     isRecordingCitations,
     recordingCitationsEvent,
 } from "@/app/lib/citationsRecorded";
@@ -252,6 +253,7 @@ function TRAssistantMessage({
     };
 
     // A cited document opens at the first cell that cites it.
+    const citationSteps = currentCitationSteps(events);
     const openCitedCell = ({ ref }: { ref: number }) => {
         const cell = annotations.find((annotation) => annotation.ref === ref);
         return cell
@@ -301,7 +303,7 @@ function TRAssistantMessage({
                     isStreaming={!!event.isStreaming}
                     interrupted={!!event.interrupted}
                     showConnector={showConnector}
-                    openSource={openCitedCell}
+                    openSource={source => citationSteps.get(source.ref) === event ? openCitedCell(source) : undefined}
                 />
             );
         }

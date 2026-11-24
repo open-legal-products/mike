@@ -13,6 +13,7 @@ vi.mock("../tools/toolDispatcher", () => ({ runToolCalls: vi.fn() }));
 vi.mock("../../../../lib/integrations/googleDrive", () => ({ buildGoogleDriveTools: async () => [] }));
 vi.mock("../../../../lib/integrations/googleWorkspace", () => ({ buildGoogleWorkspaceTools: async () => [] }));
 
+import type { StreamChatParams } from "../../../../lib/llm/types";
 import { runLLMStream } from "../streaming";
 import { runToolCalls } from "../tools/toolDispatcher";
 import { emptyToolCallBatchResult } from "../tools/toolBatchResult";
@@ -103,6 +104,36 @@ describe("runLLMStream citation streaming", () => {
     expect(stepFrame).toBeLessThan(firstContent);
     // The start frame is a progress signal, not a step of the stored turn.
     expect(result.events.map((e) => e.type)).not.toContain("citations_recorded_start");
+  });
+
+  it("checks same-batch citations after an edit updates the source", async () => {
+    const before = "Only the landlord may extend the term.";
+    const after = "Either party can request a mediation.";
+    const doc = { storage_path: "", file_type: "txt", filename: "Lease.txt", inline_text: before };
+    vi.mocked(runToolCalls).mockImplementationOnce(async (calls) => {
+      expect(calls.map(call => call.function.name)).toEqual(["edit_document"]);
+      doc.inline_text = after;
+      return emptyToolCallBatchResult();
+    });
+    streamChatWithTools.mockImplementationOnce(async ({ runTools }: StreamChatParams) => {
+      const results = await runTools!([
+        { id: "edit", name: "edit_document", input: { doc_id: "doc-0" } },
+        { id: "cite", name: "cite_sources", input: { citations: [
+          { ref: 1, doc_id: "doc-0", quotes: [{ quote: before }] },
+          { ref: 2, doc_id: "doc-0", quotes: [{ quote: after }] },
+        ] } },
+      ]);
+      expect(results.map(result => result.tool_use_id)).toEqual(["edit", "cite"]);
+      return { fullText: "" };
+    });
+    const result = await runLLMStream({
+      model: "gemini-3.8-flash", apiMessages: [{ role: "user", content: "Update the lease." }],
+      docStore: new Map([["doc-0", doc]]), docIndex: {}, userId: "u1", db: {} as never, write: () => {},
+    });
+    expect(result.citations).toMatchObject([
+      { ref: 1, quote: before, verified: false },
+      { ref: 2, quote: after, verified: true },
+    ]);
   });
 
   it("offers cite_sources for documents, or for a tabular review's cells", async () => {
