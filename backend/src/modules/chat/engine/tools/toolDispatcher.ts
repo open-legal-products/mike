@@ -48,6 +48,13 @@ import {
   addApprovalItems,
   planConnectorToolCall,
 } from "./connectorApprovals";
+import {
+  annotatePassages,
+  inlineCitationReminder,
+  rememberReadText,
+  isSpreadsheetText,
+  type CitationFormat,
+} from "../inlineCitations";
 import { createKeyedLock, type KeyedLock } from "./documentLocks";
 import {
   emptyToolCallBatchResult,
@@ -410,11 +417,36 @@ export async function runToolCalls(
      * edits, creations and other results already happened.
      */
     results?: ToolCallBatchResult;
+    /**
+     * How the answer cites documents. Inline: document text is returned
+     * with passage tags and the citation note describes inline tags.
+     */
+    citationFormat?: CitationFormat;
   } = {},
 ): Promise<ToolCallBatchResult> {
   // Filled in place as each call completes, so a caller that passed
   // `results` still has what finished when a later call rejects.
   const results = options.results ?? emptyToolCallBatchResult();
+  const inlineCitations = options.citationFormat === "inline";
+  // Inline citations name passages: the model reads them tagged.
+  const citableText = (docLabel: string, text: string) => {
+    if (!inlineCitations) return text;
+    rememberReadText(docStore, docLabel, text);
+    return annotatePassages(text);
+  };
+  const citationNote = (
+    docLabel: string,
+    filename: string,
+    promptFilename: string,
+    text: string,
+  ) =>
+    inlineCitations
+      ? inlineCitationReminder(docLabel, promptFilename, isSpreadsheetText(text))
+      : citationReminder(docLabel, filename, promptFilename);
+  const citeHowTo = (docLabel: string) =>
+    inlineCitations
+      ? `cite it inline with [[${docLabel} N]] passage tags (read it first to see them)`
+      : `cite it with [N] markers and citation entries using doc_id "${docLabel}"`;
   const {
     toolResults,
     docsRead,
@@ -552,7 +584,7 @@ export async function runToolCalls(
             `Before writing your final response, call read_document with doc_id "${newDocLabel}".`,
             `Base your description on the generated document's actual returned text, not on memory of what you intended to generate.`,
             `Do not include download links, URLs, or markdown links to the document in your prose response; the document card is shown automatically by the UI.`,
-            `Give a concise description of the generated document and, if you make factual claims about its contents, cite it with [N] markers and citation entries using doc_id "${newDocLabel}", not any source/template document.`,
+            `Give a concise description of the generated document and, if you make factual claims about its contents, ${citeHowTo(newDocLabel)}, not any source/template document.`,
           ].join(" "),
         }
       : safeToolResult;
@@ -766,7 +798,8 @@ export async function runToolCalls(
         });
       // Wrap document content in the spotlight fence: the document body
       // is entirely user-controlled and may contain injected instructions.
-      const fencedContent = nonce ? spotlight(content, nonce) : content;
+      const citable = citableText(docId, content);
+      const fencedContent = nonce ? spotlight(citable, nonce) : citable;
       const promptFilename = spotlightFilename(filename ?? "", nonce);
       const sourceNotice = sourceMaterialNotice(
         docStore.get(docId)?.source_kind,
@@ -775,7 +808,7 @@ export async function runToolCalls(
         role: "tool",
         tool_call_id: tc.id,
         content: filename
-          ? `${citationReminder(docId, filename, promptFilename)}${sourceNotice ? `\n${sourceNotice}` : ""}\n\n${fencedContent}`
+          ? `${citationNote(docId, filename, promptFilename, content)}${sourceNotice ? `\n${sourceNotice}` : ""}\n\n${fencedContent}`
           : fencedContent,
       });
     } else if (
@@ -1001,13 +1034,14 @@ export async function runToolCalls(
           turnReadState.set(readIdentity.key, readIdentity);
         }
         // Document body is user-controlled; spotlight it.
-        const fencedContent = nonce ? spotlight(content, nonce) : content;
+        const citable = citableText(docId, content);
+        const fencedContent = nonce ? spotlight(citable, nonce) : citable;
         const promptFilename = spotlightFilename(filename, nonce);
         const sourceNotice = sourceMaterialNotice(
           docStore.get(docId)?.source_kind,
         );
         parts.push(
-          `--- ${docId} ---\n${citationReminder(docId, filename, promptFilename)}${sourceNotice ? `\n${sourceNotice}` : ""}\n\n${fencedContent}`,
+          `--- ${docId} ---\n${citationNote(docId, filename, promptFilename, content)}${sourceNotice ? `\n${sourceNotice}` : ""}\n\n${fencedContent}`,
         );
         if (docStore.get(docId)) {
           const documentId = docIndex?.[docId]?.document_id;
@@ -2030,7 +2064,7 @@ export async function runToolCalls(
                 `The edited document remains available as doc_id "${docId}".`,
                 `Before making factual claims about the edited document's final contents, call read_document with doc_id "${docId}" and base the response on that returned text.`,
                 `Do not include download links or URLs in your prose response; the edited document card is shown automatically by the UI.`,
-                `If you describe specific content from the edited document, cite it with [N] markers and citation entries using doc_id "${docId}".`,
+                `If you describe specific content from the edited document, ${citeHowTo(docId)}.`,
               ].join(" "),
             }),
           });

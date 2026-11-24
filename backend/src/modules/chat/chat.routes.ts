@@ -1,4 +1,5 @@
 import { BACKEND_REPORTING_OWNER } from "../../lib/reportedUpstreamCodes";
+import { chatCitationFormat } from "./engine/inlineCitations";
 import { abortable } from "../../lib/abortable";
 import {
     attachAssistantTurnSse,
@@ -758,6 +759,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 : Promise.resolve();
 
             const { fullText, events, citations } = await runLLMStream({
+                citationFormat: chatCitationFormat(),
                 onActivity: run?.touch,
                 apiMessages,
                 docStore,

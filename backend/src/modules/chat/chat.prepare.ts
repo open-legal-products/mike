@@ -12,6 +12,7 @@
 // its ordering is delicate. Only the NON-streaming logic and the pre-stream
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
+import { chatCitationFormat } from "./engine/inlineCitations";
 import { AppError } from "../../lib/appError";
 import { getActiveAssistantTurn } from "../../lib/assistantTurnRuns";
 import { reportError } from "../../lib/observability/sentry";
@@ -518,6 +519,7 @@ export async function prepareChatStream(
             "chat_messages",
             timeZone,
             recordForUser,
+            chatCitationFormat(),
         );
         const {
             api_keys: apiKeys,
@@ -546,6 +548,7 @@ export async function prepareChatStream(
             "append",
             { timeZone, now: new Date(), userSentAt },
             recordForUser,
+            chatCitationFormat(),
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db, contentOrgId);

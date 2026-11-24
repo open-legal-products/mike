@@ -1,3 +1,4 @@
+import type { CitationFormat } from "./inlineCitations";
 const WORD_EDITS_PROTOCOL = `<EDITS>
 [
   {"type":"edit_data","kind":"edit","deleted_text":"exact text copied from the active Word document","inserted_text":"replacement text","reason":"one short sentence explaining the change"},
@@ -87,15 +88,16 @@ const wordChatCitations = (readTools: string) => `ACTIVE DOCUMENT CITATIONS
 - If the result lists quotes it could not find or entries it rejected, call cite_sources again with corrected entries under the same refs, or leave those claims out. Then put each marker [1], [2], etc. immediately after the claim it supports.
 - Copy each quote exactly from one contiguous paragraph passage seen via ${readTools} in this response. Keep it at most 200 characters, exclude renderer-only markers, and make it unique enough for Word to locate. Cite key support, not every sentence. Never list the citations or their JSON in the answer; skip cite_sources when nothing is cited.`;
 
-const WORD_CHAT_INSTRUCTIONS = `${WORD_CHAT_SHARED_PREAMBLE}
-${WORD_CHAT_EDITS_SECTION}
-
-${wordChatCitations("read_document")}`;
-
-const WORD_CHAT_CLIENT_TOOLS_INSTRUCTIONS = `${WORD_CHAT_SHARED_PREAMBLE}
-${WORD_CHAT_CLIENT_TOOLS_EDITS_SECTION}
-
-${wordChatCitations("read_document or the latest read_active_document; after editing, refresh with read_active_document")}`;
+/**
+ * ACTIVE DOCUMENT CITATIONS for inline citations: tags at the claim, which
+ * the application numbers, instead of the cite_sources tool.
+ */
+const WORD_CHAT_INLINE_CITATIONS_SECTION = `ACTIVE DOCUMENT CITATIONS
+- Document text you read with read_document or read_active_document is divided into numbered passages, each starting with a tag such as {12}; the tags are not document text. Cite only passages you read in this response. Cite evidence inline, right after the claim, with a tag naming the document and passage: [[${ACTIVE_WORD_DOCUMENT_ID} 12]], or [[${ACTIVE_WORD_DOCUMENT_ID} 12-13]] for adjacent passages. For another document you read, use its doc_id, such as [[doc-0 3]]. To point at particular words inside a passage, add a short quote copied exactly: [[${ACTIVE_WORD_DOCUMENT_ID} 12 "exact words"]].
+- The reader never sees what is inside a tag: it is replaced by a numbered marker. So write every claim in full in your sentence, and put the tag after it. Wrong: "The tenant must give [[${ACTIVE_WORD_DOCUMENT_ID} 34 "nine months' notice"]]." Right: "The tenant must give nine months' written notice [[${ACTIVE_WORD_DOCUMENT_ID} 34]]."
+- Never write [1]-style markers yourself, and never add a list of citations at the end.
+- Tags and {N} passage numbers belong only in your chat answer. Never put them in apply_word_edits, an <EDITS> block or any other tool argument: copy document words without them.
+- Cite key support, not every sentence.`;
 
 /**
  * Word-only system context. This value is added directly to the LLM system
@@ -106,8 +108,23 @@ ${wordChatCitations("read_document or the latest read_active_document; after edi
  * results back; false keeps the streamed <EDITS> protocol so a pane that
  * cannot answer client_tool_call frames is never handed one.
  */
-export function buildWordChatSystemPrompt(clientTools = false): string {
-  return clientTools
-    ? WORD_CHAT_CLIENT_TOOLS_INSTRUCTIONS
-    : WORD_CHAT_INSTRUCTIONS;
+export function buildWordChatSystemPrompt(
+  clientTools = false,
+  citationFormat: CitationFormat = "cite_sources",
+): string {
+  const edits = clientTools
+    ? WORD_CHAT_CLIENT_TOOLS_EDITS_SECTION
+    : WORD_CHAT_EDITS_SECTION;
+  const citations =
+    citationFormat === "inline"
+      ? WORD_CHAT_INLINE_CITATIONS_SECTION
+      : wordChatCitations(
+          clientTools
+            ? "read_document or the latest read_active_document; after editing, refresh with read_active_document"
+            : "read_document",
+        );
+  return `${WORD_CHAT_SHARED_PREAMBLE}
+${edits}
+
+${citations}`;
 }

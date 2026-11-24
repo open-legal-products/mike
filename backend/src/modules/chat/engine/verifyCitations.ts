@@ -325,7 +325,7 @@ export function verifyQuoteAgainstSource(
   };
 }
 
-type DocQuoteEntry = { page: number | string; quote: string };
+type DocQuoteEntry = { page: number | string; quote: string; verification?: QuoteVerification };
 
 export type CaseOpinionSource = {
   opinion_id: number | null;
@@ -472,6 +472,14 @@ export async function verifyDocumentCitationAnnotation(
     sourceProviderFor(String(record(a.document)?.document_id ?? ""))
       ?.quoteVerification === "exact";
   const verifiedQuotes = entries.map((entry) => {
+    // Inline PDF passages already identify an occurrence. A document-wide
+    // search here would replace it with the first identical quote.
+    const pin = entry.verification;
+    if (pin?.pdf_text_offset !== undefined) {
+      const matches = pin.verified && pin.start_char !== undefined && pin.end_char !== undefined
+        && source.slice(pin.start_char, pin.end_char) === entry.quote;
+      return { ...entry, verification: matches ? pin : { verified: false } };
+    }
     const result = exact
       ? { verified: quoteOccursVerbatim(source, entry.quote), needs_correction: false }
       : verifierFor(source)(entry.quote);

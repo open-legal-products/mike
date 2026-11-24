@@ -47,6 +47,7 @@ import {
     type ChatMessage,
     parseOptionalModel,
     parseOptionalReasoning,
+    chatCitationFormat,
 } from "../chat/chat.service";
 import {
     finishGeneration,
@@ -1119,6 +1120,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             includeResearchTools: false,
             tabularStore,
             citationSources: "tabular_cells",
+            citationFormat: chatCitationFormat(),
             model: selectedChatModel,
             reasoning: selectedReasoningLevel,
             apiKeys: api_keys,

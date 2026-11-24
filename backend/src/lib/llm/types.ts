@@ -207,6 +207,11 @@ export type StreamChatParams = {
      * limit ends with an answer instead of an unanswered tool call.
      */
     finishWithoutToolsOnLastStep?: boolean;
+    /**
+     * The answer cites with inline [[...]] tags rather than a <CITATIONS>
+     * block; reminders added during the run describe the same format.
+     */
+    inlineCitations?: boolean;
 };
 
 export type StreamChatResult = {

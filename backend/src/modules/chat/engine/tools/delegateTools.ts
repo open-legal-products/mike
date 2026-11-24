@@ -14,6 +14,7 @@ import type {
 } from "../../../../lib/llm";
 import { REASONING_LEVELS, type ReasoningLevel } from "../../../../lib/llm/types";
 import { DELEGATION_MODEL_TIERS, subagentModelFor } from "../../../../lib/modelSelection";
+import type { CitationFormat } from "../inlineCitations";
 import { spotlight, withDocumentList } from "../contextBuilders";
 import { createDocLabelResolver, type DocIndex, type DocStore } from "../types";
 import {
@@ -248,6 +249,8 @@ export type DelegateContext = {
     signal?: AbortSignal;
     write: (chunk: string) => void;
     spawn: (spawn: SubagentSpawn) => Promise<SubagentResult>;
+    /** How the parent's answer cites; subagents cite the same way. */
+    citationFormat?: CitationFormat;
 };
 
 export type DelegateResult = {
@@ -361,6 +364,14 @@ function childMessages(
 
 const CITE_INSTRUCTION =
     "To rely on a finding, record its source with cite_sources, copying the source fields and quote from its Sources line; brief_ref identifies [N] only within this brief. Assign each new source an unused ref in your own answer, including across parallel briefs. Never reuse a brief_ref as a parent ref solely because the numbers match. Keep web pages as markdown links.";
+
+/**
+ * Inline citation tags name a source, not a number, so a brief's tags mean
+ * the same thing in the parent's answer: copied as they are, they cannot
+ * collide with the parent's own citations or another brief's.
+ */
+const INLINE_CITE_INSTRUCTION =
+    "The brief cites its sources with [[...]] citation tags. To rely on a finding, copy its tag exactly into your answer, right after the claim. Keep web pages as markdown links.";
 
 const CANNOT_CONTINUE = "That delegation cannot be continued. Start a new delegation.";
 
@@ -484,8 +495,10 @@ function delegationResultText(
     citations: unknown[],
     approvals: ConnectorApprovalItem[],
     nonce: string | undefined,
+    citationFormat: CitationFormat = "cite_sources",
 ): string {
     const { delegation_id: id, title, status, brief, question } = event;
+    const inline = citationFormat === "inline";
     if (status === "failed") {
         return `Delegated task "${title}" failed. Do the work yourself, or tell the user it could not be done.`;
     }
@@ -503,7 +516,9 @@ function delegationResultText(
     if (question) {
         return `Delegated task "${title}" needs input (${provenance}).\nQuestion:\n${untrusted(question, nonce)}\nFindings so far:\n${untrusted(brief || "None yet.", nonce)}${changesMade}\nAnswer with delegate { continue: "${id}", task: <your answer> }.`;
     }
-    const sources = sourceLines(citations);
+    // Inline: the brief carries its own tags, so Sources lines would only
+    // repeat them under numbers the parent must not reuse.
+    const sources = inline ? [] : sourceLines(citations);
     const body = [
         brief || "The subagent returned no brief.",
         ...(sources.length ? ["Sources:", ...sources] : []),
@@ -512,7 +527,7 @@ function delegationResultText(
         status === "incomplete"
             ? "stopped at its time or token budget, so its brief is partial"
             : "completed";
-    return `Delegated task "${title}" ${outcome} (${provenance}).\n${untrusted(body, nonce)}${changesMade}\n${CITE_INSTRUCTION}`;
+    return `Delegated task "${title}" ${outcome} (${provenance}).\n${untrusted(body, nonce)}${changesMade}\n${inline ? INLINE_CITE_INSTRUCTION : CITE_INSTRUCTION}`;
 }
 
 function subagentApprovals(events: AssistantEvent[], title: string): ConnectorApprovalItem[] {
@@ -718,7 +733,7 @@ export async function runDelegateCall(
         content:
             (delegation.unavailableModel
                 ? `The user cannot use the model "${delegation.unavailableModel}", so the subagent ran on ${model}.\n`
-                : "") + delegationResultText(event, outcome.citations, approvals, ctx.nonce),
+                : "") + delegationResultText(event, outcome.citations, approvals, ctx.nonce, ctx.citationFormat),
         event,
         approvals,
     };

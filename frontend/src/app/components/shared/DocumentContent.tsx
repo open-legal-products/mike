@@ -183,6 +183,7 @@ export function DocumentContent({
         return {
             activeViewerQuotes: expandDocumentQuoteEntry({
                 page: activeDocumentQuote.target.page,
+                pdfTextOffset: activeDocumentQuote.verification?.pdf_text_offset,
                 quote: activeDocumentQuote.quote,
             }),
             activeHighlightCells:

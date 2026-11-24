@@ -23,6 +23,7 @@ import {
   type MemoryConversationTurn,
 } from "../../lib/memory/schedule";
 import {
+  chatCitationFormat,
   ACTIVE_WORD_DOCUMENT_ID,
   buildDocContext,
   buildMessages,
@@ -896,6 +897,7 @@ export async function prepareWordChatStream(
       "word_chat_messages",
       timeZone,
       recordForUser,
+      chatCitationFormat(),
     );
     const { api_keys: configuredApiKeys, personalisation } = modelSettings;
     const apiKeys = { ...configuredApiKeys };
@@ -905,7 +907,7 @@ export async function prepareWordChatStream(
       nonce,
     );
     const wordSystemPrompt = [
-      buildWordChatSystemPrompt(args.clientToolsEnabled),
+      buildWordChatSystemPrompt(args.clientToolsEnabled, chatCitationFormat()),
       personalisationPrompt,
     ]
       .filter(Boolean)
@@ -928,6 +930,7 @@ export async function prepareWordChatStream(
       "replace",
       { timeZone, now: new Date(), userSentAt },
       recordForUser,
+      chatCitationFormat(),
     );
     const workflowStore = await buildWorkflowStore(userId, userEmail, db);
 

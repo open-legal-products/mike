@@ -1,7 +1,7 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PdfView } from "./PdfView";
-const mocks = vi.hoisted(() => ({ render: vi.fn(), stream: vi.fn(), result: {type:"pdf",buffer:new ArrayBuffer(4)}, waits: new Map<number, Promise<void>>(), docGate: null as Promise<void> | null, observe: vi.fn(), observer: null as IntersectionObserverCallback | null }));
+const mocks = vi.hoisted(() => ({ render: vi.fn(), stream: vi.fn(), pageText: new Map<number, string>(), result: {type:"pdf",buffer:new ArrayBuffer(4)}, waits: new Map<number, Promise<void>>(), docGate: null as Promise<void> | null, observe: vi.fn(), observer: null as IntersectionObserverCallback | null }));
 vi.mock("@/app/hooks/useFetchSingleDoc", () => ({useFetchSingleDoc: () => ({result:mocks.result, loading:false, error:null})}));
 vi.mock("./highlightQuote", async importOriginal => ({
     ...await importOriginal<typeof import("./highlightQuote")>(),
@@ -9,7 +9,7 @@ vi.mock("./highlightQuote", async importOriginal => ({
         getDocument: () => ({promise:(mocks.docGate ?? Promise.resolve()).then(() => ({numPages:100, getPage: async (number:number) => ({
             getViewport: () => ({width:100,height:100}),
             render: () => {mocks.render(number); return {promise:mocks.waits.get(number) ?? Promise.resolve(),cancel(){}};},
-            streamTextContent: () => {mocks.stream(number); return new ReadableStream({start(controller){controller.enqueue({items:[{str:`Page ${number} content`, transform:[1,0,0,10,0,0],width:80,height:10}]});controller.close();}});},
+            streamTextContent: () => {mocks.stream(number); return new ReadableStream({start(controller){controller.enqueue({items:[{str:mocks.pageText.get(number) ?? `Page ${number} content`, transform:[1,0,0,10,0,0],width:80,height:10}]});controller.close();}});},
         })})),destroy:async()=>{}}),
         TextLayer: class {
             static cleanup() {}
@@ -20,7 +20,7 @@ vi.mock("./highlightQuote", async importOriginal => ({
     }),
 }));
 beforeEach(() => {
-    vi.clearAllMocks(); mocks.waits.clear(); mocks.docGate = null;
+    vi.clearAllMocks(); mocks.pageText.clear(); mocks.waits.clear(); mocks.docGate = null;
     mocks.result={type:"pdf",buffer:new ArrayBuffer(4)};
     vi.stubGlobal("ResizeObserver", class {observe(){} disconnect(){}});
     vi.stubGlobal("IntersectionObserver", class {constructor(callback:IntersectionObserverCallback){mocks.observer=callback;} observe=mocks.observe; disconnect(){} });
@@ -44,6 +44,15 @@ describe("PDF page rendering", () => {
         await waitFor(() => expect(mocks.render).toHaveBeenCalledTimes(1));
         expect(mocks.render).toHaveBeenCalledWith(50);
         expect(mocks.stream).toHaveBeenCalledTimes(1);
+    });
+    it("opens a pinned passage at the second occurrence on the cited page", async () => {
+        mocks.pageText.set(2, "Rent is due. Rent is due.");
+        const view = render(<PdfView doc={{document_id:"doc", version_id:"v1"}}
+            quotes={[{page:2, quote:"Rent is due.", pdfTextOffset:9}]} />);
+        await waitFor(() => expect(view.container.querySelector(".pdf-text-highlight")).not.toBeNull());
+        const mark = view.container.querySelector(".pdf-text-highlight")!;
+        expect(mark.previousSibling?.textContent).toBe("Rent is due. ");
+        expect(mocks.render).toHaveBeenCalledWith(2);
     });
     it("searches a batch of missing quotes through text without painting the document", async () => {
         render(<PdfView doc={{document_id:"doc"}} quotes={[{quote:"absent one"},{quote:"absent two"}]} />);

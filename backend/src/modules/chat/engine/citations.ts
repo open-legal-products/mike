@@ -11,12 +11,14 @@ import {
   type SourceDocument,
   type SourceDocumentQuote,
 } from "../../../lib/sourceDocuments";
+import type { RawCitation } from "./inlineCitations";
 
 // ---------------------------------------------------------------------------
 // Internal citation parse types
 // ---------------------------------------------------------------------------
 
 type DocumentQuote = {
+  verification?: SourceDocumentQuote["verification"];
   page: number | string;
   quote: string;
   // Spreadsheet sources are located by cell instead of page: `sheet` is the
@@ -51,6 +53,18 @@ type ParsedCaseCitation = {
 export type ParsedCitation = ParsedDocumentCitation | ParsedCaseCitation;
 
 /** One citation entry as the model wrote it, or null when it is unusable. */
+/** Only server-resolved inline passages may supply their own source position. */
+export function normalizeInlineCitation(raw: RawCitation): ParsedCitation | null {
+  const citation = normalizeCitation(raw);
+  if (citation?.kind === "document") {
+    citation.quotes.forEach((quote, index) => {
+      const verification = raw.quotes?.[index]?.verification;
+      if (verification) quote.verification = verification;
+    });
+  }
+  return citation;
+}
+
 export function normalizeCitation(raw: unknown): ParsedCitation | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;
@@ -349,6 +363,7 @@ export function createCitation(
     docInfo?.filename ?? requestScopedDocument?.filename ?? citation.doc_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
     quote: quote.quote,
+    ...(quote.verification ? { verification: quote.verification } : {}),
     target: {
       page: quote.page,
       ...(quote.sheet ? { sheet: quote.sheet } : {}),

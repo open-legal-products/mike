@@ -32,7 +32,7 @@ interface Props {
     rounded?: ViewRounding;
 }
 
-type QuoteEntry = { page?: number; quote: string };
+type QuoteEntry = CitationQuote;
 
 const SIDE_PADDING = 20;
 const ZOOM_MIN = 0.5;
@@ -244,14 +244,14 @@ export function PdfView({
 
     const quoteList: QuoteEntry[] = useMemo(() => {
         if (quotes?.length)
-            return quotes.map((q) => ({ page: q.page, quote: q.quote }));
+            return quotes;
         if (quote) return [{ page: fallbackPage, quote }];
         return [];
     }, [quotes, quote, fallbackPage]);
 
     // Stable string key so effects can depend on quote-list identity
     const quoteKey = quoteList
-        .map((q) => `${q.page ?? ""}:${q.quote}`)
+        .map((q) => `${q.page ?? ""}:${q.pdfTextOffset ?? ""}:${q.quote}`)
         .join("|");
 
     const [containerWidth, setContainerWidth] = useState(0);
@@ -336,12 +336,14 @@ export function PdfView({
                 if (target) {
                     await target.ensureRendered();
                     if (pages !== renderedPagesRef.current || !isCurrent()) return null;
-                    if (await highlightQuote(target.textDivs, entry.quote, target.readingOrder)) {
+                    if (await highlightQuote(target.textDivs, entry.quote, target.readingOrder, entry.pdfTextOffset)) {
                         hits.set(index, entry.page!);
                         continue;
                     }
                 }
-                missing.push({entry, index});
+                // A pinned passage has one location. Searching other pages could
+                // select different boilerplate after a text-layer mismatch.
+                if (entry.pdfTextOffset === undefined) missing.push({entry, index});
             }
             if (missing.length) {
                 const matcher = createPdfQuoteMatcher(missing.map(({entry}) => entry.quote));

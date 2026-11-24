@@ -487,6 +487,28 @@ describe("createWordClientToolsAdapter", () => {
     expect(frames.some((f) => f.type === "doc_read")).toBe(true);
   });
 
+  it("hands the model a live read as presentLiveRead shapes it (inline passage tags)", async () => {
+    const { frames, write } = collectSse();
+    const seen: string[] = [];
+    const adapter = createWordClientToolsAdapter({
+      userId: "u1",
+      write,
+      nonce: "test-nonce",
+      presentLiveRead: (text) => {
+        seen.push(text);
+        return `{1}${text}`;
+      },
+    });
+    const execution = adapter.execute({ id: "t9", name: READ_ACTIVE_DOCUMENT_TOOL_NAME, input: {} });
+    submitClientToolResult(lastToolCallFrame(frames).tool_call_id as string, "u1", {
+      document: "Live body text",
+    });
+    const { content } = await execution;
+    expect(seen).toEqual(["Live body text"]);
+    expect(content).toContain("{1}Live body text");
+    expect(content).toContain("test-nonce");
+  });
+
   it("surfaces a client read failure as an error result", async () => {
     const { frames, write } = collectSse();
     const adapter = createWordClientToolsAdapter({ userId: "u1", write });

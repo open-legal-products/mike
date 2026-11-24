@@ -41,6 +41,7 @@ import {
     parseOptionalDisplayedDoc,
     parseOptionalModel,
     parseOptionalReasoning,
+    chatCitationFormat,
 } from "../chat/chat.service";
 import {
     generateAssistantChatTitle,
@@ -261,6 +262,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 : Promise.resolve();
 
             const { fullText, events, citations } = await runLLMStream({
+                citationFormat: chatCitationFormat(),
                 onActivity: run?.touch,
                 apiMessages,
                 docStore,

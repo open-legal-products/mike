@@ -30,6 +30,19 @@ function highlighted(container: HTMLElement): string[] {
 }
 
 describe("highlightQuote", () => {
+    it("selects the second identical passage and declines a stale page offset", async () => {
+        const spans = ["Rent is due.", "Rent is due."].map(text => {
+            const span = document.createElement("span");
+            span.textContent = text;
+            return span;
+        });
+        expect(await highlightQuote(spans, "Rent is due.", undefined, 9)).toBe(true);
+        expect(spans[0].querySelector(HIGHLIGHT)).toBeNull();
+        expect(spans[1].querySelector(HIGHLIGHT)).not.toBeNull();
+        expect(await highlightQuote(spans, "Rent is due.", undefined, 8)).toBe(false);
+        expect(spans[1].querySelector(HIGHLIGHT)).toBeNull();
+    });
+
     it("finds a quote that reads across a column-drawn table row", async () => {
         const { container, textDivs, readingOrder } = columnDrawnTable();
 

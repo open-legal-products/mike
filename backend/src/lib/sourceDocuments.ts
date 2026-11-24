@@ -52,11 +52,13 @@ function quoteVerificationValue(value: unknown) {
   const sourceExcerpt = stringValue(verification.source_excerpt);
   const startChar = numberValue(verification.start_char);
   const endChar = numberValue(verification.end_char);
+  const pdfOffset = verification.pdf_text_offset;
   return {
     verified: verification.verified,
     ...(sourceExcerpt ? { source_excerpt: sourceExcerpt } : {}),
     ...(startChar !== null ? { start_char: startChar } : {}),
     ...(endChar !== null ? { end_char: endChar } : {}),
+    ...(typeof pdfOffset === "number" && Number.isSafeInteger(pdfOffset) && pdfOffset >= 0 ? { pdf_text_offset: pdfOffset } : {}),
   };
 }
 

@@ -674,8 +674,13 @@ export function createWordClientToolsAdapter(params: {
   onCitationText?: (text: string) => void;
   /** Test seam; production scales apply deadlines via applyTimeoutMsFor. */
   timeoutMs?: number;
+  /**
+   * The text a live read hands the model, given the document's text. With
+   * inline citations it is the text tagged with passage numbers.
+   */
+  presentLiveRead?: (text: string) => string;
 }): ClientToolsAdapter {
-  const { userId, write, signal, nonce, timeoutMs } = params;
+  const { userId, write, signal, nonce, timeoutMs, presentLiveRead } = params;
 
   // Message-wide flat ordinal for this turn's tool edits. One adapter is one
   // chat request, and the pane counts the same way from the same base.
@@ -869,7 +874,8 @@ export function createWordClientToolsAdapter(params: {
     // The live body is untrusted document text, exactly like a stored
     // document's body returned by read_document — same spotlight fence.
     params.onCitationText?.(documentText);
-    const body = nonce ? spotlight(documentText, nonce) : documentText;
+    const shown = presentLiveRead ? presentLiveRead(documentText) : documentText;
+    const body = nonce ? spotlight(shown, nonce) : shown;
     return {
       content: truncated
         ? `${body}\n\n[Document truncated at ${MAX_DOCUMENT_CONTEXT_CHARS} characters.]`
