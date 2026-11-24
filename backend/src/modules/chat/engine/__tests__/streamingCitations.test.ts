@@ -182,10 +182,13 @@ describe("runLLMStream citation streaming", () => {
           input: { citations: [{ ref, doc_id: "doc-0", quotes: [{ quote: "Rent is due monthly" }] }] },
         }]);
       }
+      await params.runTools([{
+        id: "withdraw", name: "cite_sources", input: { citations: [], drop_refs: [1, 2] },
+      }]);
       return { fullText: "" };
     });
     const frames: { line: string; replay?: () => boolean }[] = [];
-    await runLLMStream({
+    const result = await runLLMStream({
       model: "gemini-3.8-flash",
       apiMessages: [{ role: "user", content: "Rent?" }],
       docStore: new Map([
@@ -198,11 +201,13 @@ describe("runLLMStream citation streaming", () => {
     } as Parameters<typeof runLLMStream>[0]);
 
     const citationFrames = frames.filter((f) => f.line.includes('"type":"citations"'));
-    expect(citationFrames.map((f) => JSON.parse(f.line.slice(6)).status)).toEqual([
-      "partial",
-      "partial",
-      "final",
+    const snapshots = citationFrames.map(f => JSON.parse(f.line.slice(6)));
+    expect(snapshots.map(f => f.status)).toEqual(["partial", "partial", "partial", "final"]);
+    expect(snapshots.map(f => f.citations.map((row: { ref: number }) => row.ref))).toEqual([
+      [1], [1, 2], [], [],
     ]);
+    expect(result.citations).toEqual([]);
+    expect(result.events).toContainEqual(expect.objectContaining({ removed_refs: [1, 2] }));
     const replayed = citationFrames.filter((f) => f.replay?.() ?? true);
     expect(replayed.map((f) => JSON.parse(f.line.slice(6)).status)).toEqual(["final"]);
   });

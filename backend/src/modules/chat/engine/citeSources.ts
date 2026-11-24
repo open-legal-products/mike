@@ -37,7 +37,7 @@ const MAX_QUOTES_PER_CITATION = 3;
 const MAX_ECHOED_QUOTE_CHARS = 160;
 
 const TOOL_DESCRIPTION =
-  "Record the passages your answer will cite. Call it after your research and BEFORE you write the answer, with one entry per [N] marker the answer will contain, then write the answer placing those markers. Each quote is checked against its source and the result lists any that were not found, so you can correct them first. Calling it again adds entries; an entry whose ref was already recorded replaces it. Do not call it when the answer cites nothing.";
+  "Record the passages your answer will cite. Call it after your research and BEFORE you write the answer, with one entry per [N] marker the answer will contain, then write the answer placing those markers. Each quote is checked against its source and the result lists any that were not found, so you can correct them first. To drop a claim, pass its refs in drop_refs, with citations: [] if dropping only. Calling it again adds entries; an entry whose ref was already recorded replaces it. Skip this call if there is nothing to record or withdraw.";
 
 const REF_PROPERTY = {
   type: "integer",
@@ -58,9 +58,14 @@ function citeSourcesTool(
       parameters: {
         type: "object",
         properties: {
+          drop_refs: {
+            type: "array",
+            maxItems: MAX_CITATIONS,
+            items: { type: "integer", minimum: 1 },
+            description: "Previously recorded refs to remove before recording the supplied citations.",
+          },
           citations: {
             type: "array",
-            minItems: 1,
             maxItems: MAX_CITATIONS,
             description:
               "One entry per citation marker, in the order the markers first appear in the answer.",
@@ -188,7 +193,7 @@ const echo = (quote: string) =>
 
 function entryRef(raw: unknown): number | null {
   const ref = (raw as { ref?: unknown } | null)?.ref;
-  return typeof ref === "number" && Number.isInteger(ref) ? ref : null;
+  return typeof ref === "number" && Number.isSafeInteger(ref) ? ref : null;
 }
 
 const isIndex = (value: unknown): value is number =>
@@ -247,7 +252,7 @@ export function documentCitations(deps: DocumentCitationDeps): CitationKind {
         return {
           ref: entryRef(raw),
           error:
-            "Each entry needs an integer ref, a doc_id or a cluster_id, and at least one quote.",
+            "Each entry needs a positive integer ref, a doc_id or a cluster_id, and at least one quote.",
         };
       }
       const unknown = unknownSource(parsed, deps);
@@ -333,7 +338,7 @@ export function tabularCitations(store: TabularCellStore): CitationKind {
         return {
           ref,
           error:
-            "Each entry needs an integer ref, a col_index and row_index, and a quote.",
+            "Each entry needs a positive integer ref, a col_index and row_index, and a quote.",
         };
       }
       const column = store.columns[col];
@@ -426,11 +431,19 @@ export function createCitationRecorder(kind: CitationKind) {
   const record = async (
     input: unknown,
   ): Promise<{ content: string; event: CitationsRecordedEvent }> => {
-    const entries = (input as { citations?: unknown } | null)?.citations;
-    if (!Array.isArray(entries) || entries.length === 0) {
+    const args = input as { citations?: unknown; drop_refs?: unknown } | null;
+    const entries = args?.citations;
+    const { drop_refs: drop = [] } = args ?? {};
+    if (
+      !Array.isArray(entries) ||
+      !Array.isArray(drop) ||
+      drop.length > MAX_CITATIONS ||
+      !drop.every(ref => Number.isSafeInteger(ref) && ref > 0) ||
+      (entries.length === 0 && drop.length === 0)
+    ) {
       return {
         content: JSON.stringify({
-          error: `Pass a non-empty citations array: one entry per [N] marker, each with ${kind.entryShape}.`,
+          error: `Pass a non-empty citations array: one entry per [N] marker, each with ${kind.entryShape}, or citations: [] with positive integer drop_refs (up to ${MAX_CITATIONS}).`,
         }),
         // Shown as a call that recorded nothing.
         event: {
@@ -448,6 +461,7 @@ export function createCitationRecorder(kind: CitationKind) {
     // The cap counts citations, not entries, so invalid entries cannot
     // crowd out a valid one.
     const refsAfterCall = new Set(byRef.keys());
+    for (const ref of drop) refsAfterCall.delete(ref);
     for (const raw of entries) {
       const result = kind.build(raw);
       if ("error" in result) {
@@ -467,6 +481,10 @@ export function createCitationRecorder(kind: CitationKind) {
     }
 
     const { citations: verified, notFound } = await kind.verify([...built.values()]);
+    const removed: number[] = [];
+    for (const ref of drop) {
+      if (byRef.delete(ref) && !built.has(ref)) removed.push(ref);
+    }
     for (const citation of verified) byRef.set(citation.ref, citation);
 
     const refs = [...byRef.keys()].sort((a, b) => a - b);
@@ -474,7 +492,7 @@ export function createCitationRecorder(kind: CitationKind) {
     const notes: string[] = [];
     if (notFound.length) {
       notes.push(
-        "Some quotes were not found in their source. Call cite_sources again with the same ref and a quote copied exactly from the source, or drop the claim.",
+        "Some quotes were not found in their source. Call cite_sources again with the same ref and a quote copied exactly from the source, or drop the claim and remove its ref with drop_refs.",
       );
     }
     if (rejected.length) {
@@ -500,6 +518,7 @@ export function createCitationRecorder(kind: CitationKind) {
       event: {
         type: "citations_recorded",
         refs: [...new Set(thisCall.map((c) => c.ref))],
+        ...(removed.length ? { removed_refs: removed } : {}),
         sources: uniqueSources(thisCall, kind.sourceOf),
         quotes_not_found: notFound.length,
         rejected: rejected.length,

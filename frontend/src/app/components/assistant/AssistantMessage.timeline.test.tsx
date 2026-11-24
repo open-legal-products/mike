@@ -757,6 +757,17 @@ describe("AssistantMessage citations", () => {
         expect(screen.getByText("Companies Act 2006")).toBeVisible();
     });
 
+    it("labels a withdrawal and keeps its former source out of the action buttons", () => {
+        const removal = {
+            type: "citations_recorded" as const, refs: [], sources: [], removed_refs: [1],
+            quotes_not_found: 0, rejected: 0,
+        };
+        render(<AssistantMessage isStreaming events={[events[0], removal, events[1]]} citations={[]} onOpenCitationSource={vi.fn()} />);
+        fireEvent.click(screen.getByRole("button", { name: /2 steps/ }));
+        expect(screen.getByText("Removed 1 citation")).toBeVisible();
+        expect(screen.queryByRole("button", { name: citation.filename })).toBeNull();
+    });
+
     it("shows a citations step in progress, and one the turn stopped", () => {
         const step = (state: { isStreaming?: boolean; interrupted?: boolean }): AssistantEvent => ({
             type: "citations_recorded", refs: [], sources: [], quotes_not_found: 0, rejected: 0, ...state,

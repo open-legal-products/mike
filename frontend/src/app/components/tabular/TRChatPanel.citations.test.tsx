@@ -77,6 +77,23 @@ describe("TRChatPanel citations", () => {
         vi.restoreAllMocks();
     });
 
+    it.each([{ type: "cancelled" }, { type: "error", message: "Interrupted" }])(
+        "finishes an outstanding recording step on $type", async terminal => {
+            vi.mocked(streamTabularChat).mockImplementation(async () => sseResponse([
+                JSON.stringify({ type: "chat_id", chatId: "chat-9" }),
+                JSON.stringify({ type: "citations_recorded_start" }),
+                JSON.stringify(terminal),
+            ]));
+            const user = userEvent.setup();
+            render(<TRChatPanel reviewId="review-1" onCitationClick={vi.fn()} />);
+            await user.click(await screen.findByRole("button", { name: "Ask" }));
+            const toggle = await screen.findByRole("button", { name: /step/i });
+            if (!screen.queryByText("Citation recording stopped")) await user.click(toggle);
+            expect(await screen.findByText("Citation recording stopped")).toBeVisible();
+            expect(screen.queryByText("Recording citations...")).toBeNull();
+        },
+    );
+
     it("shows the recorded citations as a step whose source opens the cited cell", async () => {
         const cell = {
             type: "tabular_citation",

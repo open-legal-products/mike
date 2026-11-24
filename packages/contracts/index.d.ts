@@ -445,6 +445,8 @@ export type TextCardEvent = {
  */
 export type CitationsRecordedEvent = {
   type: "citations_recorded";
+  /** Previously recorded refs this call removed. */
+  removed_refs?: number[];
   /** The refs this call recorded, in ref order. */
   refs: number[];
   /**

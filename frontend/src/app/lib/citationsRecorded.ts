@@ -30,6 +30,9 @@ export function citationsRecordedEvent(
         refs: Array.isArray(data.refs)
             ? data.refs.filter((ref): ref is number => typeof ref === "number")
             : [],
+        ...(Array.isArray(data.removed_refs) ? {
+            removed_refs: data.removed_refs.filter((ref): ref is number => typeof ref === "number"),
+        } : {}),
         sources: Array.isArray(data.sources)
             ? data.sources.flatMap((raw: unknown) => {
                   const source = raw as Record<string, unknown> | null;
@@ -63,6 +66,7 @@ export function currentCitationSteps(events: readonly AssistantEvent[]) {
     for (const event of events) {
         if (event.type !== "citations_recorded") continue;
         if (event.isStreaming) return new Map<number, CitationsRecordedEvent>();
+        for (const ref of event.removed_refs ?? []) owners.delete(ref);
         for (const ref of event.refs) owners.set(ref, event);
     }
     return owners;
