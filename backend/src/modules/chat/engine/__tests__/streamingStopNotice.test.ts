@@ -14,7 +14,7 @@ vi.mock("../../../../lib/mcpConnectors", () => ({
 }));
 vi.mock("../tools/toolDispatcher", () => ({
   runToolCalls: vi.fn(async () =>
-    (await import("../tools/toolBatchResult")).emptyToolCallBatchResult(),
+    (await import("../tools/toolBatchResult.js")).emptyToolCallBatchResult(),
   ),
 }));
 vi.mock("../../../../lib/integrations/googleDrive", () => ({ buildGoogleDriveTools: async () => [] }));

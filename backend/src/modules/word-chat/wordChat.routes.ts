@@ -22,6 +22,7 @@ import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import {
+  ACTIVE_WORD_DOCUMENT_ID,
   AssistantStreamError,
   assistantStreamErrorPayload,
   buildStoppedAssistantEvent,
@@ -854,6 +855,12 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       ...(clientToolsEnabled
         ? {
             clientTools: createWordClientToolsAdapter({
+              onCitationText: (text) => {
+                docStore.set(ACTIVE_WORD_DOCUMENT_ID, {
+                  storage_path: `inline:word-document:${parsedDocumentId.value}`,
+                  file_type: "text/markdown", filename: activeDocumentName, inline_text: text,
+                });
+              },
               userId,
               write: writeClientToolFrame,
               signal: stream.signal,

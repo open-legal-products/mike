@@ -317,16 +317,14 @@ export function createCitation(
     ? resolveDocLabel(citation.doc_id, docStore, docIndex)
     : null;
   const sourceEntry = sourceLabel ? docStore?.get(sourceLabel) : undefined;
-  if (docStore && sourceLabel && sourceEntry?.external_source) {
-    // A title names a source only when it names one document: with two
-    // sharing it, the first would take quotes meant for the other.
-    if (!docStore.has(citation.doc_id) && citation.doc_id === sourceEntry.filename) {
-      let sameTitle = 0;
-      for (const entry of docStore.values()) {
-        if (entry.filename === citation.doc_id) sameTitle += 1;
-      }
-      if (sameTitle > 1) return null;
+  // A title shared by two sources cannot identify which one owns the quote.
+  if (docStore && !docStore.has(citation.doc_id) && citation.doc_id === sourceEntry?.filename) {
+    let matches = 0;
+    for (const entry of docStore.values()) {
+      if (entry.filename === citation.doc_id && ++matches > 1) return null;
     }
+  }
+  if (sourceLabel && sourceEntry?.external_source) {
     return createExternalSourceCitation(
       citation,
       sourceLabel,
@@ -335,7 +333,8 @@ export function createCitation(
     );
   }
 
-  const docInfo = resolveDoc(citation.doc_id, docIndex);
+  const label = sourceLabel ?? citation.doc_id;
+  const docInfo = resolveDoc(label, docIndex);
   // A provider's document id cited without that source having been read in
   // this request has no text to verify against: it never becomes a citation.
   if (
@@ -344,8 +343,8 @@ export function createCitation(
   ) {
     return null;
   }
-  const requestScopedDocument = docStore?.get(citation.doc_id);
-  const documentId = docInfo?.document_id ?? citation.doc_id;
+  const requestScopedDocument = docStore?.get(label);
+  const documentId = docInfo?.document_id ?? label;
   const filename =
     docInfo?.filename ?? requestScopedDocument?.filename ?? citation.doc_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
@@ -369,7 +368,7 @@ export function createCitation(
       version_id: docInfo?.version_id ?? null,
       version_number: docInfo?.version_number ?? null,
     },
-    doc_id: citation.doc_id,
+    doc_id: label,
     document_id: docInfo?.document_id,
     version_id: docInfo?.version_id ?? null,
     version_number: docInfo?.version_number ?? null,

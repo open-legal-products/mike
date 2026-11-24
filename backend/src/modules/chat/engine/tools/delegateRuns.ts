@@ -73,6 +73,10 @@ export const REMOVED_RESULT = "[earlier result removed: document no longer avail
 export const actionLabel = (item: ConnectorApprovalItem) =>
     `${item.title} on ${item.connector_name}`;
 
+function citationToolRecord(): SubagentRecord {
+    return { tool: "cite_sources", input: "{}", result: "Read the sources again before citing them.", documents: [] };
+}
+
 export function toolRecord(
     call: NormalizedToolCall,
     result: string,
@@ -81,6 +85,11 @@ export function toolRecord(
     /** The request-scoped source this call's result registered, if any. */
     externalSourceHandle?: string,
 ): SubagentRecord {
+    // Both the model input and the recorder response can quote source text.
+    // A resumed run gets only the tool name and must read its sources again.
+    if (call.name === "cite_sources") {
+        return citationToolRecord();
+    }
     // A project-wide search reads documents its input does not name.
     const named =
         call.name === "find_documents" && call.input.scope !== "document"
@@ -161,6 +170,7 @@ async function withoutUnavailableDocuments(
     return {
         ...transcript,
         records: transcript.records.flatMap((record) => {
+            if (record.tool === "cite_sources") return [citationToolRecord()];
             if (!DOCUMENT_TOOL_NAMES.has(record.tool)) return [record];
             if (!record.documents.length) return [];
             return [

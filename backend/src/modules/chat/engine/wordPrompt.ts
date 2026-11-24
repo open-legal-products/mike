@@ -82,20 +82,20 @@ For requested changes to the active document, call apply_word_edits once with al
 - Never emit an <EDITS> block; in this mode it is inert text and the edits would not reach the document. Follow the call with a concise prose summary, and do not repeat the edits in prose. If proposing no change, do not call apply_word_edits.
 - Do not use edit_document for the active Word document; its edits are applied through apply_word_edits.`;
 
-const WORD_CHAT_CITATIONS_SECTION = `ACTIVE DOCUMENT CITATIONS
+const wordChatCitations = (readTools: string) => `ACTIVE DOCUMENT CITATIONS
 - Record citations with cite_sources BEFORE writing the answer that relies on them: one entry per marker, numbered 1 through N in first-appearance order, for example {"citations":[{"ref":1,"doc_id":"${ACTIVE_WORD_DOCUMENT_ID}","quotes":[{"quote":"exact verbatim text"}]}]}. Use the exact doc_id above.
 - If the result lists quotes it could not find or entries it rejected, call cite_sources again with corrected entries under the same refs, or leave those claims out. Then put each marker [1], [2], etc. immediately after the claim it supports.
-- Copy each quote exactly from one contiguous paragraph passage seen via read_document in this response. Keep it at most 200 characters, exclude renderer-only markers, and make it unique enough for Word to locate. Cite key support, not every sentence. Never list the citations or their JSON in the answer; skip cite_sources when nothing is cited.`;
+- Copy each quote exactly from one contiguous paragraph passage seen via ${readTools} in this response. Keep it at most 200 characters, exclude renderer-only markers, and make it unique enough for Word to locate. Cite key support, not every sentence. Never list the citations or their JSON in the answer; skip cite_sources when nothing is cited.`;
 
 const WORD_CHAT_INSTRUCTIONS = `${WORD_CHAT_SHARED_PREAMBLE}
 ${WORD_CHAT_EDITS_SECTION}
 
-${WORD_CHAT_CITATIONS_SECTION}`;
+${wordChatCitations("read_document")}`;
 
 const WORD_CHAT_CLIENT_TOOLS_INSTRUCTIONS = `${WORD_CHAT_SHARED_PREAMBLE}
 ${WORD_CHAT_CLIENT_TOOLS_EDITS_SECTION}
 
-${WORD_CHAT_CITATIONS_SECTION}`;
+${wordChatCitations("read_document or the latest read_active_document; after editing, refresh with read_active_document")}`;
 
 /**
  * Word-only system context. This value is added directly to the LLM system

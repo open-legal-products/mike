@@ -453,7 +453,9 @@ describe("active Word document context", () => {
             preamble(streamed, "- Never show or explain the raw <EDITS>"),
         );
         expect(citations(tools)).toContain("cite_sources");
-        expect(citations(tools)).toBe(citations(streamed));
+        expect(citations(tools)).toContain("latest read_active_document");
+        expect(citations(streamed)).toContain("seen via read_document");
+        expect(citations(streamed)).not.toContain("read_active_document");
     });
 
     it("keeps the full edit vocabulary in the client-tools variant", () => {

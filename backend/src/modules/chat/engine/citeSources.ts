@@ -344,7 +344,7 @@ export function tabularCitations(store: TabularCellStore): CitationKind {
           error: `COL:${col} ROW:${row} is not a cell of this review.`,
         };
       }
-      const cell = store.cells.get(`${col}:${document.id}`);
+      const cell = store.cells.get(`${column.index}:${document.id}`);
       if (cell === undefined) {
         return {
           ref,
@@ -370,8 +370,8 @@ export function tabularCitations(store: TabularCellStore): CitationKind {
       const notFound: NotFound[] = [];
       const citations = built.map((citation) => {
         const document = store.documents[citation.row_index as number];
-        const summary =
-          store.cells.get(`${citation.col_index}:${document.id}`)?.summary ?? "";
+        const column = store.columns[citation.col_index as number];
+        const summary = store.cells.get(`${column.index}:${document.id}`)?.summary ?? "";
         const result = createQuoteVerifier(summary)(citation.quote as string);
         if (!result.verified) {
           notFound.push({ ref: citation.ref, quote: echo(citation.quote as string) });
@@ -402,8 +402,13 @@ function uniqueSources(
   sourceOf: CitationKind["sourceOf"],
 ): CitedSource[] {
   const byKey = new Map<string, CitedSource>();
-  for (const source of citations.map(sourceOf)) {
-    const key = `${source.type}\u0000${source.name}`;
+  for (const citation of citations) {
+    const source = sourceOf(citation);
+    const key = citation.type === "tabular_citation"
+      ? JSON.stringify(["row", citation.row_index])
+      : citation.kind === "case"
+        ? JSON.stringify(["case", citation.cluster_id])
+        : JSON.stringify(["document", citation.document_id ?? citation.doc_id, citation.version_id ?? citation.version_number ?? null]);
     if (!byKey.has(key)) byKey.set(key, source);
   }
   return [...byKey.values()];
@@ -439,7 +444,7 @@ export function createCitationRecorder(kind: CitationKind) {
     }
 
     const rejected: { ref: number | null; error: string }[] = [];
-    const built: RecordedCitation[] = [];
+    const built = new Map<number, RecordedCitation>();
     // The cap counts citations, not entries, so invalid entries cannot
     // crowd out a valid one.
     const refsAfterCall = new Set(byRef.keys());
@@ -458,10 +463,10 @@ export function createCitationRecorder(kind: CitationKind) {
         continue;
       }
       refsAfterCall.add(ref);
-      built.push(result.citation);
+      built.set(ref, result.citation);
     }
 
-    const { citations: verified, notFound } = await kind.verify(built);
+    const { citations: verified, notFound } = await kind.verify([...built.values()]);
     for (const citation of verified) byRef.set(citation.ref, citation);
 
     const refs = [...byRef.keys()].sort((a, b) => a - b);

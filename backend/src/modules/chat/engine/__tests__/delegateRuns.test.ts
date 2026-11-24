@@ -238,3 +238,18 @@ describe("subagent run store failures", () => {
     errorSpy.mockRestore();
   });
 });
+
+
+it("drops source text in nested citation arguments, echoed errors and legacy continuation records", async () => {
+  const quote = "synthetic private provider quotation";
+  const call = { id: "c", name: "cite_sources", input: {
+    citations: [{ ref: 1, cluster_id: 42, quotes: [{ quote }] }],
+  } };
+  const echo = JSON.stringify({ quotes_not_found: [{ ref: 1, quote }] });
+  const fresh = toolRecord(call, echo, new Map(), {});
+  expect(JSON.stringify(fresh)).not.toContain(quote);
+  const legacy = { ...fresh, input: JSON.stringify(call.input), result: echo };
+  const data = db({ transcript: { ...transcript, records: [legacy] } });
+  const store = createSubagentRunStore({ db: data.client, userId: "u", chatId: "c", messageId: "m" });
+  expect((await store.load("d"))?.records).toEqual([fresh]);
+});
