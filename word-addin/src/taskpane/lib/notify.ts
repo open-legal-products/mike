@@ -46,19 +46,15 @@ import {
 } from "./supportHandoff";
 
 export {
-  SUPPORT_EMAIL,
   UserVisibleError,
-  buildSupportMailto,
   describeError,
-  isAbortError,
-  isNetworkError,
   type UserErrorKind,
   type UserFacingError,
 } from "@mike/client";
 export { notifyInfo, notifySuccess } from "@mike/client";
 
 /** Which client the support email came from. */
-export const SUPPORT_PRODUCT = "word-addin";
+const SUPPORT_PRODUCT = "word-addin";
 
 export interface NotifyErrorOptions extends SharedNotifyErrorOptions {
   /** Short screen name, e.g. "Workflows". Falls back to the pane URL. */
@@ -145,7 +141,7 @@ export function supportMailtoFor(
  * independently and the user is told what actually happened. If neither
  * worked they still get the address and the block, on screen, to copy by hand.
  */
-export async function handOffToSupport(
+async function handOffToSupport(
   error: SupportErrorFields,
   options: { note?: string; page?: string } = {},
 ): Promise<void> {

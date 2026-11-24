@@ -90,7 +90,7 @@ export function ChatHistoryList({
   );
 }
 
-export function ChatHistoryListView({
+function ChatHistoryListView({
   pageSize,
   pagination,
   search = "",

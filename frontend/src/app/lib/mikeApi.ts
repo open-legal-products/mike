@@ -179,13 +179,11 @@ export class MikeApiError extends Error {
 export const INTERNAL_ERROR_MESSAGE = "Something went wrong. Please try again.";
 const MALFORMED_ERROR_RESPONSE_MESSAGE =
     "The request could not be completed. Please try again.";
-// The 5xx codes the server side already reported, and their fixed messages,
-// are shared with the Word add-in (packages/client); they are re-exported
-// here because API consumers know them as mikeApi's answers.
+// The fixed messages for the 5xx codes the server side already reported are
+// shared with the Word add-in (packages/client); they are re-exported here
+// because API consumers know them as mikeApi's answers.
 export {
-    SCHEMA_OUT_OF_DATE_CODE,
     SCHEMA_OUT_OF_DATE_MESSAGE,
-    UPSTREAM_UNAVAILABLE_CODE,
     UPSTREAM_UNAVAILABLE_MESSAGE,
     reportedUpstreamMessage,
 } from "@mike/client";

@@ -20,7 +20,7 @@ import {
 import type { ApiKeyStatus } from "../types";
 
 /** GET /user/api-keys' flat map in the shape the shared rules read. */
-export function providerKeyStates(status: ApiKeyStatus): ProviderKeyStates {
+function providerKeyStates(status: ApiKeyStatus): ProviderKeyStates {
   const { sources: _sources, enabled = {}, ...configured } = status;
   const providers = new Set([
     ...Object.keys(configured),
