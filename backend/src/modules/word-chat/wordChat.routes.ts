@@ -22,11 +22,11 @@ import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import {
+  ACTIVE_WORD_DOCUMENT_ID,
   AssistantStreamError,
   assistantStreamErrorPayload,
   buildStoppedAssistantEvent,
   buildStoppedAssistantMessage,
-  extractCitations,
   isAbortError,
   parseChatMessages,
   parseOptionalChatId,
@@ -855,6 +855,12 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       ...(clientToolsEnabled
         ? {
             clientTools: createWordClientToolsAdapter({
+              onCitationText: (text) => {
+                docStore.set(ACTIVE_WORD_DOCUMENT_ID, {
+                  storage_path: `inline:word-document:${parsedDocumentId.value}`,
+                  file_type: "text/markdown", filename: activeDocumentName, inline_text: text,
+                });
+              },
               userId,
               write: writeClientToolFrame,
               signal: stream.signal,
@@ -880,7 +886,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     // A stream that returns after the turn was stopped (citation checks, or a
     // provider or tool that ignored the abort) must not be saved as a
     // completed answer: the abort handler below stores the stop outcome.
-    throwIfTurnStopped(stream.signal, { fullText, events });
+    throwIfTurnStopped(stream.signal, { fullText, events, citations });
     const persistedEvents = await normalizeAssistantEvents(
       stripTransientAssistantEvents(events),
     );
@@ -902,7 +908,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       });
       // A turn stopped while the save was pending ends as stopped, not as a
       // save failure (the stop path saves it again).
-      throwIfTurnStopped(stream.signal, { fullText, events });
+      throwIfTurnStopped(stream.signal, { fullText, events, citations });
       write(
         `data: ${JSON.stringify({
           type: "error",
@@ -918,7 +924,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     // The answer is saved, but the turn may have been stopped while it was
     // being saved. A stop seen here still ends it as stopped: no memory
     // consolidation, and the stored answer gets the stop label.
-    throwIfTurnStopped(stream.signal, { fullText, events });
+    throwIfTurnStopped(stream.signal, { fullText, events, citations });
       // Local Word chats deliberately have no durable transcript. Only a cloud
       // turn can be curated later, once its reserved assistant row is complete.
       if (
@@ -997,10 +1003,8 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             }
           : buildStoppedAssistantMessage({
               stopReason: run?.stopReason,
-              fullText: error.fullText,
               events: error.events,
-              buildCitations: (fullText) =>
-                extractCitations(fullText, docIndex, docStore),
+              citations: error.citations,
             });
         const partialEvents = normalizedAnswer
           ? partial.events
@@ -1035,10 +1039,9 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       error instanceof AssistantStreamError
         ? stripTransientAssistantEvents(error.events)
         : [{ type: "error" as const, message }];
-    const errorFullText =
-      error instanceof AssistantStreamError ? error.fullText : "";
     try {
-      const citations = extractCitations(errorFullText, docIndex, docStore);
+      const citations =
+        error instanceof AssistantStreamError ? error.citations : [];
       const normalizedErrorEvents = await normalizeAssistantEvents(errorEvents);
       const saveError = await updateAssistantMessage(
         normalizedErrorEvents.length ? normalizedErrorEvents : null,

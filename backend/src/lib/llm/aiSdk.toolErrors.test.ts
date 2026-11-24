@@ -110,7 +110,7 @@ describe("success path is untouched", () => {
   });
 
   it("delivers a terminal notice separately from model text when the caller supports it", async () => {
-    const truncated = 'Answer [1].\n<CITATIONS>[{"ref":1,"quote":"cut';
+    const truncated = "Answer [1] that was cut mid-sen";
     const model = await makeModel([step(...text(truncated), finish("length"))]);
     const callbacks = { onContentDelta: vi.fn(), onStopNotice: vi.fn() };
 

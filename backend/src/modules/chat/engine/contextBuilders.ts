@@ -34,7 +34,6 @@ import {
   userMessageTimeStamp,
 } from "../../../lib/userTime";
 import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
-import { parseCitations, createCitation, limitCitationPayload } from "./citations";
 import type { AssistantEvent } from "@mike/contracts";
 import { queryFailureCause } from "../../../lib/batchedQuery";
 import { activeAssistantPrompts, catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
@@ -406,21 +405,23 @@ const MAX_REPLAYED_CITATIONS = 40;
 const MAX_REPLAYED_QUOTE_CHARS = 600;
 
 /**
- * The <CITATIONS> block the previous answer ended with, rebuilt from what was
- * stored. The block is stripped from the stored prose, which leaves the
- * answer's [N] markers pointing at nothing: the model then reads its own
- * earlier answer as unsupported and withdraws it. Only document citations
- * whose document is still in this turn's index are replayed, under the
- * handle that document has now.
+ * What the previous answer's [N] markers cite, rebuilt from what was stored,
+ * as cite_sources lines of the tool-activity record. Without them the
+ * markers point at nothing, and a model then reads its own earlier answer as
+ * unsupported and withdraws it. They go in the record, not in the answer:
+ * a model copies what it sees in its own answers, and must not learn to
+ * write citations into one. Only document citations whose document is still
+ * in this turn's index are replayed, under the handle that document has now.
  */
-export function priorCitationsBlock(
+export function priorCitationLines(
   stored: unknown,
   slugByDocumentId: ReadonlyMap<string, string>,
-): string | null {
-  if (!Array.isArray(stored)) return null;
-  const entries: { ref: number; doc_id: string; quotes: unknown[] }[] = [];
+  untrustedRef: (value: unknown) => string,
+): string[] {
+  if (!Array.isArray(stored)) return [];
+  const lines: string[] = [];
   for (const citation of stored as Record<string, unknown>[]) {
-    if (entries.length >= MAX_REPLAYED_CITATIONS) break;
+    if (lines.length >= MAX_REPLAYED_CITATIONS) break;
     if (!citation || typeof citation !== "object") continue;
     if (typeof citation.ref !== "number") continue;
     const slug =
@@ -431,25 +432,23 @@ export function priorCitationsBlock(
     const quotes = (citation.quotes as Record<string, unknown>[]).flatMap(
       (quote) => {
         if (!quote || typeof quote.quote !== "string") return [];
-        const text = quote.quote.slice(0, MAX_REPLAYED_QUOTE_CHARS);
-        const page =
-          typeof quote.page === "number" || typeof quote.page === "string"
-            ? { page: quote.page }
-            : {};
-        const cell =
-          typeof quote.sheet === "string" && typeof quote.cell === "string"
-            ? { sheet: quote.sheet, cell: quote.cell }
-            : {};
-        return [{ ...page, ...cell, quote: text }];
+        const text = untrustedRef(quote.quote.slice(0, MAX_REPLAYED_QUOTE_CHARS));
+        if (typeof quote.sheet === "string" && typeof quote.cell === "string") {
+          return [
+            `sheet ${untrustedRef(quote.sheet)} cell ${untrustedRef(quote.cell)}: ${text}`,
+          ];
+        }
+        // Pages were normalized to a number or "N-M" when cited.
+        const page = String(quote.page ?? "");
+        return /^\d+(?:\s*-\s*\d+)?$/.test(page)
+          ? [`page ${page}: ${text}`]
+          : [text];
       },
     );
     if (quotes.length === 0) continue;
-    entries.push({ ref: citation.ref, doc_id: slug, quotes });
+    lines.push(`- cite_sources → [${citation.ref}] ${slug}, ${quotes.join("; ")}`);
   }
-  if (entries.length === 0) return null;
-  // A quote is document text: it must not be able to close the block.
-  const json = JSON.stringify(entries, null, 2).replace(/</g, "\\u003c");
-  return `<CITATIONS>\n${json}\n</CITATIONS>`;
+  return lines;
 }
 
 export async function enrichWithPriorEvents(
@@ -697,6 +696,11 @@ export async function enrichWithPriorEvents(
       `- approved ${approvalLabels.get(id) ?? "action"} has no recorded outcome. Tell the user to check the connected service before trying again; do not retry it yourself.`,
     );
   }
+  if (recordForUser) {
+    lines.push(
+      ...priorCitationLines(lastRow?.citations, slugByDocumentId, untrustedRef),
+    );
+  }
   if (rejectedApprovalSeen) {
     lines.push(
       "- Instruction: do not retry a rejected action unless the user asks for it again.",
@@ -707,10 +711,7 @@ export async function enrichWithPriorEvents(
       "- Instruction: do not ask for any skipped input again. If drafting or editing a document, insert a descriptive placeholder in square brackets wherever a skipped value is required.",
     );
   }
-  const citations = recordForUser
-    ? priorCitationsBlock(lastRow?.citations, slugByDocumentId)
-    : null;
-  if (lines.length === 0 && !citations) return messages;
+  if (lines.length === 0) return messages;
 
   let lastAssistantIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -745,7 +746,6 @@ export async function enrichWithPriorEvents(
     ...target,
     content:
       (target.content ?? "") +
-      (citations ? `\n\n${citations}` : "") +
       // Nothing follows the answer (a continuation): keep the record with it.
       (record && nextUserIdx < 0 ? `\n\n${record}` : ""),
   };
@@ -1007,17 +1007,6 @@ export async function loadUserMessageSentTimes(
   return times;
 }
 
-export function extractCitations(
-  fullText: string,
-  docIndex: DocIndex,
-  docStore?: DocStore,
-): unknown[] {
-  return limitCitationPayload(
-    parseCitations(fullText)
-      .map((c) => createCitation(c, docIndex, undefined, docStore))
-      .filter((citation) => citation !== null),
-  );
-}
 
 export function stripTransientAssistantEvents(events: AssistantEvent[]) {
   return events.filter((event) => event.type !== "case_opinions");
@@ -1028,6 +1017,7 @@ export function stripTransientAssistantEvents(events: AssistantEvent[]) {
 // deliberately, instead of silently dropping an otherwise useful response.
 const COMPLETES_TEXTLESS_TURN = {
   text_card: true,
+  citations_recorded: false,
   reasoning: false,
   ask_inputs: true,
   ask_inputs_response: false,
@@ -1437,31 +1427,20 @@ export function appendCancelledAssistantEvent(events: AssistantEvent[]) {
   return [...events, buildStoppedAssistantEvent("user")];
 }
 
-export function buildCancelledAssistantMessage(args: {
-  fullText: string;
+/**
+ * Preserve partial output while distinguishing a deadline from an explicit
+ * Stop. The citations are the ones recorded before the turn stopped.
+ */
+export function buildStoppedAssistantMessage(args: {
   events: AssistantEvent[];
-  buildCitations: (fullText: string, events: AssistantEvent[]) => unknown[];
+  citations: unknown[];
+  stopReason?: StreamStopReason | null;
 }) {
-  const events = appendCancelledAssistantEvent(
-    stripTransientAssistantEvents(args.events),
-  );
-  return {
-    events,
-    citations: args.buildCitations(args.fullText, events),
-  };
-}
-
-/** Preserve partial output while distinguishing a deadline from an explicit Stop. */
-export function buildStoppedAssistantMessage(
-  args: Parameters<typeof buildCancelledAssistantMessage>[0] & {
-    stopReason?: StreamStopReason | null;
-  },
-) {
   const events: AssistantEvent[] = [
     ...stripTransientAssistantEvents(args.events),
     buildStoppedAssistantEvent(args.stopReason),
   ];
-  return { events, citations: args.buildCitations(args.fullText, events) };
+  return { events, citations: args.citations };
 }
 
 // ---------------------------------------------------------------------------

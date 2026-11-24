@@ -59,8 +59,6 @@ import {
   type TabularCellStore,
   type WorkflowStore,
   type ToolCall,
-  devLog,
-  createDocLabelResolver,
   resolveDocLabel,
   TOOL_ERROR_MESSAGE,
 } from "./types";
@@ -72,13 +70,7 @@ import {
   toolName,
   withoutDocumentMutatingTools,
 } from "./tools/toolSchemas";
-import {
-  parseCitationsWithDiagnostics,
-  createPartialCitationParser,
-  createCitation,
-  CITATIONS_OPEN_TAG,
-  limitCitationPayload,
-} from "./citations";
+import { limitCitationPayload } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
 import {
   SCRIPT_TOOL_NAME,
@@ -103,7 +95,14 @@ import {
   type TurnEditState,
   type TurnReadState,
 } from "./tools/documentOps";
-import { verifyCitations } from "./verifyCitations";
+import {
+  CITE_DOCUMENTS_TOOL,
+  CITE_SOURCES_TOOL_NAME,
+  CITE_TABLE_CELLS_TOOL,
+  createCitationRecorder,
+  documentCitations,
+  tabularCitations,
+} from "./citeSources";
 import { buildMemoryTurn } from "../../../lib/memory/prompt";
 
 export type { AssistantEvent } from "@mike/contracts";
@@ -127,16 +126,20 @@ export interface ClientToolsAdapter {
 export class AssistantStreamError extends AppError {
   fullText: string;
   events: AssistantEvent[];
+  /** The citations recorded before the turn ended, to keep with it. */
+  citations: unknown[];
 
   constructor(
     message: string,
     fullText: string,
     events: AssistantEvent[],
     options?: ErrorOptions,
+    citations: unknown[] = [],
   ) {
     super("chat.stream_failed", message, options);
     this.fullText = fullText;
     this.events = events;
+    this.citations = citations;
   }
 }
 
@@ -247,26 +250,30 @@ export function sanitizeAssistantSseChunk(chunk: string): string {
 }
 
 export class AssistantStreamAbortError extends AssistantStreamError {
-  constructor(fullText: string, events: AssistantEvent[]) {
-    super("Stream aborted.", fullText, events);
+  constructor(fullText: string, events: AssistantEvent[], citations: unknown[] = []) {
+    super("Stream aborted.", fullText, events, undefined, citations);
     this.name = "AbortError";
   }
 }
 
 /**
  * Treat a turn as stopped when its signal fired after `runLLMStream` had
- * already returned: a deadline or Stop that lands during citation
- * verification, or while a provider or tool ignored the abort. The run has
+ * already returned: a deadline or Stop that lands while a provider or tool
+ * ignored the abort. The run has
  * told its readers the turn is over (and may have force-finished it), so the
  * route must take its stop path rather than persist, title and curate the
  * turn as a completed answer.
  */
 export function throwIfTurnStopped(
   signal: AbortSignal,
-  result: { fullText: string; events: AssistantEvent[] },
+  result: { fullText: string; events: AssistantEvent[]; citations: unknown[] },
 ): void {
   if (signal.aborted)
-    throw new AssistantStreamAbortError(result.fullText, result.events);
+    throw new AssistantStreamAbortError(
+      result.fullText,
+      result.events,
+      result.citations,
+    );
 }
 
 class AssistantStreamAskInputsPause extends Error {
@@ -356,7 +363,11 @@ export async function runLLMStream(params: {
    * retry) need headroom, or the loop ends before the model's summary.
    */
   maxIterations?: number;
-  buildCitations?: (fullText: string) => unknown[];
+  /**
+   * What the answer cites with cite_sources: the conversation's documents
+   * and cases (the default), or the cells of `tabularStore`'s review.
+   */
+  citationSources?: "documents" | "tabular_cells";
   model?: string;
   /** AI SDK reasoning effort for this interactive request. */
   reasoning?: import("../../../lib/llm").ReasoningLevel;
@@ -429,7 +440,7 @@ export async function runLLMStream(params: {
     workflowStore,
     tabularStore,
     clientTools,
-    buildCitations,
+    citationSources = "documents",
     model,
     apiKeys,
     orgId,
@@ -475,7 +486,9 @@ export async function runLLMStream(params: {
   );
   // An invalid model fails the answer below, before any tool runs.
   const chatModel = resolveModel(model, "");
+  const citesTableCells = citationSources === "tabular_cells" && !!tabularStore;
   const baseTools = [
+    citesTableCells ? CITE_TABLE_CELLS_TOOL : CITE_DOCUMENTS_TOOL,
     ...conversationTools,
     ...researchTools,
     ...WORKFLOW_TOOLS,
@@ -587,134 +600,67 @@ export async function runLLMStream(params: {
   let answerUsage: NonNullable<import("@mike/contracts").ResponseDetailsEvent["usage"]> | null = null;
   let fullText = "";
   let iterText = "";
-  let iterVisibleText = "";
   let iterReasoning = "";
-  let visibleTailBuffer = "";
-  let citationsOpenSeen = false;
-  // The CITATIONS block streams through an incremental parser, so each delta
-  // is scanned once and each citation is parsed and built once.
-  let citationParser = createPartialCitationParser();
-  let streamedCitations: unknown[] = [];
-  // Every snapshot frame carries the whole list so far, and the client
-  // replaces its list with it. Only the newest snapshot is worth replaying to
-  // a client that attaches later; replaying them all would hand it O(C²)
-  // citations. The final frame bumps this too, so no partial outlives it.
+  // Every citations frame carries the whole list so far, and the client
+  // replaces its list with it. Only the newest is worth replaying to a
+  // client that attaches later. The final frame bumps this too, so no
+  // partial outlives it.
   let citationSnapshotSeq = 0;
 
-  const emitCitationStreamSnapshot = (
-    status: "started" | "partial",
-    citations: unknown[],
-  ) => {
-    if (buildCitations) return;
+  // A cited document's extracted text, read from bytes already in storage
+  // with emitEvents:false. The document may be edited later in the turn,
+  // so each cite_sources call reads it afresh, once per document.
+  const readSourceText = (docId: string): Promise<string> => {
+    const label = resolveDocLabel(docId, docStore, docIndex);
+    return label
+      ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
+          emitEvents: false,
+        })
+      : Promise.resolve("");
+  };
+  const citationRecorder = createCitationRecorder(
+    citesTableCells
+      ? tabularCitations(tabularStore!)
+      : documentCitations({
+          docIndex,
+          docStore,
+          casesByClusterId: courtlistenerTurnState.casesByClusterId,
+          readSourceText,
+          getCaseOpinions: async (clusterId) =>
+            getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
+        }),
+  );
+  const recordedCitations = () =>
+    limitCitationPayload(citationRecorder.citations());
+
+  const emitCitations = (status: "partial" | "final") => {
     const snapshot = ++citationSnapshotSeq;
     write(
-      `data: ${JSON.stringify({ type: "citations", status, citations })}\n\n`,
-      { replay: () => snapshot === citationSnapshotSeq },
+      `data: ${JSON.stringify({
+        type: "citations",
+        status,
+        citations: recordedCitations(),
+      })}\n\n`,
+      status === "partial"
+        ? { replay: () => snapshot === citationSnapshotSeq }
+        : undefined,
     );
-  };
-
-  const resetCitationStream = () => {
-    citationParser = createPartialCitationParser();
-    streamedCitations = [];
-  };
-
-  const streamHiddenCitationContent = (delta: string) => {
-    if (buildCitations || !delta) return;
-    const completed = citationParser.push(delta);
-    let added = false;
-    for (const c of completed) {
-      // A provider-backed source is cited only from the final block, once
-      // its quotes have been checked against the complete text.
-      if (
-        c.kind === "document" &&
-        docStore.get(resolveDocLabel(c.doc_id, docStore, docIndex) ?? c.doc_id)
-          ?.external_source
-      ) {
-        continue;
-      }
-      const citation = createCitation(
-        c,
-        docIndex,
-        courtlistenerTurnState.casesByClusterId,
-        docStore,
-      );
-      if (!citation) continue;
-      streamedCitations.push(citation);
-      added = true;
-    }
-    if (!added) return;
-    emitCitationStreamSnapshot("partial", limitCitationPayload(streamedCitations));
   };
 
   const streamVisibleContent = (delta: string) => {
     if (!delta) return;
-    if (citationsOpenSeen) {
-      streamHiddenCitationContent(delta);
-      return;
-    }
-
-    const combined = visibleTailBuffer + delta;
-    const markerIdx = combined.indexOf(CITATIONS_OPEN_TAG);
-    if (markerIdx >= 0) {
-      const visible = combined.slice(0, markerIdx);
-      if (visible) {
-        iterVisibleText += visible;
-        write(
-          `data: ${JSON.stringify({ type: "content_delta", text: visible })}\n\n`,
-        );
-      }
-      visibleTailBuffer = "";
-      citationsOpenSeen = true;
-      resetCitationStream();
-      emitCitationStreamSnapshot("started", []);
-      streamHiddenCitationContent(
-        combined.slice(markerIdx + CITATIONS_OPEN_TAG.length),
-      );
-      return;
-    }
-
-    const keep = Math.min(CITATIONS_OPEN_TAG.length - 1, combined.length);
-    const visible = combined.slice(0, combined.length - keep);
-    visibleTailBuffer = combined.slice(combined.length - keep);
-    if (visible) {
-      iterVisibleText += visible;
-      write(
-        `data: ${JSON.stringify({ type: "content_delta", text: visible })}\n\n`,
-      );
-    }
+    write(`data: ${JSON.stringify({ type: "content_delta", text: delta })}\n\n`);
   };
 
-  const flushVisibleTail = (opts: { emit?: boolean } = {}) => {
-    const emit = opts.emit ?? true;
-    if (citationsOpenSeen || !visibleTailBuffer) {
-      visibleTailBuffer = "";
-      return;
-    }
-    iterVisibleText += visibleTailBuffer;
-    if (emit) {
-      write(
-        `data: ${JSON.stringify({ type: "content_delta", text: visibleTailBuffer })}\n\n`,
-      );
-    }
-    visibleTailBuffer = "";
-  };
-
-  const flushText = (opts: { emit?: boolean } = {}) => {
+  const flushText = () => {
     if (!iterText) return;
     fullText += iterText;
-    flushVisibleTail(opts);
-    if (iterVisibleText) {
-      events.push({ type: "content", text: iterVisibleText });
-    }
+    events.push({ type: "content", text: iterText });
     iterText = "";
-    iterVisibleText = "";
-    visibleTailBuffer = "";
-    citationsOpenSeen = false;
-    resetCitationStream();
   };
 
-  const flushPartialTurn = (opts: { emit?: boolean } = {}) => {
-    flushText(opts);
+  const flushPartialTurn = () => {
+    flushText();
     if (iterReasoning) {
       events.push({ type: "reasoning", text: iterReasoning });
       iterReasoning = "";
@@ -788,6 +734,7 @@ export async function runLLMStream(params: {
         nonce,
         webSearch,
         includeResearchTools,
+        citationSources,
         onActivity: params.onActivity,
         write: () => {},
         model: spawn.model,
@@ -994,9 +941,8 @@ export async function runLLMStream(params: {
           streamVisibleContent(delta);
         },
         onStopNotice: (notice) => {
-          // A truncated model citation block must not swallow the server's
-          // incomplete-answer warning. Keep it in the visible/persisted prose;
-          // the original citation text still goes through normal verification.
+          // The server's incomplete-answer warning is its own part of the
+          // visible and persisted answer, apart from the model's prose.
           flushText();
           iterText += notice;
           streamVisibleContent(notice);
@@ -1076,8 +1022,12 @@ export async function runLLMStream(params: {
         const isScriptCall = (c: NormalizedToolCall) =>
           !!scriptTool && c.name === SCRIPT_TOOL_NAME;
         const scriptCalls = permittedCalls.filter(isScriptCall);
+        const citeCalls = permittedCalls.filter(
+          (c) => c.name === CITE_SOURCES_TOOL_NAME,
+        );
         const handledElsewhere = (c: NormalizedToolCall) =>
           webToolNames.has(c.name) ||
+          c.name === CITE_SOURCES_TOOL_NAME ||
           c.name === DELEGATE_TOOL_NAME ||
           isScriptCall(c) ||
           !!clientTools?.owns(c.name);
@@ -1219,6 +1169,20 @@ export async function runLLMStream(params: {
           clientResultByCallId.set(delegateCalls[index].id, content),
         );
         await recordDelegations();
+        // Edits, document creation and cell reads in this provider step can
+        // change the version or evidence available to the citation recorder.
+        // In call order: a later call replaces the refs an earlier one set.
+        for (const call of citeCalls) {
+          // The step shows as in progress while the quotes are checked.
+          write(`data: ${JSON.stringify({ type: "citations_recorded_start" })}\n\n`);
+          const { content, event } = await citationRecorder.record(call.input);
+          clientResultByCallId.set(call.id, content);
+          events.push(event);
+          // Publish the backing rows before enabling the finished step's source actions.
+          emitCitations("partial");
+          write(`data: ${JSON.stringify(event)}\n\n`);
+          throwIfAborted(signal);
+        }
         addApprovalItems(
           askInputsEvents,
           delegated.flatMap(({ approvals }) => approvals ?? []),
@@ -1277,10 +1241,11 @@ export async function runLLMStream(params: {
       // call that rejects once the stop reached it) ends the turn as
       // stopped: that is the outcome its readers were given.
       await recordDelegations().catch(() => {});
-      flushPartialTurn({ emit: false });
+      flushPartialTurn();
       throw new AssistantStreamAbortError(
         fullText,
         events.map(sanitizeAssistantEvent),
+        recordedCitations(),
       );
     } else {
       delegationStop.abort();
@@ -1319,71 +1284,16 @@ export async function runLLMStream(params: {
         fullText,
         events.map(sanitizeAssistantEvent),
         { cause: failure },
+        recordedCitations(),
       );
     }
   }
 
   flushText();
 
-  // Parse and emit citations from <CITATIONS> block
-  const { citations: parsedCitations, diagnostics: citationDiagnostics } =
-    parseCitationsWithDiagnostics(fullText);
-  let citations: unknown[];
-  if (buildCitations) {
-    // Custom builders (tabular) bypass document-citation verification.
-    citations = buildCitations(fullText);
-  } else {
-    const rawCitations = limitCitationPayload(
-      parsedCitations
-        .map((c) =>
-          createCitation(
-            c,
-            docIndex,
-            courtlistenerTurnState.casesByClusterId,
-            docStore,
-          ),
-        )
-        .filter((citation) => citation !== null),
-    );
-    // Server-side quote verification. Fetch each document's extracted source
-    // text at most once per turn (memoized by doc_id), reading only bytes
-    // already in storage with emitEvents:false. Case citations are matched
-    // against the opinion text cached during this turn.
-    const sourceTextByDocId = new Map<string, Promise<string>>();
-    const labelFor = createDocLabelResolver(docStore, docIndex);
-    const getSourceText = (docId: string): Promise<string> => {
-      let pending = sourceTextByDocId.get(docId);
-      if (!pending) {
-        const label = labelFor(docId);
-        pending = label
-          ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
-              emitEvents: false,
-            })
-          : Promise.resolve("");
-        sourceTextByDocId.set(docId, pending);
-      }
-      return pending;
-    };
-    citations = await verifyCitations(
-      rawCitations,
-      getSourceText,
-      async (clusterId) =>
-        getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
-    );
-  }
-  citations = limitCitationPayload(citations);
-  devLog("[chat/stream] final citations", {
-    hasCitationsBlock: citationDiagnostics.hasBlock,
-    citationsBlockLength: citationDiagnostics.rawLength,
-    parseError: citationDiagnostics.error,
-    parsedCitationCount: parsedCitations.length,
-    emittedCitationCount: citations.length,
-    usedCustomCitationBuilder: !!buildCitations,
-  });
-  citationSnapshotSeq += 1;
-  write(
-    `data: ${JSON.stringify({ type: "citations", status: "final", citations })}\n\n`,
-  );
+  // The citations recorded with cite_sources, each checked when recorded.
+  const citations = recordedCitations();
+  emitCitations("final");
   if (!isSubagent && answerModel) {
     const details: AssistantEvent = {
       type: "response_details",

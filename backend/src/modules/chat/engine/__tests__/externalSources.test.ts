@@ -12,7 +12,7 @@ vi.mock("../../../source-documents/sourceDocuments.service", async (original) =>
   };
 });
 
-import { createCitation, parseCitations } from "../citations";
+import { createCitation, normalizeCitation } from "../citations";
 import { caseCitationEventFromRecord } from "../tools/courtlistenerTurnState";
 import {
   externalSourceCitationHint,
@@ -40,8 +40,9 @@ function source(overrides: Partial<ExternalSource["document"]> = {}): ExternalSo
   };
 }
 
-function cite(block: string) {
-  return parseCitations(`<CITATIONS>${block}</CITATIONS>`)[0];
+/** The first entry of a cite_sources call, as the recorder normalizes it. */
+function cite(entries: string) {
+  return normalizeCitation((JSON.parse(entries) as unknown[])[0])!;
 }
 
 describe("registerExternalSource", () => {

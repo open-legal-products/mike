@@ -670,6 +670,8 @@ export function createWordClientToolsAdapter(params: {
   write: (s: string) => void;
   signal?: AbortSignal;
   nonce?: string;
+  /** Update the raw, bounded citation text; an attempted edit invalidates the previous read. */
+  onCitationText?: (text: string) => void;
   /** Test seam; production scales apply deadlines via applyTimeoutMsFor. */
   timeoutMs?: number;
 }): ClientToolsAdapter {
@@ -786,6 +788,10 @@ export function createWordClientToolsAdapter(params: {
       };
     }
     const outcomes = normalizeEditOutcomes(parsed.edits, clientResult);
+    if (outcomes.some(edit => ["applied", "applied-unmanaged", "unknown"].includes(edit.status))) {
+      params.onCitationText?.("");
+      lastLiveReadText = null;
+    }
     return {
       content: JSON.stringify(buildApplyResultPayload(outcomes)),
       events: editBlockEvents(parsed.edits, firstBlockIndex),
@@ -862,6 +868,7 @@ export function createWordClientToolsAdapter(params: {
       : record.document;
     // The live body is untrusted document text, exactly like a stored
     // document's body returned by read_document — same spotlight fence.
+    params.onCitationText?.(documentText);
     const body = nonce ? spotlight(documentText, nonce) : documentText;
     return {
       content: truncated

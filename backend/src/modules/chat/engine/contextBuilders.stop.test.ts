@@ -8,9 +8,8 @@ describe("stored stop outcomes", () => {
     (stopReason) => {
       const result = buildStoppedAssistantMessage({
         stopReason,
-        fullText: "Partial answer",
         events: [{ type: "content", text: "Partial answer" }],
-        buildCitations: () => [],
+        citations: [{ ref: 1 }],
       });
       expect(result.events).toEqual([
         { type: "content", text: "Partial answer" },
@@ -20,16 +19,15 @@ describe("stored stop outcomes", () => {
           safe_to_display: true,
         },
       ]);
-      expect(result.citations).toEqual([]);
+      expect(result.citations).toEqual([{ ref: 1 }]);
     },
   );
 
   it("keeps explicit user cancellation distinct", () => {
     const result = buildStoppedAssistantMessage({
       stopReason: "user",
-      fullText: "",
       events: [],
-      buildCitations: () => [],
+      citations: [],
     });
     expect(result.events).toEqual([
       { type: "content", text: "Cancelled by user." },

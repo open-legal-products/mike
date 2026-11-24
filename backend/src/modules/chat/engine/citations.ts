@@ -48,9 +48,10 @@ type ParsedCaseCitation = {
   }[];
 };
 
-type ParsedCitation = ParsedDocumentCitation | ParsedCaseCitation;
+export type ParsedCitation = ParsedDocumentCitation | ParsedCaseCitation;
 
-function normalizeCitation(raw: unknown): ParsedCitation | null {
+/** One citation entry as the model wrote it, or null when it is unusable. */
+export function normalizeCitation(raw: unknown): ParsedCitation | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;
   const markerRef =
@@ -63,7 +64,7 @@ function normalizeCitation(raw: unknown): ParsedCitation | null {
       : Number.isFinite(markerRef)
         ? markerRef
         : null;
-  if (typeof ref !== "number") return null;
+  if (typeof ref !== "number" || !Number.isSafeInteger(ref) || ref < 1) return null;
   const quote = typeof c.quote === "string" ? c.quote : c.text;
 
   const rawClusterId =
@@ -186,13 +187,10 @@ function normalizeCaseCitationQuotes(c: Record<string, unknown>) {
 }
 
 // ---------------------------------------------------------------------------
-// Citation block constants and parsers
+// Limits
 // ---------------------------------------------------------------------------
 
-export const CITATIONS_BLOCK_RE = /<CITATIONS>\s*([\s\S]*?)\s*<\/CITATIONS>/;
-export const CITATIONS_OPEN_TAG = "<CITATIONS>";
-export const CITATIONS_CLOSE_TAG = "</CITATIONS>";
-export const MAX_PARSED_CITATIONS = 50;
+export const MAX_CITATIONS = 50;
 export const MAX_CITATION_PAYLOAD_BYTES = 5_000_000;
 
 export function limitCitationPayload(citations: unknown[]): unknown[] {
@@ -215,147 +213,6 @@ export function limitCitationPayload(citations: unknown[]): unknown[] {
   return limited;
 }
 
-type CitationParseDiagnostics = {
-  hasBlock: boolean;
-  rawLength: number;
-  error: string | null;
-};
-
-export function parseCitationsWithDiagnostics(text: string): {
-  citations: ParsedCitation[];
-  diagnostics: CitationParseDiagnostics;
-} {
-  const match = text.match(CITATIONS_BLOCK_RE);
-  if (!match) {
-    return { citations: [], diagnostics: { hasBlock: false, rawLength: 0, error: null } };
-  }
-  const raw = match[1] ?? "";
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return {
-        citations: [],
-        diagnostics: { hasBlock: true, rawLength: raw.length, error: "CITATIONS block JSON was not an array." },
-      };
-    }
-    return {
-      // Cap valid citations, not raw entries, so invalid ones cannot push a
-      // valid citation past the cap (the streaming parser counts the same way).
-      citations: parsed
-        .map(normalizeCitation)
-        .filter((c): c is ParsedCitation => c !== null)
-        .slice(0, MAX_PARSED_CITATIONS),
-      diagnostics: { hasBlock: true, rawLength: raw.length, error: null },
-    };
-  } catch (error) {
-    return {
-      citations: [],
-      diagnostics: {
-        hasBlock: true,
-        rawLength: raw.length,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    };
-  }
-}
-
-export function parseCitations(text: string): ParsedCitation[] {
-  return parseCitationsWithDiagnostics(text).citations;
-}
-
-/**
- * Completed citation objects from a CITATIONS block that is still streaming.
- *
- * The parser keeps its scan state between `push` calls, so each delta costs
- * work proportional to its own length: nothing already scanned is read,
- * split or JSON-parsed again. `push` returns only the citations completed by
- * that delta. Like the whole-buffer parse it replaces, it stops at the close
- * tag (even one split across deltas) or at the array's closing `]`, and skips
- * an object that does not parse as a citation.
- */
-export function createPartialCitationParser(): {
-  push: (delta: string) => ParsedCitation[];
-} {
-  let finished = false;
-  let arrayStarted = false;
-  let inString = false;
-  let escaped = false;
-  let depth = 0;
-  // Text of the object being read, from its `{` up to the end of the
-  // previous delta; the current delta's part is sliced once it closes.
-  let objectCarry: string | null = null;
-  // How many leading characters of CITATIONS_CLOSE_TAG the input has
-  // just matched. The tag's characters never change the JSON scan state,
-  // so the scan can run ahead before the tag is recognised.
-  let closeMatched = 0;
-  // Citations returned so far, across every push, capped like the
-  // whole-buffer parse.
-  let parsedCount = 0;
-
-  const push = (delta: string): ParsedCitation[] => {
-    const completed: ParsedCitation[] = [];
-    if (finished) return completed;
-    let objectStart = objectCarry === null ? -1 : 0;
-    for (let i = 0; i < delta.length; i += 1) {
-      const char = delta[i];
-      if (char === CITATIONS_CLOSE_TAG[closeMatched]) {
-        closeMatched += 1;
-        if (closeMatched === CITATIONS_CLOSE_TAG.length) {
-          finished = true;
-          break;
-        }
-      } else {
-        closeMatched = char === CITATIONS_CLOSE_TAG[0] ? 1 : 0;
-      }
-      if (!arrayStarted) {
-        if (char === "[") arrayStarted = true;
-        continue;
-      }
-      if (escaped) { escaped = false; continue; }
-      if (char === "\\") { escaped = inString; continue; }
-      if (char === '"') { inString = !inString; continue; }
-      if (inString) continue;
-      if (char === "{") {
-        if (depth === 0) {
-          objectStart = i;
-          objectCarry = "";
-        }
-        depth += 1;
-      } else if (char === "}") {
-        if (depth === 0) continue;
-        depth -= 1;
-        if (depth === 0 && objectCarry !== null) {
-          const raw = objectCarry + delta.slice(objectStart, i + 1);
-          objectCarry = null;
-          objectStart = -1;
-          try {
-            const citation = normalizeCitation(JSON.parse(raw));
-            if (citation) {
-              completed.push(citation);
-              parsedCount += 1;
-            }
-          } catch { /* ignore incomplete/malformed partial object */ }
-          if (parsedCount >= MAX_PARSED_CITATIONS) {
-            finished = true;
-            break;
-          }
-        }
-      } else if (char === "]" && depth === 0) {
-        finished = true;
-        break;
-      }
-    }
-    if (!finished && objectCarry !== null) {
-      objectCarry += delta.slice(Math.max(objectStart, 0));
-    }
-    return completed;
-  };
-  return { push };
-}
-
-export function parsePartialCitationObjects(text: string): ParsedCitation[] {
-  return createPartialCitationParser().push(text);
-}
 
 type CasesByClusterId = Map<number, {
   caseName: string | null;
@@ -460,16 +317,14 @@ export function createCitation(
     ? resolveDocLabel(citation.doc_id, docStore, docIndex)
     : null;
   const sourceEntry = sourceLabel ? docStore?.get(sourceLabel) : undefined;
-  if (docStore && sourceLabel && sourceEntry?.external_source) {
-    // A title names a source only when it names one document: with two
-    // sharing it, the first would take quotes meant for the other.
-    if (!docStore.has(citation.doc_id) && citation.doc_id === sourceEntry.filename) {
-      let sameTitle = 0;
-      for (const entry of docStore.values()) {
-        if (entry.filename === citation.doc_id) sameTitle += 1;
-      }
-      if (sameTitle > 1) return null;
+  // A title shared by two sources cannot identify which one owns the quote.
+  if (docStore && !docStore.has(citation.doc_id) && citation.doc_id === sourceEntry?.filename) {
+    let matches = 0;
+    for (const entry of docStore.values()) {
+      if (entry.filename === citation.doc_id && ++matches > 1) return null;
     }
+  }
+  if (sourceLabel && sourceEntry?.external_source) {
     return createExternalSourceCitation(
       citation,
       sourceLabel,
@@ -478,7 +333,8 @@ export function createCitation(
     );
   }
 
-  const docInfo = resolveDoc(citation.doc_id, docIndex);
+  const label = sourceLabel ?? citation.doc_id;
+  const docInfo = resolveDoc(label, docIndex);
   // A provider's document id cited without that source having been read in
   // this request has no text to verify against: it never becomes a citation.
   if (
@@ -487,8 +343,8 @@ export function createCitation(
   ) {
     return null;
   }
-  const requestScopedDocument = docStore?.get(citation.doc_id);
-  const documentId = docInfo?.document_id ?? citation.doc_id;
+  const requestScopedDocument = docStore?.get(label);
+  const documentId = docInfo?.document_id ?? label;
   const filename =
     docInfo?.filename ?? requestScopedDocument?.filename ?? citation.doc_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
@@ -512,7 +368,7 @@ export function createCitation(
       version_id: docInfo?.version_id ?? null,
       version_number: docInfo?.version_number ?? null,
     },
-    doc_id: citation.doc_id,
+    doc_id: label,
     document_id: docInfo?.document_id,
     version_id: docInfo?.version_id ?? null,
     version_number: docInfo?.version_number ?? null,

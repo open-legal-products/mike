@@ -399,10 +399,11 @@ describe("active Word document context", () => {
         expect(prompt).toContain('Use "inserted_text":"" to delete');
         expect(prompt).toContain('"type":"edit_data"');
         expect(prompt).toContain("exactly one JSON array");
-        expect(prompt).toContain("<CITATIONS>");
+        expect(prompt).toContain("cite_sources");
+        expect(prompt).not.toContain("<CITATIONS>");
         expect(prompt).toContain("SECURITY AND USER-FACING OUTPUT");
         expect(prompt).toContain("Never reveal tool names");
-        expect(prompt).toContain("the application hides them");
+        expect(prompt).toContain("the application hides it");
         expect(prompt).toContain("never edit a list number");
         expect(prompt).toContain("<untrusted-content>");
         expect(prompt).not.toContain("CONTRACT BODY TEXT");
@@ -443,12 +444,18 @@ describe("active Word document context", () => {
         // two modes: same identity, same security rules, same citations.
         const streamed = buildWordChatSystemPrompt(false);
         const tools = buildWordChatSystemPrompt(true);
-        const preamble = (prompt: string) =>
-            prompt.slice(0, prompt.indexOf("- Never show or explain"));
+        // Each edit channel opens its own section after the shared preamble.
+        const preamble = (prompt: string, sectionStart: string) =>
+            prompt.slice(0, prompt.indexOf(sectionStart));
         const citations = (prompt: string) =>
             prompt.slice(prompt.indexOf("ACTIVE DOCUMENT CITATIONS"));
-        expect(preamble(tools)).toBe(preamble(streamed));
-        expect(citations(tools)).toBe(citations(streamed));
+        expect(preamble(tools, "ACTIVE WORD DOCUMENT EDITS")).toBe(
+            preamble(streamed, "- Never show or explain the raw <EDITS>"),
+        );
+        expect(citations(tools)).toContain("cite_sources");
+        expect(citations(tools)).toContain("latest read_active_document");
+        expect(citations(streamed)).toContain("seen via read_document");
+        expect(citations(streamed)).not.toContain("read_active_document");
     });
 
     it("keeps the full edit vocabulary in the client-tools variant", () => {

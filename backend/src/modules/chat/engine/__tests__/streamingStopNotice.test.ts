@@ -12,7 +12,11 @@ vi.mock("../../../../lib/llm", async () => ({
 vi.mock("../../../../lib/mcpConnectors", () => ({
   buildUserMcpTools: vi.fn(async () => []),
 }));
-vi.mock("../tools/toolDispatcher", () => ({ runToolCalls: vi.fn() }));
+vi.mock("../tools/toolDispatcher", () => ({
+  runToolCalls: vi.fn(async () =>
+    (await import("../tools/toolBatchResult.js")).emptyToolCallBatchResult(),
+  ),
+}));
 vi.mock("../../../../lib/integrations/googleDrive", () => ({ buildGoogleDriveTools: async () => [] }));
 vi.mock("../../../../lib/integrations/googleWorkspace", () => ({ buildGoogleWorkspaceTools: async () => [] }));
 vi.mock("../../../../lib/documentVersions", async (importOriginal) => ({
@@ -26,11 +30,12 @@ import { runLLMStream } from "../streaming";
 
 type StreamChatCall = {
   callbacks?: StreamCallbacks & { onStopNotice?: (notice: string) => void };
+  runTools?: (calls: { id: string; name: string; input: Record<string, unknown> }[]) => Promise<unknown>;
 };
 
 const NOTICE = "\n\n_Stopped early: this response reached the model's output limit. Asking for one part at a time will get the rest._";
 const SOURCE = "Written acceptance is required.";
-const CITATION = { ref: 1, doc_id: "doc-0", page: 1, quote: SOURCE };
+const CITATION = { ref: 1, doc_id: "doc-0", quotes: [{ page: "1", quote: SOURCE }] };
 
 function baseParams() {
   return {
@@ -50,8 +55,12 @@ function baseParams() {
   };
 }
 
-function replay(modelText: string, notice = NOTICE) {
-  streamChatWithTools.mockImplementationOnce(async ({ callbacks }) => {
+/** The model records `citations` (if any), writes `modelText`, and is cut off. */
+function replay(modelText: string, notice = NOTICE, citations: unknown[] = []) {
+  streamChatWithTools.mockImplementationOnce(async ({ callbacks, runTools }) => {
+    if (citations.length) {
+      await runTools?.([{ id: "cite", name: "cite_sources", input: { citations } }]);
+    }
     callbacks?.onContentDelta?.(modelText);
     if (notice) {
       if (callbacks?.onStopNotice) callbacks.onStopNotice(notice);
@@ -63,36 +72,28 @@ function replay(modelText: string, notice = NOTICE) {
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("server stop notices outside model citations", () => {
-  it.each([
-    ["missing closing tag", `Answer [1] [2].\n<CITATIONS>[${JSON.stringify(CITATION)},{"ref":2,"doc_id":"doc-0","quote":"cut`],
-    ["malformed JSON", "Answer [1].\n<CITATIONS>[{not json]</CITATIONS>"],
-    ["missing citation fields", 'Answer [1].\n<CITATIONS>[{"ref":1}]</CITATIONS>'],
-  ])("keeps the output-limit notice visible and saved after %s, without trusting partial citations", async (_, text) => {
-    replay(text);
+describe("server stop notices", () => {
+  it("keeps the output-limit notice visible and saved as its own part of the answer", async () => {
+    replay("Answer [1] that was cut", NOTICE, [CITATION]);
     const params = baseParams();
 
     const result = await runLLMStream(params);
-    const visible = result.events.flatMap((event) => event.type === "content" ? [event.text] : []).join("");
+    const content = result.events.flatMap((event) => event.type === "content" ? [event.text] : []);
     const streamed = params.write.mock.calls.map(([chunk]) => chunk).filter((chunk) => chunk.startsWith("data: {")).map((chunk) => JSON.parse(chunk.slice(6)) as { type: string; text?: string });
 
-    expect(visible).toContain(NOTICE);
-    expect(visible).not.toContain("<CITATIONS>");
-    expect(visible).not.toContain('"doc_id"');
-    expect(streamed.filter((frame) => frame.type === "content_delta").map((frame) => frame.text ?? "").join("")).toBe(visible);
-    expect(result.citations).toEqual([]);
-    expect(result.fullText).toBe(text + NOTICE);
+    expect(content).toEqual(["Answer [1] that was cut", NOTICE]);
+    expect(streamed.filter((frame) => frame.type === "content_delta").map((frame) => frame.text ?? "").join("")).toBe(content.join(""));
+    expect(result.fullText).toBe("Answer [1] that was cut" + NOTICE);
   });
 
-  it("keeps normal answers unchanged", async () => {
-    replay(`Answer [1].\n<CITATIONS>${JSON.stringify([CITATION])}</CITATIONS>`, "");
+  it("keeps the citations recorded before the answer was cut", async () => {
+    replay("Answer [1] that was cut", NOTICE, [CITATION]);
     const result = await runLLMStream(baseParams());
-    expect(result.events.filter((event) => event.type === "content")).toEqual([{ type: "content", text: "Answer [1].\n" }]);
     expect(result.citations).toMatchObject([{ ref: 1, verified: true, version_id: "version-1" }]);
   });
 
   it("does not promote an unverified citation when surfacing a notice", async () => {
-    replay(`Answer [1].\n<CITATIONS>${JSON.stringify([{ ...CITATION, quote: "Not in the source." }])}</CITATIONS>`);
+    replay("Answer [1].", NOTICE, [{ ...CITATION, quotes: [{ quote: "Not in the source." }] }]);
     const result = await runLLMStream(baseParams());
     expect(result.citations).toMatchObject([{ ref: 1, verified: false }]);
     expect(result.events).toContainEqual({ type: "content", text: NOTICE });

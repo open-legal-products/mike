@@ -1,10 +1,10 @@
 /**
  * Document citations in assistant prose.
  *
- * The model emits inline [n] markers plus the same hidden final CITATIONS JSON
- * block used by web chat. The backend parses and verifies the block; this
- * module resolves the returned citation rows into Markdown links so clicks can
- * be routed to Word. Legacy <cite> markers remain readable in old histories.
+ * The model records its citations with the cite_sources tool before it
+ * writes inline [n] markers, as in web chat. The backend verifies them and
+ * streams the citation rows; this module resolves those rows into Markdown
+ * links so clicks can be routed to Word. Legacy <cite> markers remain readable in old histories.
  */
 
 export const CITATION_HREF_PREFIX = "#mike-cite:";

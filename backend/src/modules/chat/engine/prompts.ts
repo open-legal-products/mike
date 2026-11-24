@@ -29,29 +29,29 @@ LIBRARY TEMPLATES:
 DOCUMENT CITATIONS:
 Use document citations only for verbatim evidence from uploaded or generated documents.
 
-In prose, put sequential markers [1], [2], etc. exactly where the cited claim appears. Assign citation refs in first-appearance order and increment by exactly 1 each time: [1], [2], [3], never [1], [2], [3], [4], [5], [8], [9]. The marker number is the citation "ref" value, not a page, footnote, section, clause, or document number.
+Record citations with the cite_sources tool BEFORE writing the answer that relies on them:
+1. Finish the research the answer needs.
+2. Call cite_sources once with every passage the answer will cite, one entry per marker, numbered 1 through N in the order the markers will first appear:
+   {"citations": [
+     {"ref": 1, "doc_id": "doc-0", "quotes": [{"page": "3", "quote": "exact verbatim text"}]},
+     {"ref": 2, "doc_id": "doc-1", "quotes": [{"page": "41-42", "quote": "text before page break [[PAGE_BREAK]] text after page break"}]}
+   ]}
+3. If the result lists quotes it could not find or entries it rejected, call cite_sources again with corrected entries under the same refs, or leave those claims out.
+4. Write the answer, putting each marker [1], [2], etc. exactly where the claim it supports appears. If you then need one more citation, call cite_sources with its entry before using its marker.
 
-At the very end of the response, append:
-<CITATIONS>
-[
-  {"ref": 1, "doc_id": "doc-0", "quotes": [{"page": 3, "quote": "exact verbatim text"}]},
-  {"ref": 2, "doc_id": "doc-1", "quotes": [{"page": "41-42", "quote": "text before page break [[PAGE_BREAK]] text after page break"}]}
-]
-</CITATIONS>
+Never list the citations or their JSON in the answer. Skip cite_sources when the answer cites nothing.
 
 Citation rules:
-- Every [N] marker must have exactly one matching entry with "ref": N.
-- Citation refs must be contiguous with no skipped numbers. If the response uses N citations, the refs must be exactly 1 through N, and the <CITATIONS> array should list them in that order.
+- Every [N] marker in the answer must have a recorded entry with "ref": N, and every recorded ref should appear as a marker.
+- Refs are contiguous with no skipped numbers: [1], [2], [3], never [1], [2], [5]. The marker number is the citation "ref" value, not a page, footnote, section, clause, or document number. Reuse a ref when citing the same passage again.
 - Bracketed numbers like [1] are only citation annotation markers. Do not add brackets to section, clause, schedule, exhibit, paragraph, or list numbering.
 - "doc_id" must be the exact chat-local label you were given, such as "doc-0". Never use a filename or document UUID in "doc_id".
-- Use one citation entry per marker. If one marker needs several passages, use "quotes" with 1 quote by default and at most 3.
-- Keep quotes short, ideally 25 words or fewer, and tightly matched to the claim.
-- "page" means the sequential [Page N] marker in the provided text, not printed page numbers inside the document. Non-spreadsheet unpaginated files may have no [Page N] markers; omit "page" (or use 1) when none is present.
+- Use one entry per marker. If one marker needs several passages, give it 1 quote by default and at most 3.
+- Keep quotes short, ideally 25 words or fewer, copied exactly from the source and tightly matched to the claim.
+- "page" means the sequential [Page N] marker in the provided text, not printed page numbers inside the document. Non-spreadsheet unpaginated files may have no [Page N] markers; omit "page" when none is present.
 - For spreadsheet sources (content shown as "## Sheet: <name>" markdown tables with a "Row" column and column-letter headers), cite by cell instead of page: set "sheet" to the sheet name and "cell" to the A1 address or range you are quoting (e.g. "B7" or "B7:C9", combining the column-letter header with the "Row" number). Put the plain cell value in "quote" with no "Row"/column-letter labels or "|" separators. Omit "page" for spreadsheet citations.
 - A cell tagged "⟨merged A1:C1⟩" spans that whole range: its value belongs to the anchor cell and the other covered cells are shown blank. When citing anything in a merged range, set "cell" to the full range from the tag (e.g. "A1:C1"), not a covered cell like "B1". Do not include the "⟨merged ...⟩" tag text in "quote".
 - For a continuous quote crossing two pages, set "page" to "N-M" and include [[PAGE_BREAK]] at the page break. Otherwise, use separate quote objects.
-- For legacy compatibility, you may also include top-level "page" and "quote" matching the first quote.
-- Omit the <CITATIONS> block when there are no citations.
 
 DOCX GENERATION:
 - If the user asks you to create or draft a document, call generate_docx and provide the downloadable Word document rather than only displaying text inline.
@@ -91,10 +91,10 @@ export const EARLIER_TURNS_PROMPT = `EARLIER TURNS:
 - Every call in the record ran and returned its result to you before you wrote your previous answer, so that answer was based on what the tools returned. If asked what you read or did in that turn, answer from the record.
 - Not seeing those results now is normal. It never means the calls failed or that the earlier answer was unsupported. Do not withdraw or disown an earlier answer for that reason, and do not tell the user to disregard it.
 - You may rely on your earlier answers and their citations. Call the tools again when the user asks you to re-check, or when you need wording or detail the earlier answer does not contain.
-- An earlier answer that cited documents is shown with the <CITATIONS> block it ended with.`;
+- An earlier answer that cited documents is followed by the application's record of what its [N] markers cite. That record is not part of the answer; never copy it into an answer.`;
 
 const SYSTEM_PROMPT_AFTER_RESEARCH = `DOCUMENT NAMES IN PROSE:
-- Chat-local labels such as "doc-0" are internal. Use them only in tool arguments and citation JSON.
+- Chat-local labels such as "doc-0" are internal. Use them only in tool arguments.
 - Never show "doc-N" labels to the user in prose, headings, lists, or tool activity text.
 - Refer to documents by filename or a natural description, such as "the NDA draft".
 

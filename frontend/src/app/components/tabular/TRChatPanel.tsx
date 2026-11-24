@@ -42,8 +42,15 @@ import {
     DocReadBlock,
     EventBlock,
     ReasoningBlock,
+    CitationsRecordedBlock,
 } from "../assistant/message/EventBlocks";
 import { readSseFrames } from "@/app/lib/sse";
+import {
+    citationsRecordedEvent,
+    currentCitationSteps,
+    isRecordingCitations,
+    recordingCitationsEvent,
+} from "@/app/lib/citationsRecorded";
 import { chatRequestError } from "@/app/lib/assistantTurnStream";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { notifyError, notifyInfo } from "@/app/lib/userFacingError";
@@ -245,6 +252,15 @@ function TRAssistantMessage({
         return false;
     };
 
+    // A cited document opens at the first cell that cites it.
+    const citationSteps = currentCitationSteps(events);
+    const openCitedCell = ({ ref }: { ref: number }) => {
+        const cell = annotations.find((annotation) => annotation.ref === ref);
+        return cell
+            ? () => onCitationClick(cell.col_index, cell.row_index)
+            : undefined;
+    };
+
     const renderPreEvent = (
         event: AssistantEvent,
         index: number,
@@ -273,6 +289,22 @@ function TRAssistantMessage({
                     isStreaming={event.isStreaming}
                     showConnector={showConnector}
                     showFileIcon={false}
+                />
+            );
+        }
+        if (event.type === "citations_recorded") {
+            return (
+                <CitationsRecordedBlock
+                    key={key}
+                    refs={event.refs}
+                    removedRefs={event.removed_refs}
+                    sources={event.sources}
+                    quotesNotFound={event.quotes_not_found}
+                    rejected={event.rejected}
+                    isStreaming={!!event.isStreaming}
+                    interrupted={!!event.interrupted}
+                    showConnector={showConnector}
+                    openSource={source => citationSteps.get(source.ref) === event ? openCitedCell(source) : undefined}
                 />
             );
         }
@@ -907,10 +939,13 @@ export function TRChatPanel({
         return e.type === "thinking" && !!e.isStreaming;
     }
 
-    function clearStreamingPlaceholders() {
+    function finishStreamingSteps() {
         const before = eventsRef.current;
-        const after = before.filter((e) => !isStreamingPlaceholder(e));
-        if (after.length === before.length) return;
+        if (!before.some(e => isStreamingPlaceholder(e) || isRecordingCitations(e))) return;
+        const after = before.filter(e => !isStreamingPlaceholder(e)).map(e =>
+            e.type === "citations_recorded" && e.isStreaming
+                ? { ...e, isStreaming: false, interrupted: true } : e,
+        );
         eventsRef.current = after;
         const snapshot = [...after];
         setMessages((prev) => {
@@ -1418,7 +1453,7 @@ export function TRChatPanel({
                             // tab. The server has already stored the partial
                             // answer and [DONE] follows immediately, so all
                             // that is left is to stop pretending to think.
-                            clearStreamingPlaceholders();
+                            finishStreamingSteps();
                             continue;
                         }
 
@@ -1849,6 +1884,27 @@ export function TRChatPanel({
                             continue;
                         }
 
+                        if (data.type === "citations_recorded_start") {
+                            pushEvent(recordingCitationsEvent());
+                            continue;
+                        }
+
+                        if (data.type === "citations_recorded") {
+                            const recorded = citationsRecordedEvent(data);
+                            // Completes the step its start frame opened, or adds it.
+                            if (
+                                !updateMatchingEvent(
+                                    isRecordingCitations,
+                                    () => recorded,
+                                )
+                            ) {
+                                pushEvent(recorded);
+                            }
+                            // The model writes the answer next.
+                            pushThinkingPlaceholder();
+                            continue;
+                        }
+
                         if (data.type === "doc_read_start") {
                             pushEvent({
                                 type: "doc_read",
@@ -1893,7 +1949,7 @@ export function TRChatPanel({
                                 },
                             );
                             flushDrip();
-                            clearStreamingPlaceholders();
+                            finishStreamingSteps();
                             pushEvent({
                                 type: "error",
                                 message: failure.message,
@@ -1929,10 +1985,14 @@ export function TRChatPanel({
                         }
 
                         if (data.type === "citations") {
-                            // End-of-stream signal — scrub any lingering
-                            // placeholders so they don't persist into the
-                            // finalised message.
-                            clearStreamingPlaceholders();
+                            // The final frame ends the stream — scrub any
+                            // lingering placeholders so they don't persist
+                            // into the finalised message. Partial frames
+                            // arrive as cite_sources records citations,
+                            // before the answer.
+                            if (data.status === "final") {
+                                finishStreamingSteps();
+                            }
                             const incoming = (data.citations ??
                                 []) as TRCitationAnnotation[];
                             setMessages((prev) => {
@@ -2065,7 +2125,7 @@ export function TRChatPanel({
             if (streamGenerationRef.current !== gen) return;
 
             flushDrip();
-            clearStreamingPlaceholders();
+            finishStreamingSteps();
             setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -2102,7 +2162,7 @@ export function TRChatPanel({
                 !isAbort &&
                 isUncertainDelivery(err, Boolean(serverChatId && serverTurnId));
             stopDrip();
-            clearStreamingPlaceholders();
+            finishStreamingSteps();
             setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];

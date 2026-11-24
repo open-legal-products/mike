@@ -439,8 +439,30 @@ export type TextCardEvent = {
   text: string;
 };
 
+/**
+ * One cite_sources call: the citations the answer recorded before it was
+ * written. The citations themselves travel on the answer's citations.
+ */
+export type CitationsRecordedEvent = {
+  type: "citations_recorded";
+  /** Previously recorded refs this call removed. */
+  removed_refs?: number[];
+  /** The refs this call recorded, in ref order. */
+  refs: number[];
+  /**
+   * What those refs cite, once each: a document's filename or a case's name,
+   * its type, and the first ref citing it (whose citation opens it).
+   */
+  sources: { name: string; type: SourceDocumentType; ref: number }[];
+  /** Quotes the check could not find in their source. */
+  quotes_not_found: number;
+  /** Entries the call refused (unknown document, malformed entry). */
+  rejected: number;
+};
+
 export type AssistantEvent =
   | TextCardEvent
+  | CitationsRecordedEvent
   | DocumentSearchEvent
   | { type: "reasoning"; text: string }
   | AskInputsEvent

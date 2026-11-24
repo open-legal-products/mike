@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSystemPrompt } from "../prompts";
+import { CITE_SOURCES_TOOL_NAME } from "../citeSources";
 import { COURTLISTENER_SYSTEM_PROMPT } from "../tools/courtlistenerTools";
 
 describe("buildSystemPrompt", () => {
@@ -20,12 +21,15 @@ describe("buildSystemPrompt", () => {
         }
     });
 
-    it("always contains the citation contract the parser depends on", () => {
+    it("asks for citations through cite_sources, before the answer", () => {
         for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
-            expect(prompt).toContain("<CITATIONS>");
-            expect(prompt).toContain("</CITATIONS>");
             expect(prompt).toContain(
-                `Every [N] marker must have exactly one matching entry with "ref": N.`,
+                `Record citations with the ${CITE_SOURCES_TOOL_NAME} tool BEFORE writing the answer`,
+            );
+            expect(prompt).toContain("Never list the citations or their JSON in the answer");
+            expect(prompt).not.toContain("<CITATIONS>");
+            expect(prompt).toContain(
+                `Every [N] marker in the answer must have a recorded entry with "ref": N`,
             );
             expect(prompt).toContain(
                 `"doc_id" must be the exact chat-local label you were given`,

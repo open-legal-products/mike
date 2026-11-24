@@ -592,7 +592,6 @@ describe("useAssistantChat SSE parsing", () => {
         ]);
 
         expect(assistant?.citations).toEqual([{ ref: 1 }]);
-        expect(assistant?.citationStatus).toBe("final");
         expect(assistant?.events).toEqual([
             { type: "content", text: "Cited." },
         ]);

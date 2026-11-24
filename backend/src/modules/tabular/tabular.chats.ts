@@ -1,8 +1,8 @@
 // Chat support for the tabular module: the review-chat records themselves
 // (list, delete, patch, messages), the prepare/persist halves of the streaming
-// chat endpoint, parsing the model's <CITATIONS> block into typed annotations,
-// and building the system + history messages the agentic review chat streams
-// over. The streaming loop itself stays in tabular.routes.ts.
+// chat endpoint, and building the system + history messages the agentic
+// review chat streams over. Its citations are recorded with cite_sources.
+// The streaming loop itself stays in tabular.routes.ts.
 
 import {
     generateSpotlightNonce,
@@ -58,47 +58,6 @@ import {
 } from "./tabular.shared";
 
 // ---------------------------------------------------------------------------
-// Tabular citation parsing
-// ---------------------------------------------------------------------------
-
-export type TabularParsedCitation = {
-    ref: number;
-    col_index: number;
-    row_index: number;
-    quote: string;
-};
-
-const TABULAR_CITATIONS_BLOCK_RE = /<CITATIONS>\s*([\s\S]*?)\s*<\/CITATIONS>/;
-
-export function parseTabularCitations(text: string): TabularParsedCitation[] {
-    const match = text.match(TABULAR_CITATIONS_BLOCK_RE);
-    if (!match) return [];
-    try {
-        return JSON.parse(match[1]) as TabularParsedCitation[];
-    } catch {
-        return [];
-    }
-}
-
-export function extractTabularAnnotations(
-    fullText: string,
-    tabularStore: TabularCellStore,
-) {
-    return parseTabularCitations(fullText).map((c) => ({
-        type: "tabular_citation" as const,
-        ref: c.ref,
-        col_index: c.col_index,
-        row_index: c.row_index,
-        col_name:
-            tabularStore.columns[c.col_index]?.name ?? `Col ${c.col_index}`,
-        doc_name:
-            tabularStore.documents[c.row_index]?.filename ??
-            `Row ${c.row_index}`,
-        quote: c.quote,
-    }));
-}
-
-// ---------------------------------------------------------------------------
 // Build messages for tabular chat
 // ---------------------------------------------------------------------------
 
@@ -132,22 +91,21 @@ COLUMNS (fields):
 ${colList || "- (none)"}
 
 TABULAR CITATION INSTRUCTIONS:
-When you reference specific cell content, place a numbered marker [1], [2], etc. inline in your prose at the point of reference.
-
-After your complete response, append a <CITATIONS> block containing a JSON array with one entry per marker:
-
-<CITATIONS>
-[
-  {"ref": 1, "col_index": 0, "row_index": 2, "quote": "verbatim text from the cell"},
-  {"ref": 2, "col_index": 1, "row_index": 0, "quote": "another excerpt"}
-]
-</CITATIONS>
+When you rely on specific cell content, record it with the cite_sources tool BEFORE writing the answer:
+1. Read the cells you need with read_table_cells.
+2. Call cite_sources once with one entry per marker, numbered 1 through N in the order the markers will first appear:
+   {"citations": [
+     {"ref": 1, "col_index": 0, "row_index": 2, "quote": "verbatim text from the cell"},
+     {"ref": 2, "col_index": 1, "row_index": 0, "quote": "another excerpt"}
+   ]}
+3. If the result lists quotes it could not find or entries it rejected, call cite_sources again with corrected entries under the same refs, or leave those claims out.
+4. Write the answer, placing each marker [1], [2], etc. inline at the point of reference.
 
 Rules:
 - col_index and row_index are 0-based (matching the COL/ROW numbers listed above)
 - Only cite cells you have read via read_table_cells
 - quote should be verbatim text from the cell's summary
-- Omit <CITATIONS> if you make no citations
+- Never list the citations or their JSON in the answer. Skip cite_sources when the answer cites nothing
 - Do not fabricate cell content
 - Answer in clear, concise prose. You may use markdown formatting.${
         time ? `\n\n${MESSAGE_TIME_PROMPT}` : ""

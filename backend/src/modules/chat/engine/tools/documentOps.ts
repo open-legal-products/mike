@@ -51,14 +51,14 @@ export function citationReminder(
   );
   const shapeLine = isSpreadsheet
     ? `Use this citation object shape for this spreadsheet: {"ref": 1, "doc_id": "${docLabel}", "quotes": [{"sheet": "Sheet name", "cell": "B7", "quote": "plain cell value"}]}. Cite by "sheet" + "cell" (A1 address or range), not by page.`
-    : `Use this citation object shape: {"ref": 1, "doc_id": "${docLabel}", "quotes": [{"page": 1, "quote": "exact verbatim text from the document"}]}. Include top-level "page" and "quote" too only if they match the first quote.`;
+    : `Use this citation object shape: {"ref": 1, "doc_id": "${docLabel}", "quotes": [{"page": "1", "quote": "exact verbatim text from the document"}]}.`;
   return [
     `[Citation requirement for ${docLabel}]:`,
     `Document filename: ${promptFilename}`,
-    `If your final answer makes any factual claim from this document, include inline [N] markers and append a final <CITATIONS> JSON block.`,
+    `If your final answer makes any factual claim from this document, include inline [N] markers, each with a citation entry.`,
     `Every citation entry for this document MUST use "doc_id": "${docLabel}".`,
     shapeLine,
-    `Do not use "marker" or "text" keys in the citation block; use "ref" and "quotes".`,
+    `Do not use "marker" or "text" keys in citation entries; use "ref" and "quotes".`,
   ].join("\n");
 }
 

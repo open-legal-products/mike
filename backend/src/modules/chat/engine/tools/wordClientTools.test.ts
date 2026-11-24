@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_DOCUMENT_CONTEXT_CHARS } from "../contextBuilders";
 import {
   APPLY_WORD_EDITS_TOOL_NAME,
@@ -441,6 +441,21 @@ describe("createWordClientToolsAdapter", () => {
         block_index: TOOL_EDIT_BLOCK_INDEX_BASE + 2,
       }),
     ]);
+  });
+
+  it("invalidates the citation snapshot on an applied edit and refreshes it from a live read", async () => {
+    const { frames, write } = collectSse();
+    const onCitationText = vi.fn();
+    const adapter = createWordClientToolsAdapter({ userId: "u1", write, nonce: "test-nonce", onCitationText });
+    const edit = adapter.execute({ id: "edit", name: APPLY_WORD_EDITS_TOOL_NAME,
+      input: { edits: [{ original: "Old rent", replacement: "New rent", reason: "Revised clause" }] } });
+    submitClientToolResult(lastToolCallFrame(frames).tool_call_id as string, "u1", { edits: [{ index: 0, status: "applied" }] });
+    await edit;
+    expect(onCitationText).toHaveBeenLastCalledWith("");
+    const read = adapter.execute({ id: "read", name: READ_ACTIVE_DOCUMENT_TOOL_NAME, input: {} });
+    submitClientToolResult(lastToolCallFrame(frames).tool_call_id as string, "u1", { document: "New rent" });
+    await read;
+    expect(onCitationText).toHaveBeenLastCalledWith("New rent");
   });
 
   it("round-trips read_active_document with read lifecycle frames", async () => {

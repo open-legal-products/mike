@@ -48,6 +48,46 @@ function DocumentEventBlockUI({
     );
 }
 
+/**
+ * A source an event step names (a file, a case, a statute): its icon and
+ * name, and a button when the step can open it.
+ */
+export function EventSourceUI({
+    name,
+    icon,
+    onClick,
+    isStreaming,
+}: {
+    name: string;
+    icon?: ReactNode;
+    /** Opens the source; ignored while the step is still running. */
+    onClick?: () => void;
+    isStreaming?: boolean;
+}) {
+    const content = (
+        <>
+            {icon}
+            <span className="truncate">
+                {name}
+                {isStreaming && "..."}
+            </span>
+        </>
+    );
+    return !isStreaming && onClick ? (
+        <button
+            type="button"
+            onClick={onClick}
+            className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-left align-middle transition-colors hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+        >
+            {content}
+        </button>
+    ) : (
+        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 align-middle">
+            {content}
+        </span>
+    );
+}
+
 export function DocReadBlockUI({
     filename,
     fileIcon,
@@ -64,17 +104,6 @@ export function DocReadBlockUI({
     /** The turn ended before the read reported its result. */
     interrupted?: boolean;
 }) {
-    const file = filename ? (
-        <>
-            {fileIcon}
-            <span className="truncate">
-                {filename}
-                {isStreaming && "..."}
-            </span>
-        </>
-    ) : isStreaming ? (
-        <span>...</span>
-    ) : null;
 
     return (
         <DocumentEventBlockUI
@@ -86,19 +115,16 @@ export function DocReadBlockUI({
                 <span className="shrink-0 font-medium">
                     {isStreaming ? "Reading" : interrupted ? "Read stopped" : "Read"}
                 </span>
-                {!isStreaming && onClick ? (
-                    <button
-                        type="button"
+                {filename ? (
+                    <EventSourceUI
+                        name={filename}
+                        icon={fileIcon}
                         onClick={onClick}
-                        className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-colors hover:text-gray-700"
-                    >
-                        {file}
-                    </button>
-                ) : (
-                    <span className="flex min-w-0 items-center gap-1.5">
-                        {file}
-                    </span>
-                )}
+                        isStreaming={isStreaming}
+                    />
+                ) : isStreaming ? (
+                    <span>...</span>
+                ) : null}
             </div>
         </DocumentEventBlockUI>
     );
@@ -191,23 +217,12 @@ export function DocEditBlockUI({
             </span>
             {filename && (
                 <span className="ml-1 inline-flex min-w-0 align-middle">
-                    {!isStreaming && onClick ? (
-                        <button
-                            type="button"
-                            onClick={onClick}
-                            className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-colors hover:text-gray-700"
-                        >
-                            {fileIcon}
-                            <span className="truncate">{filename}</span>
-                        </button>
-                    ) : (
-                        <span className="inline-flex min-w-0 items-center gap-1.5">
-                            {fileIcon}
-                            <span className="truncate">
-                                {isStreaming ? `${filename}...` : filename}
-                            </span>
-                        </span>
-                    )}
+                    <EventSourceUI
+                        name={filename}
+                        icon={fileIcon}
+                        onClick={onClick}
+                        isStreaming={isStreaming}
+                    />
                 </span>
             )}
             {detail && <span className="ml-1 text-gray-400">{detail}</span>}
