@@ -49,9 +49,17 @@ const tasks = TASKS.filter((t) => !taskIds || taskIds.includes(t.id));
 const repeats = Number(values.repeats);
 const concurrency = Number(values.concurrency);
 const outFile = values.out;
-// Inline citations, on a branch that has them; other branches ignore it.
+// Inline citations with CITATION_FORMAT=inline; otherwise cite_sources.
 const citationFormat =
   process.env.CITATION_FORMAT === "inline" ? ("inline" as const) : undefined;
+// An arm named for a format must run it: CITATION_FORMAT can also arrive
+// from the --env-file, where it is easy to miss.
+if ((arm === "inline") !== (citationFormat === "inline")) {
+  throw new Error(
+    `--arm ${arm} but CITATION_FORMAT is ${process.env.CITATION_FORMAT ?? "unset"}; ` +
+      `set CITATION_FORMAT=${arm === "inline" ? "inline" : "cite_sources"} for this arm.`,
+  );
+}
 mkdirSync(dirname(outFile), { recursive: true });
 
 // ---------------------------------------------------------------------------
