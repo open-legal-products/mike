@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-const { redisEnabled, reportError, redisConnect, streamChatWithTools } = vi.hoisted(() => ({
+const { enqueueExtraction, redisEnabled, reportError, redisConnect, streamChatWithTools } = vi.hoisted(() => ({
+    enqueueExtraction: vi.fn(),
     redisEnabled: vi.fn(() => false),
     reportError: vi.fn(),
     redisConnect: vi.fn(),
     streamChatWithTools: vi.fn(),
 }));
+vi.mock("../../../lib/queue/extractionQueue", () => ({ enqueueExtraction }));
 vi.mock("../../../lib/llm", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../../lib/llm")>()),
     streamChatWithTools,
@@ -39,6 +41,7 @@ import { toProviderStreamError } from "../../../lib/llm/providerErrors";
 import { tableDb } from "../../../__tests__/helpers/tableDb";
 import {
     awaitCellTerminal,
+    streamTabularGenerateAsync,
     streamTabularGenerateSync,
     streamTabularRunView,
     targetPendingCells,
@@ -242,6 +245,60 @@ describe("awaitCellTerminal", () => {
 
         // Flag unset above — the DB poll alone resolved it.
         expect(process.env.ASYNC_TABULAR_EXTRACTION).toBeUndefined();
+    });
+});
+
+describe("async generation enqueue failures", () => {
+    it.each(["some", "all"])("releases the generation and allows retry when %s rows fail to enqueue", async (failure) => {
+        vi.useFakeTimers();
+        try {
+            const done = JSON.stringify({ summary: "Already extracted" });
+            const cells = [
+                { id: "cell-1", review_id: "rev", row_id: "row-1", column_index: 0, status: "pending", content: null, generation_id: null },
+                { id: "cell-2", review_id: "rev", row_id: "row-1", column_index: 1, status: "done", content: done, generation_id: null },
+                { id: "cell-3", review_id: "rev", row_id: "row-2", column_index: 0, status: "pending", content: null, generation_id: null },
+                { id: "cell-4", review_id: "rev", row_id: "row-2", column_index: 1, status: "done", content: done, generation_id: null },
+            ];
+            const fake = tableDb({ tabular_cells: cells });
+            const rpc = vi.fn().mockResolvedValue({ error: null });
+            enqueueExtraction.mockImplementation(async ({ rowId }: { rowId: string }) => {
+                if (rowId === "row-2" || failure === "all") throw new Error("queue unavailable");
+                // The accepted row finishes before submission of the failed row
+                // settles. Its worker cannot release the lease yet.
+                expect(cells[2].generation_id).toBe("generation");
+                Object.assign(cells[0], { status: "done", content: done, generation_id: null });
+            });
+            const writes: string[] = [];
+            const res = Object.assign(new EventEmitter(), {
+                setHeader: vi.fn(), flushHeaders: vi.fn(), writableEnded: false,
+                write: (chunk: string) => (writes.push(chunk), true),
+                end() { this.writableEnded = true; },
+            });
+            const cellMap = new Map(cells.map((cell) => [`${cell.row_id}:${cell.column_index}`, { ...cell }]));
+            await streamTabularGenerateAsync({
+                res: res as never, db: Object.assign(fake.db, { rpc }), reviewId: "rev",
+                generationId: "generation", userId: "owner", columns: COLUMNS,
+                rows: ROWS as never, cellMap, log: { error: vi.fn() } as never,
+            });
+            await vi.advanceTimersByTimeAsync(3_000);
+            // A dead queue is not asked again for the rows behind the failure.
+            expect(enqueueExtraction).toHaveBeenCalledTimes(failure === "all" ? 1 : 2);
+            expect(cells[2]).toMatchObject({ status: "error", generation_id: null });
+            expect(cells[0]).toMatchObject({ status: failure === "all" ? "error" : "done", generation_id: null });
+            expect(cells[1]).toMatchObject({ status: "done", content: done, generation_id: null });
+            expect(cells[3]).toMatchObject({ status: "done", content: done, generation_id: null });
+            expect(rpc).toHaveBeenCalledWith("finish_tabular_review_generation", {
+                target_review_id: "rev", target_generation_id: "generation",
+            });
+            expect(writes.join("")).toContain('"row_id":"row-2","column_index":0,"content":null,"status":"error"');
+            expect(writes.at(-1)).toBe("data: [DONE]\n\n");
+            const retryMap = new Map(cells.map((cell) => [`${cell.row_id}:${cell.column_index}`, cell]));
+            expect(targetPendingCells(COLUMNS, ROWS, retryMap).rowIds)
+                .toEqual(failure === "all" ? ["row-1", "row-2"] : ["row-2"]);
+        } finally {
+            enqueueExtraction.mockReset();
+            vi.useRealTimers();
+        }
     });
 });
 

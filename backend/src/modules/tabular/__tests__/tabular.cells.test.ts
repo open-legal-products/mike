@@ -258,6 +258,7 @@ describe("clearTabularReviewCells", () => {
             "rev-1",
             ["row-1"],
             [0],
+            REVIEW.active_generation_id,
         );
     });
 

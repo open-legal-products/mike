@@ -198,14 +198,26 @@ export async function runExtractionJob(
         }
 
         // 3. Current cell state for this row, keyed by column.
-        const { data: cells } = await db
+        const { data: cells, error: cellError } = await db
             .from("tabular_cells")
             .select("*")
             .eq("review_id", reviewId)
             .eq("row_id", rowId);
+        if (cellError) throw new AppError("tabular.generation_failed", "Could not load the extraction row's cells", { cause: cellError });
         const existingByColumn = new Map<number, Record<string, unknown>>();
         for (const cell of (cells ?? []) as Record<string, unknown>[])
             existingByColumn.set(cell.column_index as number, cell);
+        // A submission timeout can revoke the claim even if the job landed
+        // in the queue. A late delivery has no work once the claim is gone.
+        if (generationId) {
+            columns = columns.filter((column) =>
+                existingByColumn.get(column.index)?.generation_id === generationId,
+            );
+            if (columns.length === 0) {
+                settled = true;
+                return;
+            }
+        }
 
         // 4. Model + keys for the owner (never serialized into the job payload).
         //    The model is the REVIEW's — the enqueuing request already validated
