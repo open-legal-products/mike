@@ -2,8 +2,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { createPortal } from "react-dom";
 import { expect, it, vi } from "vitest";
 import type { Document } from "@/app/components/shared/types";
-import type { DocumentVersion } from "@/app/lib/mikeApi";
+import { getDocumentComparison, type DocumentVersion } from "@/app/lib/mikeApi";
 import { DocumentSidePanel } from "./DocumentSidePanel";
+
+vi.mock("@/app/lib/mikeApi", async (original) => ({
+    ...(await original()),
+    getDocumentComparison: vi.fn(),
+}));
 
 // Stand in for a viewer whose context menu portals to document.body.
 vi.mock("@/app/components/shared/views/DocxView", () => ({
@@ -58,14 +63,15 @@ it("stays open for portaled menus opened from the viewer, but closes on a real o
     expect(onClose).toHaveBeenCalledOnce();
 });
 
+const version = (n: number, createdAt = "2026-09-01"): DocumentVersion => ({
+    id: `v${n}`,
+    version_number: n,
+    source: "upload",
+    created_at: createdAt,
+    filename: `agreement-v${n}.docx`,
+});
+
 it("titles the document view and lists the latest version first", () => {
-    const version = (n: number, createdAt: string): DocumentVersion => ({
-        id: `v${n}`,
-        version_number: n,
-        source: "upload",
-        created_at: createdAt,
-        filename: `agreement-v${n}.docx`,
-    });
     renderPanel(vi.fn(), {
         readOnly: false,
         // Out of order on purpose: the list must not rely on the API's order.
@@ -88,4 +94,28 @@ it("titles the document view and lists the latest version first", () => {
         "Download Version 2",
         "Download Version 1",
     ]);
+});
+
+it("opens and closes a comparison from version history without a chat", async () => {
+    vi.mocked(getDocumentComparison).mockResolvedValue(new ArrayBuffer(4));
+    renderPanel(vi.fn(), { readOnly: false, versions: [version(1), version(2)] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare V2 with V1" }));
+    expect(await screen.findByRole("heading", {
+        name: "agreement-v2 (V1 to V2 comparison).docx",
+    })).toBeVisible();
+    expect(getDocumentComparison).toHaveBeenCalledWith("doc-1", "v1", "v2", expect.any(AbortSignal));
+    expect(screen.getByRole("button", { name: "Download comparison" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close comparison" }));
+    expect(screen.getByRole("heading", { name: "agreement-v2.docx" })).toBeVisible();
+});
+
+it("explains when either version exceeds the comparison size limit", () => {
+    renderPanel(vi.fn(), {
+        readOnly: false,
+        versions: [{ ...version(1), size_bytes: 21 * 1024 * 1024 }, version(2)],
+    });
+    expect(screen.getByRole("button", { name: "Compare V2 with V1" })).toBeDisabled();
+    expect(screen.getByText(/20 MiB/)).toBeVisible();
 });

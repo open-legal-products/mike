@@ -83,11 +83,13 @@ warning. Existing Mike edit cards still resolve through the backend.
 
 ## Comparing versions
 
-When a Word document has more than one version, the version menu in the title
-row offers **Compare with V*n***: the displayed version against the nearest
-earlier Word version that has not been deleted. The viewer then shows a
+In Projects or Library, open a Word document and choose **Compare V2 with V1**
+beside **Versions**. On a phone, the action also appears beneath the document
+title. In a chat viewer, open the version menu and choose **Compare with V1**.
+The version numbers follow the displayed version and the nearest earlier Word
+version that is still available. The viewer then shows a
 redline, the displayed version with every difference from the earlier one as a
-tracked change, under a "Changes since V*n*" label with **Close comparison**.
+tracked change. Choose **Close comparison** to return to the source.
 **Download comparison** becomes available as soon as Mike receives the redline.
 It saves those exact bytes as `<name> (Vx to Vy comparison).docx`, even if the
 preview cannot display them. Word can accept or reject the changes. Closing the
