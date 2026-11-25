@@ -19,8 +19,8 @@ owners and other members cannot see or use it.
 A conversation uses only the connections of the workspace it is in. Assistant
 chats, project chats and tabular chats in an organization use the user's
 connections for that organization, and pending connector write approvals
-resume against them. Personal chats and the Personal-only Word add-in use the
-Personal set. A tool from another workspace's connector is never offered, and
+resume against them. Word add-in chats do the same for the workspace they were
+started in. Personal chats use the Personal set. A tool from another workspace's connector is never offered, and
 a call naming one resolves to nothing.
 
 Each connector table records the workspace in `org_id` (null for Personal).

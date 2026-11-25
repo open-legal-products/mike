@@ -25,6 +25,7 @@ import {
 import { reportFault } from "../../lib/notify";
 
 import { buildDirectoryIndex } from "../../lib/directoryIndex";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
 
 type DirectoryTab = "files" | "templates" | "projects";
 
@@ -103,6 +104,7 @@ export function AddDocumentsModal({
   onSelect,
   initialSelectedDocuments = [],
 }: AddDocumentsModalProps): React.ReactElement | null {
+  const { workspaceId } = useAddinWorkspace();
   const [activeTab, setActiveTab] = useState<DirectoryTab>("files");
   const [documents, setDocuments] = useState<Document[]>([]);
   const [libraryFolders, setLibraryFolders] = useState<LibraryFolder[]>([]);
@@ -192,13 +194,19 @@ export function AddDocumentsModal({
 
     const request =
       activeTab === "projects"
-        ? listProjects({ limit: DIRECTORY_PAGE_SIZE + 1 }).then((items) => {
+        ? listProjects({
+            limit: DIRECTORY_PAGE_SIZE + 1,
+            workspace: workspaceId,
+          }).then((items) => {
             if (!cancelled) {
               setProjects((items ?? []).slice(0, DIRECTORY_PAGE_SIZE));
               setProjectsHasMore((items ?? []).length > DIRECTORY_PAGE_SIZE);
             }
           })
-        : getLibrary(activeTab, { limit: DIRECTORY_PAGE_SIZE }).then(
+        : getLibrary(activeTab, {
+            limit: DIRECTORY_PAGE_SIZE,
+            workspace: workspaceId,
+          }).then(
             (collection) => {
               if (!cancelled) {
                 setLibraryFolders(collection.folders ?? []);
@@ -231,7 +239,7 @@ export function AddDocumentsModal({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, open]);
+  }, [activeTab, open, workspaceId]);
 
   const selectedIds = useMemo(
     () => new Set(selectedDocuments.map((document) => document.id)),
@@ -349,6 +357,7 @@ export function AddDocumentsModal({
       const rows = await listProjects({
         limit: DIRECTORY_PAGE_SIZE + 1,
         offset: projects.length,
+        workspace: workspaceId,
       });
       if (activeTabRef.current !== "projects") return;
       setProjects((current) =>
@@ -398,6 +407,7 @@ export function AddDocumentsModal({
     };
     try {
       const outcomes = await uploadStandaloneDocuments(supported, {
+        workspace: workspaceId,
         onProgress: (progress: UploadProgress<Document>) => {
           if (progress.status === "completed" || progress.status === "error") {
             setUploadingFilenames((current) =>
@@ -485,6 +495,7 @@ export function AddDocumentsModal({
       const level = await getLibraryFolderChildren(kind, folderId, {
         limit: DIRECTORY_PAGE_SIZE,
         offset,
+        workspace: workspaceId,
       });
 
       if (activeTabRef.current === kind) {
@@ -548,6 +559,7 @@ export function AddDocumentsModal({
       const level = await getLibrary(kind, {
         limit: DIRECTORY_PAGE_SIZE,
         offset: folderDocuments(documents, null).length,
+        workspace: workspaceId,
       });
       if (activeTabRef.current !== kind) return;
       setDocuments((current) => mergeById(current, level.documents));

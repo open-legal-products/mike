@@ -65,6 +65,7 @@ export function ModalSelect({
   disabled = false,
   placeholder = "Select…",
   className,
+  "aria-label": ariaLabel,
 }: {
   id: string;
   value: string;
@@ -73,6 +74,7 @@ export function ModalSelect({
   disabled?: boolean;
   placeholder?: string;
   className?: string;
+  "aria-label"?: string;
 }): React.ReactElement {
   const normalizedOptions = options.map((option) =>
     typeof option === "string" ? { value: option, label: option } : option,
@@ -87,6 +89,7 @@ export function ModalSelect({
         <button
           id={id}
           type="button"
+          aria-label={ariaLabel}
           disabled={disabled}
           className={cn(
             "flex h-10 w-full items-center justify-between rounded-xl border border-white/70 bg-white/55 px-3 text-sm text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.052),inset_0_1px_0_rgba(255,255,255,0.86),inset_0_-1px_0_rgba(255,255,255,0.58)] transition-colors hover:bg-white/70 focus:bg-white/70 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60",

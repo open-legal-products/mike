@@ -21,6 +21,8 @@ import type {
   WordEditApplyMode,
 } from "../../lib/wordChatSettings";
 import { ChatView } from "./ChatView";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
+import { workspaceStorageNotice } from "../../lib/workspaceState";
 import type {
   ReasoningLevel,
   WorkflowAttachment,
@@ -80,6 +82,7 @@ export function ChatPanel({
   editApplyMode,
   onEditApplyModeChange,
 }: ChatPanelProps): React.ReactElement {
+  const { workspaceId, organizations } = useAddinWorkspace();
   const persistWordEdit = useCallback(
     async (
       messageId: string,
@@ -156,6 +159,7 @@ export function ChatPanel({
     wordDocumentId,
     wordChatStorage,
     wordChatOwnerId,
+    workspace: workspaceId,
     editApplyMode,
     // Only the identity-stable streaming callbacks; passing the whole
     // controller would tie handleChat's identity to every edit-state change.
@@ -250,6 +254,11 @@ export function ChatPanel({
       onSelectedWorkflowChange={onSelectedWorkflowChange}
       editApplyMode={editApplyMode}
       onEditApplyModeChange={onEditApplyModeChange}
+      workspaceNotice={workspaceStorageNotice(
+        wordChatStorage,
+        workspaceId,
+        organizations,
+      )}
     />
   );
 }

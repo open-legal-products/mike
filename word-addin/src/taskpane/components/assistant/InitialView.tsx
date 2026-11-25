@@ -11,8 +11,11 @@ const GREETING_GAP = 6;
 
 export function InitialView({
   onSelect,
+  notice = null,
 }: {
   onSelect: (action: QuickAction) => void;
+  /** Why a chat cannot start in this workspace, under the greeting. */
+  notice?: string | null;
 }): React.ReactElement {
   const [name, setName] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -39,11 +42,23 @@ export function InitialView({
   }, []);
 
   useLayoutEffect(() => {
-    if (!name || !textRef.current) return;
+    const text = textRef.current;
+    if (!name || !text) return;
     setLoaded(false);
-    const textWidth = textRef.current.offsetWidth;
-    setIconOffset((textWidth + GREETING_GAP) / 2);
-    setTextOffset((ICON_SIZE + GREETING_GAP) / 2);
+    // A greeting mounted while the Assistant view is hidden (a workspace
+    // switch made from Settings remounts the pane) has no width yet, so the
+    // offsets wait until it is laid out.
+    const measure = (): void => {
+      const textWidth = text.offsetWidth;
+      if (!textWidth) return;
+      setIconOffset((textWidth + GREETING_GAP) / 2);
+      setTextOffset((ICON_SIZE + GREETING_GAP) / 2);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(text);
+    return () => observer.disconnect();
   }, [name]);
 
   useEffect(() => {
@@ -91,6 +106,15 @@ export function InitialView({
           </>
         )}
       </div>
+      {notice && (
+        <p
+          role="status"
+          data-testid="workspace-storage-notice"
+          className="-mt-4 mb-6 max-w-xs text-xs leading-relaxed text-gray-500"
+        >
+          {notice}
+        </p>
+      )}
       <div className="flex h-5 items-center justify-center">
         <span className="flex items-center gap-1.5 text-xs font-medium text-gray-800">
           <img

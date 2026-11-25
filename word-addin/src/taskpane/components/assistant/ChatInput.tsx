@@ -65,6 +65,7 @@ import {
   WORD_WORKFLOW_SLASH_MENU_ID,
   WorkflowSlashMenu,
 } from "./WorkflowSlashMenu";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
 
 export interface ChatInputHandle {
   setDraft: (prompt: string) => void;
@@ -121,6 +122,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     },
     ref,
   ): React.ReactElement {
+    const { workspaceId } = useAddinWorkspace();
     const [input, setInput] = useState("");
     const [attachedDocuments, setAttachedDocuments] = useState<Document[]>([]);
     const [excerpts, setExcerpts] = useState<MessageExcerpt[]>([]);
@@ -233,7 +235,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     useEffect(() => {
       if (!slashCommandsLoading) return;
       let cancelled = false;
-      void listWorkflows("assistant")
+      void listWorkflows("assistant", workspaceId)
         .then((workflows) => {
           if (!cancelled) setSlashWorkflows(workflows);
         })
@@ -255,7 +257,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       return () => {
         cancelled = true;
       };
-    }, [slashCommandsLoading]);
+    }, [slashCommandsLoading, workspaceId]);
 
     useEffect(() => {
       const composer = composerRef.current;
@@ -398,6 +400,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
       try {
         const outcomes = await uploadStandaloneDocuments(supported, {
+          workspace: workspaceId,
           onProgress: (progress: UploadProgress<Document>) => {
             if (progress.status === "completed" && progress.result) {
               attachDocuments([progress.result]);

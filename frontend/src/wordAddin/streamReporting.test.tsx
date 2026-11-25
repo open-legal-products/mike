@@ -44,7 +44,7 @@ it.each([[500, "backend"], [503, "backend"], [500, undefined], [503, undefined]]
     const { result } = renderHook(() => useWordAssistantChat({
         sessionKey: 1, chatId: "chat-1", initialMessages: [],
         onChatIdChange: vi.fn(), onChatStarted: vi.fn(), wordDocumentId: "doc-1",
-        wordChatStorage: "cloud", wordChatOwnerId: "user-1", editApplyMode: "direct",
+        wordChatStorage: "cloud", wordChatOwnerId: "user-1", workspace: "personal", editApplyMode: "direct",
         editController: { applyToolEdits: vi.fn().mockResolvedValue([]), processLiveRedlines: vi.fn(), markIncompleteRedlines: vi.fn(), waitForMessageEdits: vi.fn().mockResolvedValue(undefined) },
     }));
     await act(async () => { await result.current.handleChat({ content: "Private prompt", model: "gpt-5.4", reasoning: "none" }); });

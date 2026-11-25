@@ -1,7 +1,10 @@
 import React from "react";
 import { Trash2 } from "lucide-react";
 import { ToggleSwitchUI, PillButtonUI as PillButton, GlassCardUI } from "@mike/ui";
+import { workspaceMenuOptions } from "@mike/client";
 import { PageTitle } from "../primitives/PageTitle";
+import { ModalSelect } from "../primitives/ModalForm";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
 import { Modal } from "../primitives/Modal";
 import { reportFault } from "../../lib/notify";
@@ -21,6 +24,10 @@ export function SettingsPage({
   const [error, setError] = React.useState<string | null>(null);
   const [clearConfirmOpen, setClearConfirmOpen] = React.useState(false);
   const [clearing, setClearing] = React.useState(false);
+  const { workspaceId, organizations, setWorkspace } = useAddinWorkspace();
+  // Personal and each team organization; nothing to choose between for
+  // somebody without one, so the card is left out.
+  const workspaceOptions = workspaceMenuOptions(organizations);
 
   const updateMode = async (cloud: boolean): Promise<void> => {
     setSaving(true);
@@ -42,6 +49,30 @@ export function SettingsPage({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto p-4">
       <PageTitle className="mb-5 px-1">Settings</PageTitle>
+      {workspaceOptions && (
+        <section className="mb-3">
+          <GlassCardUI>
+            <div className="p-4">
+              <h2 className="text-sm font-medium text-gray-900">Workspace</h2>
+              <p className="mt-1 text-xs leading-5 text-gray-500">
+                Chats, documents, workflows and quick actions in this pane
+                belong to the workspace chosen here.
+              </p>
+              <ModalSelect
+                id="settings-workspace"
+                aria-label="Workspace"
+                value={workspaceId}
+                options={workspaceOptions.map((option) => ({
+                  value: option.id,
+                  label: option.name,
+                }))}
+                onChange={setWorkspace}
+                className="mt-3"
+              />
+            </div>
+          </GlassCardUI>
+        </section>
+      )}
       <section>
         <GlassCardUI>
           <div className="p-4">

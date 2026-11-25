@@ -9,6 +9,7 @@ import { WorkflowList } from "./WorkflowList";
 import { PageTitle } from "../primitives/PageTitle";
 import { WorkflowAssets } from "./WorkflowAssets";
 import { reportFault, notifyError } from "../../lib/notify";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
 
 const WorkflowPromptEditor = lazy(() =>
   import("./WorkflowPromptEditor").then((module) => ({
@@ -34,6 +35,7 @@ export function WorkflowPicker({
   selectedWorkflow,
   onSelectedWorkflowChange,
 }: WorkflowPickerProps): React.ReactElement {
+  const { workspaceId } = useAddinWorkspace();
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [fetchLoading, setFetchLoading] = useState(true);
   // The failure itself is reported by the toast below, which carries Retry.
@@ -84,7 +86,7 @@ export function WorkflowPicker({
 
   useEffect(() => {
     let cancelled = false;
-    listWorkflows("assistant")
+    listWorkflows("assistant", workspaceId)
       .then((all) => {
         const data = (all ?? []).filter(
           (workflow) =>
@@ -114,7 +116,7 @@ export function WorkflowPicker({
     return () => {
       cancelled = true;
     };
-  }, [fetchAttempt]);
+  }, [fetchAttempt, workspaceId]);
 
   useEffect(() => {
     if (!selectedWorkflow) return;

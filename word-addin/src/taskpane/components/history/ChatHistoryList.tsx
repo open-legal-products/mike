@@ -9,6 +9,11 @@ import {
 import { cn } from "../../../shared/lib/utils";
 import type { WordChatOpenHandler } from "../../lib/wordChatTypes";
 import { useOpenWordChat } from "../../hooks/useOpenWordChat";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
+import {
+  historyEmptyLabel,
+  workspaceStorageNotice,
+} from "../../lib/workspaceState";
 
 interface ChatHistoryListProps {
   pageSize: number;
@@ -67,12 +72,14 @@ export function ChatHistoryList({
   ownerId,
   storageMode,
 }: ChatHistoryListProps): React.ReactElement {
+  const { workspaceId } = useAddinWorkspace();
   const pagination = usePaginatedChats(
     pageSize,
     active,
     documentId,
     ownerId,
     storageMode,
+    workspaceId,
   );
 
   return (
@@ -104,6 +111,12 @@ function ChatHistoryListView({
 }: ChatHistoryListViewProps): React.ReactElement {
   const { chats, loading, loadingMore, error, hasMore, loadMore, retry } =
     pagination;
+  const { workspaceId, organizations } = useAddinWorkspace();
+  const storageNotice = workspaceStorageNotice(
+    storageMode,
+    workspaceId,
+    organizations,
+  );
   const { openChat, loadingChatId, openError } = useOpenWordChat(
     documentId,
     ownerId,
@@ -155,9 +168,16 @@ function ChatHistoryListView({
         <div className="flex min-h-32 items-center justify-center">
           <Spinner label="Loading chats…" />
         </div>
+      ) : storageNotice ? (
+        <p
+          role="status"
+          className="px-4 py-8 text-center text-xs leading-relaxed text-gray-500"
+        >
+          {storageNotice}
+        </p>
       ) : filteredChats.length === 0 ? (
         <p className="py-8 text-center text-sm text-gray-400">
-          {search ? "No matches found" : "No chats saved for this document"}
+          {historyEmptyLabel(search, workspaceId, organizations)}
         </p>
       ) : (
         <div className="space-y-px">
