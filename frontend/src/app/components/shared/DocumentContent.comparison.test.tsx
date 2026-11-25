@@ -53,7 +53,7 @@ it("shows a read-only redline of the displayed version against the previous one,
 
     await openComparison(user, 3, 2);
     expect(await screen.findByText("Redline canvas")).toBeInTheDocument();
-    expect(screen.getByText("V2 to V3")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Document comparison" })).toBeInTheDocument();
     expect(lastViewer()).toMatchObject({
         documentId: "doc",
         readOnlyFile: { bytes: expect.anything() },
@@ -67,7 +67,7 @@ it("shows a read-only redline of the displayed version against the previous one,
 
     await user.click(screen.getByRole("button", { name: "Close comparison" }));
     expect(await screen.findByText("DOCX canvas")).toBeInTheDocument();
-    expect(screen.queryByText("V2 to V3")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Document comparison" })).toBeNull();
     expect(lastViewer()).toMatchObject({ documentId: "doc", versionId: "v3", canEdit: true });
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
 });
@@ -80,7 +80,7 @@ it("leaves the comparison when the displayed version changes", async () => {
 
     view.rerender(<DocumentContent document={panelDocument("v2", 2)} mode={{ kind: "document" }} onVersionChange={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("DOCX canvas")).toBeInTheDocument());
-    expect(screen.queryByText("V2 to V3")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Document comparison" })).toBeNull();
     expect(lastViewer()).toMatchObject({ versionId: "v2" });
     view.rerender(<DocumentContent document={panelDocument("v3", 3)} mode={{ kind: "document" }} onVersionChange={vi.fn()} />);
     expect(screen.getByText("DOCX canvas")).toBeVisible();

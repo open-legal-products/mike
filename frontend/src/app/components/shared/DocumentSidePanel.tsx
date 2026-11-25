@@ -22,7 +22,7 @@ import { DocumentPaneTitle } from "@/app/components/shared/DocumentPaneTitle";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
-import { DocumentComparisonView } from "./DocumentComparisonView";
+import { DocumentComparisonTitle, DocumentComparisonView } from "./DocumentComparisonView";
 import { ComparisonMenuItems } from "./ComparisonMenuItems";
 import { versionComparisons, type VersionComparison, COMPARISON_SIZE_MESSAGE, exceedsComparisonLimit, versionLabel } from "./versionComparison";
 import { useDocumentComparison } from "@/app/hooks/useDocumentComparison";
@@ -313,15 +313,11 @@ export function DocumentSidePanel({
         openComparison(pair);
         setMobilePane("document");
     }
-    const comparisonControls = comparison ? (
-        <>
-            <TextButtonUI size="xs" disabled={!comparison.bytes} onClick={comparison.download}>
-                <Download aria-hidden="true" className="h-3.5 w-3.5" />
-                Download comparison
-            </TextButtonUI>
-            <TextButtonUI size="xs" onClick={closeComparison}>Close comparison</TextButtonUI>
-        </>
-    ) : pairs.length > 1 ? (
+    const comparisonHeader = comparison && (
+        <DocumentComparisonTitle filename={selectedFilename} pair={comparison.pair}
+            onDownload={comparison.bytes ? comparison.download : undefined} onClose={closeComparison} />
+    );
+    const comparisonControls = comparison ? null : pairs.length > 1 ? (
         <Dropdown>
             <DropdownTrigger asChild>
                 <TextButtonUI size="xs">
@@ -625,6 +621,7 @@ export function DocumentSidePanel({
                 </div>
             </div>
 
+            {isMobile && comparisonHeader}
             <div
                 className="grid min-h-0 flex-1"
                 style={{
@@ -639,11 +636,9 @@ export function DocumentSidePanel({
                         mobilePane === "document" ? "flex" : "hidden",
                     )}
                 >
-                    <DocumentPaneTitle
-                        filename={comparison?.filename ?? selectedFilename}
-                        fileType={selectedFileType}
-                        versionNumber={comparison ? undefined : selectedVersionNumber}
-                    />
+                    {comparison
+                        ? !isMobile && comparisonHeader
+                        : <DocumentPaneTitle filename={selectedFilename} fileType={selectedFileType} versionNumber={selectedVersionNumber} />}
                     {isMobile && mobilePane === "document" && comparisonControls && (
                         <div className="flex flex-wrap items-center gap-1 px-3 pb-2">{comparisonControls}</div>
                     )}

@@ -98,8 +98,9 @@ from V1. The menu includes older and newer Word versions.
 
 **Reading the redline.** In this example, comparing V3 against V1 shows
 “thirty” deleted and “ninety” inserted. Accepting all changes in Word produces
-V3. **Download comparison** saves the generated Word file, even if its preview
-cannot render. **Close comparison** returns to the source document. Switching
+V3. The redline header shows the filename and the direction of comparison.
+**Download** saves the Word file, even if its preview cannot render. Use the
+close button beside **Download** to return to the source document. Switching
 versions also closes the comparison.
 
 ![V1 to V3 redline showing the notice period changing from thirty to ninety days](assets/word-comparison/redline.png)

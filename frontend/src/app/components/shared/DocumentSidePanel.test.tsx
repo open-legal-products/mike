@@ -103,7 +103,7 @@ it("opens and closes a comparison from version history without a chat", async ()
 
     fireEvent.click(screen.getByRole("button", { name: "Compare V2 with V1" }));
     expect(await screen.findByRole("heading", {
-        name: "agreement-v2 (V1 to V2 comparison).docx",
+        name: "agreement-v2.docx",
     })).toBeVisible();
     expect(getDocumentComparison).toHaveBeenCalledWith("doc-1", "v1", "v2", expect.any(AbortSignal));
     expect(screen.getByRole("button", { name: "Download comparison" })).toBeEnabled();
@@ -132,5 +132,5 @@ it("compares the displayed version with a nonconsecutive baseline from the menu"
     ]);
     await user.click(screen.getByRole("menuitem", { name: "Compare with V1" }));
     expect(getDocumentComparison).toHaveBeenCalledWith("doc-1", "v1", "v3", expect.any(AbortSignal));
-    expect(await screen.findByRole("heading", { name: "agreement-v3 (V1 to V3 comparison).docx" })).toBeVisible();
+    expect(await screen.findByRole("group", { name: "Document comparison" })).toHaveTextContent("V1toV3");
 });
