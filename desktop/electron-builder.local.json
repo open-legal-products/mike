@@ -20,7 +20,7 @@
     "target": [
       "dir"
     ],
-    "identity": null,
+    "identity": "-",
     "icon": "assets/icon.icns"
   }
 }

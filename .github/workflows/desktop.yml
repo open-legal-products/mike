@@ -15,7 +15,7 @@
 #
 #   packaged   the whole pipeline a release would run — fetch binaries,
 #              build backend + standalone frontend, stage, package Mike.app
-#              (unsigned) — then e2e/local.e2e.mjs drives the PACKAGED app:
+#              (ad-hoc signed) — then e2e/local.e2e.mjs drives the PACKAGED app:
 #              cold first run (initdb → signup → project → upload →
 #              blob-token download → guest ×2), quit, and the returning-user
 #              relaunch on the same workspace.
@@ -158,7 +158,7 @@ jobs:
         env:
           MIKE_WORKFLOWS_GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Stage the stack and package Mike.app (unsigned)
+      - name: Stage the stack and package Mike.app (ad-hoc signed)
         run: |
           npm run local:stage --prefix desktop
           npm run dist:local --prefix desktop
