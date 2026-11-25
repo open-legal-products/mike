@@ -23,9 +23,10 @@ below). The local guest uses the same authenticated API as other accounts; its
 random credentials remain in this installation. Removing app data removes the
 workspace.
 
-`dist:local` produces an unsigned developer build. A public drag-to-Applications
-download must use `dist:local:signed` with an Apple Developer certificate and
-notarization credentials; an unsigned build is not a finished consumer release.
+`dist:local` produces an ad-hoc signed developer build that runs on the Mac
+that built it. A public drag-to-Applications download must use
+`dist:local:signed` with an Apple Developer certificate and notarization
+credentials; an ad-hoc signed build is not a finished consumer release.
 LibreOffice-dependent document conversions still require LibreOffice; chat,
 PDF/text reading and basic workspace operations do not require it.
 
@@ -156,14 +157,17 @@ tests use an isolated `MIKE_USER_DATA_DIR`.
 ## Package & test locally (no Apple account needed)
 
 ```bash
-npm run dist   # → dist/mac-arm64/Mike.app (unsigned)
+npm run dist   # → dist/mac-arm64/Mike.app (ad-hoc signed)
 open dist/mac-arm64/Mike.app   # loads https://app.mikeoss.com
 ```
 
-**A locally-built app runs without any Gatekeeper prompt** — the "damaged / can't
-be opened" block only applies to apps *downloaded* from the internet (they get a
-`com.apple.quarantine` attribute; a file you built yourself does not). So this
-is the path to test the app end-to-end today, before anyone signs anything.
+**A locally-built app runs without any Gatekeeper prompt.** The build ad-hoc
+signs the bundle (`"identity": "-"` in the electron-builder config), which needs
+no Apple account. The seal is required: macOS refuses an Electron bundle with no
+bundle signature as "modified or damaged", even when it was built on the same
+Mac and carries no `com.apple.quarantine` attribute. An ad-hoc signature does
+not satisfy Gatekeeper for a *downloaded* copy, so this is the path to test the
+app end-to-end on your own Mac, not a way to distribute it.
 
 To point it at a stack other than the hosted default (e.g. a local
 docker-compose stack), use the connect screen (⌘⇧,) or launch with an
@@ -203,7 +207,7 @@ npm run start:local    # dev-mode launch straight into local mode
 MIKE_E2E_DEV=1 npm run e2e:local   # fresh-userData first-run e2e, dev mode
 
 npm run local:stage    # stage built app into local-stack/app for packaging
-npm run dist:local     # package Mike.app WITH the whole stack inside (unsigned)
+npm run dist:local     # package Mike.app WITH the whole stack inside (ad-hoc signed)
 npm run e2e:local      # same first-run e2e against the PACKAGED app
 ```
 
@@ -228,7 +232,7 @@ The staged files live in `local-stack/app/` and travel with the application.
 
 ## Signing & notarization (for a distributable release)
 
-Everything above works unsigned for local use. To hand a `.dmg` to end users
+Everything above works with an ad-hoc signature for local use. To hand a `.dmg` to end users
 without the "damaged" Gatekeeper block, the build must be **signed with a
 Developer ID and notarized by Apple**. Only the org that owns the Apple Developer
 account can do this — the certificate is org-held and never needs to touch a
@@ -310,7 +314,7 @@ So the certificate lives only as encrypted secrets and never on a laptop:
 - Run `npm run dist:signed` and upload the `dmg`/`zip` as release assets.
 
 > The signed path is documented and pre-wired but **can only be exercised with
-> the org's certificate**. The unsigned build and the packaged e2e run in CI
+> the org's certificate**. The ad-hoc signed build and the packaged e2e run in CI
 > on every change (`.github/workflows/desktop.yml`, see "Tests" below); the
 > signed build is the one step CI cannot take.
 
@@ -361,7 +365,7 @@ Two constraints worth knowing before touching anything here:
 
 ### If you choose *not* to sign
 
-Distributing the unsigned `.dmg` still works, it's just rougher for the
+Distributing the ad-hoc signed `.dmg` still works, it's just rougher for the
 downloader: the app opens as **System Settings → Privacy & Security → "Open
 Anyway"**, or from Terminal with
 `xattr -dr com.apple.quarantine /Applications/Mike.app`. (macOS 15 Sequoia
@@ -420,7 +424,7 @@ the text row and job status, and points at that cause; the screenshot is
 
 CI (`.github/workflows/desktop.yml`) runs both on Apple Silicon runners: the
 unit job on every desktop/backend/frontend change, and the packaged job — the
-full fetch → build → stage → package → e2e pipeline, unsigned — on the same
+full fetch → build → stage → package → e2e pipeline, ad-hoc signed — on the same
 triggers. Screenshots land in the `desktop-local-e2e` artifact.
 
 ## E2E (shell flows against a running stack)
@@ -442,7 +446,7 @@ can't be driven over CDP — menu coverage is manual.
 
 - **Signing & notarization** — config is wired (see above); needs the org's
   Apple Developer ID to actually run.
-- **Release CI** — `desktop.yml` builds and tests the unsigned app on every
+- **Release CI** — `desktop.yml` builds and tests the ad-hoc signed app on every
   change; a release job that signs, notarizes and publishes the `.dmg`
   needs the org certificate (see above) and is still to be added.
 - **Auto-update** (electron-updater) — the `zip` target is already emitted for
