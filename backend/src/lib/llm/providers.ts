@@ -143,7 +143,7 @@ const ENVIRONMENT_KEY_ALIASES: Record<string, string[]> = {
 function keyNotConfigured(label: string, operatorHint: string): UserFacingError {
   log.warn(tpl`[llm] ${label} API key is not configured. ${operatorHint}`);
   return new ProviderConfigurationError(
-    `The ${label} API key is not configured. Add your own key in Settings → Bring Your Own Keys or contact your administrator.`,
+    `The ${label} API key is not configured. Add your own key in Settings → API Keys or contact your administrator.`,
   );
 }
 
@@ -539,7 +539,7 @@ async function createCustomEndpointAdapter(
   const credentials = customEndpointCredentials(apiKeys);
   if (!credentials) {
     throw new ProviderConfigurationError(
-      "OpenAI-compatible endpoint is not configured. Add an API key and base URL in Settings → Bring Your Own Keys.",
+      "OpenAI-compatible endpoint is not configured. Add an API key and base URL in Settings → API Keys.",
     );
   }
   const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
@@ -579,7 +579,7 @@ async function createConfiguredAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const configured = configuredModelOrThrow(id);
   if (configured.apiKeyProvider && apiKeys?.disabledProviders?.includes(configured.apiKeyProvider)) {
-    throw new ProviderConfigurationError("This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.");
+    throw new ProviderConfigurationError("This model provider is turned off. Turn it on in Settings → API Keys or select another model.");
   }
   const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
   const apiKey = apiKeyForConfiguredModel(configured, apiKeys);
@@ -633,7 +633,7 @@ function configuredModelKeySource(
 
 function unsupportedOpenCodeGoModel(model: string): Error {
   return new Error(
-    `OpenCode Go model ${openCodeGoModelId(model)} requires a protocol Mike does not support yet. Select a model listed under Model Selections for OpenCode Go in Settings → Bring Your Own Keys.`,
+    `OpenCode Go model ${openCodeGoModelId(model)} requires a protocol Mike does not support yet. Select a model listed under Model Selections for OpenCode Go in Settings → API Keys.`,
   );
 }
 
@@ -668,7 +668,7 @@ async function buildProviderAdapter(
 ): Promise<AiSdkAdapterConfig> {
   const provider = providerForModel(model);
   if (apiKeys?.disabledProviders?.includes(provider)) {
-    throw new ProviderConfigurationError("This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.");
+    throw new ProviderConfigurationError("This model provider is turned off. Turn it on in Settings → API Keys or select another model.");
   }
 
   // Last line of defence behind resolveModel and the save-time check: some

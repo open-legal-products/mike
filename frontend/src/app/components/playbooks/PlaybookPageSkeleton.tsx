@@ -48,7 +48,7 @@ export function PlaybookPageSkeleton() {
         />
       </div>
       <div className="@container flex min-h-0 flex-1 flex-col">
-        <div className="mx-3 mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 p-0.5 md:mx-6.5 @[48rem]:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="mx-3 mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 p-0.5 md:mx-6 @[48rem]:grid-cols-[360px_minmax(0,1fr)]">
           <section
             className={`flex min-h-0 min-w-0 flex-col ${EDITOR_SURFACE_CLASS}`}
           >

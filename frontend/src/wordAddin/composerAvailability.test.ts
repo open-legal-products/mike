@@ -70,7 +70,7 @@ describe("unavailableModelMessage", () => {
                 enabled: { xai: false },
             }),
         ).toBe(
-            "xAI is turned off. Turn it back on in Bring Your Own Keys before using this model.",
+            "xAI is turned off. Turn it back on in API Keys before using this model.",
         );
     });
 });

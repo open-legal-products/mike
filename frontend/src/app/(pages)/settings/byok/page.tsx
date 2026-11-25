@@ -1,21 +1,32 @@
 "use client";
 
-import { OrganizationProviderKeys } from "@/app/components/organizations/OrganizationProviderKeys";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { ManagedByOrganization } from "@/app/components/settings/ManagedByOrganization";
 import { PersonalProviderKeys } from "@/app/components/settings/PersonalProviderKeys";
-import { useWorkspaceSettingsScope } from "@/app/hooks/useWorkspaceSettingsScope";
+import {
+    providerKeysHref,
+    useWorkspaceSettingsScope,
+} from "@/app/hooks/useWorkspaceSettingsScope";
 import { WorkspaceScopePending } from "@/app/components/settings/WorkspaceScopePending";
 
 /**
- * Settings > Bring Your Own Keys: the keys work in the active workspace runs
- * on. Personal work runs on the caller's own; work in an organization runs on
- * the organization's, which its owners and admins manage here as they can in
- * its settings.
+ * Settings > API Keys: the caller's own keys, for personal work.
+ * Settings lists it only in Personal. An organization's keys are managed only
+ * in its own settings, by its owners and admins, so one who follows a link
+ * here in its workspace is sent there; a member is told who manages them.
  */
 export default function ByokPage() {
     const scope = useWorkspaceSettingsScope();
-    if (scope.kind === "loading" || scope.kind === "unavailable")
-      return <WorkspaceScopePending unavailable={scope.kind === "unavailable"} />;
+    const router = useRouter();
+    const organizationHref =
+        scope.kind === "organization" ? providerKeysHref(scope) : null;
+
+    useEffect(() => {
+        if (organizationHref) router.replace(organizationHref);
+    }, [organizationHref, router]);
+
+    if (scope.kind === "personal") return <PersonalProviderKeys />;
     if (scope.kind === "managed")
         return (
             <ManagedByOrganization
@@ -23,13 +34,5 @@ export default function ByokPage() {
                 orgName={scope.orgName}
             />
         );
-    if (scope.kind === "organization")
-        return (
-            <OrganizationProviderKeys
-                key={scope.orgId}
-                orgId={scope.orgId}
-                orgName={scope.orgName}
-            />
-        );
-    return <PersonalProviderKeys />;
+    return <WorkspaceScopePending unavailable={scope.kind === "unavailable"} />;
 }

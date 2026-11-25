@@ -7,7 +7,7 @@
  * - "exact": the query is the name of a section, a tab, or one of its
  *   controls, or a whole phrase inside one. These rank first.
  * - "related": the query means the same thing by other words ("api key" for
- *   Bring Your Own Keys, "dark" for Appearance, "2fa" for Security), or is
+ *   API Keys, "dark" for Appearance, "2fa" for Security), or is
  *   close enough in spelling to count as a typo. Matching goes through the
  *   entry's vocabulary (its description and keywords), word prefixes, and a
  *   character-bigram similarity so a mistyped word still lands.
@@ -50,7 +50,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
         title: "Profile",
         description: "Your display name and profile photo.",
         keywords: ["name", "display name", "photo", "picture", "avatar", "upload photo", "username", "nickname"],
-        href: "/settings#profile",
+        href: "/settings/account#profile",
     },
     {
         id: "account-email",
@@ -59,7 +59,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
         title: "Email",
         description: "The email address you sign in with, and how to change it.",
         keywords: ["email address", "change email", "update email", "login email", "sign in", "mail"],
-        href: "/settings#email",
+        href: "/settings/account#email",
     },
     {
         id: "account-plan",
@@ -68,7 +68,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
         title: "Usage Plan",
         description: "The plan your account is on.",
         keywords: ["plan", "subscription", "billing", "free", "pro", "tier", "upgrade", "pricing", "usage"],
-        href: "/settings#usage-plan",
+        href: "/settings/account#usage-plan",
     },
     {
         id: "account-delete",
@@ -77,7 +77,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
         title: "Delete account",
         description: "Permanently delete your account and personal workspace.",
         keywords: ["danger zone", "remove account", "close account", "deactivate", "cancel account", "erase"],
-        href: "/settings#danger-zone",
+        href: "/settings/account#danger-zone",
     },
 
     // Personalisation
@@ -240,14 +240,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
         href: "/settings/models#subagents-heading",
     },
 
-    // Bring Your Own Keys
+    // API Keys
     {
         id: "byok",
         tabId: "byok",
-        tab: "Bring Your Own Keys",
-        title: "Bring Your Own Keys",
+        tab: "API Keys",
+        title: "API Keys",
         description: "Add your own API keys for model providers such as Anthropic, OpenAI, Google and Azure.",
-        keywords: ["byok", "api key", "api keys", "key", "keys", "token", "secret", "credentials", "provider", "providers", "model provider", "anthropic", "claude", "openai", "chatgpt", "gpt", "gemini", "google", "mistral", "xai", "grok", "bedrock", "aws", "azure", "vertex", "openrouter", "vercel", "ai gateway", "custom endpoint", "base url", "own model", "connect model", "llm", "add key", "add provider", "enable provider", "disable provider", "no models", "missing key"],
+        keywords: ["byok", "bring your own keys", "api key", "api keys", "key", "keys", "token", "secret", "credentials", "provider", "providers", "model provider", "anthropic", "claude", "openai", "chatgpt", "gpt", "gemini", "google", "mistral", "xai", "grok", "bedrock", "aws", "azure", "vertex", "openrouter", "vercel", "ai gateway", "custom endpoint", "base url", "own model", "connect model", "llm", "add key", "add provider", "enable provider", "disable provider", "no models", "missing key"],
         href: "/settings/byok",
     },
 

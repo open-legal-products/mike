@@ -1,0 +1,35 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBE3BC"/>
+      <stop offset="0.5" stop-color="#E2AE6C"/>
+      <stop offset="1" stop-color="#A86B32"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FCA5A5"/><stop offset="0.5" stop-color="#EF4444"/><stop offset="1" stop-color="#B91C1C"/></linearGradient>
+    <linearGradient id="yellow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FEF08A"/><stop offset="0.5" stop-color="#FACC15"/><stop offset="1" stop-color="#CA8A04"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#86EFAC"/><stop offset="0.5" stop-color="#22C55E"/><stop offset="1" stop-color="#15803D"/></linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#93C5FD"/><stop offset="0.5" stop-color="#3B82F6"/><stop offset="1" stop-color="#1D4ED8"/></linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#431407" stop-opacity="0.5"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M32 58.5A26.25 26.25 0 0 1 32 6A26 23.6 0 0 1 58 29.6A13 13 0 0 1 45 42.6H39.2A4.5 4.5 0 0 0 35.6 49.8L36.4 50.8A4.5 4.5 0 0 1 32.8 58.5Z" fill="url(#wood)" stroke="url(#rim)" stroke-width="1.4" stroke-linejoin="round"/>
+  <ellipse cx="25" cy="11" rx="10" ry="3" fill="url(#sheen)" opacity="0.6"/>
+  <g stroke="url(#rim)" stroke-width="1.2">
+    <circle cx="35.5" cy="16" r="5.5" fill="url(#red)"/>
+    <circle cx="46.5" cy="26.5" r="5.5" fill="url(#yellow)"/>
+    <circle cx="22" cy="18.5" r="5.5" fill="url(#blue)"/>
+    <circle cx="17" cy="32" r="5.5" fill="url(#green)"/>
+  </g>
+  <g fill="url(#sheen)" opacity="0.8">
+    <ellipse cx="34.5" cy="13.4" rx="2.8" ry="1.3"/><ellipse cx="45.5" cy="23.9" rx="2.8" ry="1.3"/>
+    <ellipse cx="21" cy="15.9" rx="2.8" ry="1.3"/><ellipse cx="16" cy="29.4" rx="2.8" ry="1.3"/>
+  </g>
+</svg>

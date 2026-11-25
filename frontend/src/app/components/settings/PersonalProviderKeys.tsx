@@ -42,7 +42,7 @@ const PROVIDER_SECTIONS = [
 /**
  * The caller's own model provider keys: the Saved and Available provider
  * grids, the provider dialog and its on/off switches. Rendered by Settings →
- * Bring Your Own Keys and by the last onboarding step, so a key saved in
+ * API Keys and by the last onboarding step, so a key saved in
  * either place goes through the same checks.
  */
 export function PersonalProviderKeys({

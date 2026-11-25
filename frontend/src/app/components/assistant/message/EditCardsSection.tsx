@@ -18,7 +18,6 @@ import { applyOptimisticResolution } from "../EditCard";
  */
 function BulkEditActions({
     pending,
-    onViewClick,
     onResolveStart,
     onResolved,
     onError,
@@ -27,7 +26,6 @@ function BulkEditActions({
         annotation: EditAnnotation;
         filename: string;
     }[];
-    onViewClick?: (ann: EditAnnotation, filename: string) => void;
     onResolveStart?: (args: {
         editId: string;
         documentId: string;
@@ -125,10 +123,6 @@ function BulkEditActions({
         }
     };
 
-    // Optional: show a tiny "View first" action so bulk doesn't lose the
-    // in-viewer scroll-to behaviour entirely.
-    const first = pending[0];
-
     return (
         <div className="flex w-full items-center gap-2">
             <PillButtonUI
@@ -154,19 +148,6 @@ function BulkEditActions({
                     {progress.done}/{progress.total}
                 </span>
             )}
-            {onViewClick && first && (
-                <PillButtonUI
-                    tone="black"
-                    size="xs"
-                    onClick={() =>
-                        onViewClick(first.annotation, first.filename)
-                    }
-                    disabled={!!busy}
-                    className="ml-auto"
-                >
-                    View
-                </PillButtonUI>
-            )}
         </div>
     );
 }
@@ -174,14 +155,14 @@ function BulkEditActions({
 /**
  * Wraps the bulk accept/reject card and the per-edit EditCards in a single
  * minimisable container. The bulk actions and summary stay visible in the
- * header; the individual cards collapse via the chevron toggle.
+ * header; the individual cards collapse via the chevron toggle. Viewing a
+ * change is each card's own action.
  */
 export function EditCardsSection({
     pending,
     filenameByDocId,
     cards,
     resolvedCount,
-    onViewClick,
     onResolveStart,
     onResolved,
     onError,
@@ -193,7 +174,6 @@ export function EditCardsSection({
     filenameByDocId: Map<string, string>;
     cards: ReactNode[];
     resolvedCount: number;
-    onViewClick?: (ann: EditAnnotation, filename: string) => void;
     onResolveStart?: (args: {
         editId: string;
         documentId: string;
@@ -233,7 +213,6 @@ export function EditCardsSection({
                 pending.length > 0 ? (
                     <BulkEditActions
                         pending={pending}
-                        onViewClick={onViewClick}
                         onResolveStart={onResolveStart}
                         onResolved={onResolved}
                         onError={onError}

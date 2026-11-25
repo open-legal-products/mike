@@ -1,0 +1,54 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C4B5FD"/>
+      <stop offset="0.5" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#6D28D9"/>
+    </linearGradient>
+    <linearGradient id="pencil" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FDE68A"/>
+      <stop offset="0.5" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#B45309"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FDF1D6"/>
+      <stop offset="1" stop-color="#D6B07A"/>
+    </linearGradient>
+    <linearGradient id="eraser" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FDA4AF"/>
+      <stop offset="1" stop-color="#E11D48"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#2E1065" stop-opacity="0.45"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <g id="pencilShape">
+      <path d="M-16 0L-7 -5H17Q19.5 -5 19.5 -2.5V2.5Q19.5 5 17 5H-7Z"/>
+    </g>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#FFFFFF"/>
+      <use href="#pencilShape" transform="translate(46 44) rotate(-45)" fill="#000000" stroke="#000000" stroke-width="6" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <g mask="url(#cut)">
+    <path d="M5 56.5C5 45 14 37 26 37S47 45 47 56.5Q47 59 44.5 59H7.5Q5 59 5 56.5Z" fill="url(#body)" stroke="url(#rim)" stroke-width="1.4"/>
+    <ellipse cx="21" cy="41" rx="8.5" ry="2.2" fill="url(#sheen)" opacity="0.6"/>
+    <circle cx="26" cy="19" r="12.5" fill="url(#body)" stroke="url(#rim)" stroke-width="1.4"/>
+    <ellipse cx="23" cy="11.3" rx="6.2" ry="2.8" fill="url(#sheen)" opacity="0.7"/>
+  </g>
+  <g transform="translate(46 44) rotate(-45)">
+    <path d="M-16 0L-7 -5V5Z" fill="url(#wood)"/>
+    <path d="M-16 0L-12.4 -2V2Z" fill="#374151"/>
+    <rect x="-7" y="-5" width="19" height="10" fill="url(#pencil)"/>
+    <path d="M12 -5H17Q19.5 -5 19.5 -2.5V2.5Q19.5 5 17 5H12Z" fill="url(#eraser)"/>
+    <rect x="11" y="-5" width="3" height="10" fill="#CBD5E1"/>
+    <path d="M-16 0L-7 -5H17Q19.5 -5 19.5 -2.5V2.5Q19.5 5 17 5H-7Z" fill="none" stroke="url(#rim)" stroke-width="1.3" stroke-linejoin="round"/>
+    <path d="M-6 -2.6H10" stroke="#FFFFFF" stroke-opacity="0.6" stroke-width="1.3" stroke-linecap="round"/>
+  </g>
+</svg>

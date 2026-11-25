@@ -230,6 +230,16 @@ describe("TabularReviewView access mutations", () => {
         );
     });
 
+    it("puts Access in the header, beside the review's other actions", async () => {
+        render(<TRView reviewId="r1" />);
+        await waitFor(() => expect(getTabularReview).toHaveBeenCalled());
+        // The header keeps a copy of its actions for the small-screen bar.
+        const access = await screen.findAllByRole("button", { name: "Access" });
+        await waitFor(() => expect(access[0]).toBeEnabled());
+        expect(access[0].querySelector("svg")).not.toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Access" })).toBeNull();
+    });
+
     it("leaves a personal review shareable with any address", async () => {
         render(<TRView reviewId="r1" />);
         await screen.findByText("grant editor");
@@ -309,5 +319,7 @@ describe("the workspace a review opens", () => {
         expect(
             useItemWorkspace.mock.calls.every(([itemId]) => itemId == null),
         ).toBe(true);
+        // No Access of its own in the header either.
+        expect(screen.queryByRole("button", { name: "Access" })).toBeNull();
     });
 });

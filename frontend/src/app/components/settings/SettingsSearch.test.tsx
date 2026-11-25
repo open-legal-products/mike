@@ -12,6 +12,10 @@ vi.mock("next/navigation", () => ({
     usePathname: () => navigation.pathname,
 }));
 
+// The search is a page-header button that opens into a box.
+const openSearch = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Search settings" }));
+
 describe("SettingsSearch", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -22,42 +26,71 @@ describe("SettingsSearch", () => {
         vi.useRealTimers();
     });
 
-    it("shows nothing until something is typed", () => {
+    it("is a header button that opens into a focused box, listing nothing until something is typed", () => {
         render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
-        expect(screen.getByRole("searchbox", { name: "Search settings" })).toBeInTheDocument();
+        expect(screen.queryByRole("searchbox")).toBeNull();
+        openSearch();
+        expect(screen.getByRole("searchbox", { name: "Search settings" })).toHaveFocus();
         expect(screen.queryByRole("group", { name: "Settings search results" })).toBeNull();
+    });
+
+    it("folds back into the button when left empty, and on Escape returns focus to it", async () => {
+        const user = userEvent.setup();
+        render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
+        await user.keyboard("{Escape}");
+        expect(screen.queryByRole("searchbox")).toBeNull();
+        expect(screen.getByRole("button", { name: "Search settings" })).toHaveFocus();
+    });
+
+    it("lists nothing until three characters are typed", async () => {
+        const user = userEvent.setup();
+        render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
+        await user.type(screen.getByRole("searchbox"), "me");
+        expect(screen.queryByRole("group", { name: "Settings search results" })).toBeNull();
+        await user.type(screen.getByRole("searchbox"), "m");
+        expect(screen.getByRole("group", { name: "Settings search results" })).toBeInTheDocument();
     });
 
     it("lists name matches before related ones, each under its own heading", async () => {
         const user = userEvent.setup();
         render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
         await user.type(screen.getByRole("searchbox"), "memory");
 
         const matches = screen.getByRole("group", { name: "Matches" });
         const related = screen.getByRole("group", { name: "Related" });
         expect(matches.compareDocumentPosition(related) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
         // The tab trail is left off when it would only repeat the title.
-        expect(screen.getByRole("button", { name: /^Memory\. Whether/ })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: /^Memory file, Memory\./ })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Memory" })).toBeInTheDocument();
+        // Breadcrumb style, section first, without the description.
+        const file = screen.getByRole("button", { name: "Memory file, Memory" });
+        expect(file).toHaveTextContent(/^MemoryMemory file$/);
+        expect(file).not.toHaveTextContent("Whether");
         expect(screen.getByRole("status")).toHaveTextContent(/settings found/);
     });
 
-    it("finds Bring Your Own Keys from 'api key' and opens it on Enter", async () => {
+    it("finds API Keys from 'api key' and opens it on Enter", async () => {
         const user = userEvent.setup();
         render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
         const input = screen.getByRole("searchbox");
         await user.type(input, "api key");
-        expect(screen.getByRole("button", { name: /^Bring Your Own Keys/ })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /^API Keys/ })).toBeInTheDocument();
 
         await user.keyboard("{Enter}");
         expect(push).toHaveBeenCalledWith("/settings/byok");
-        expect(input).toHaveValue("");
+        // The query is cleared and the box folds back into its button.
+        expect(input).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Search settings" })).toBeInTheDocument();
         expect(screen.queryByRole("group", { name: "Settings search results" })).toBeNull();
     });
 
     it("moves through results with the arrow keys and opens one with a click", async () => {
         const user = userEvent.setup();
         render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
         await user.type(screen.getByRole("searchbox"), "delete");
 
         await user.keyboard("{ArrowDown}");
@@ -69,7 +102,7 @@ describe("SettingsSearch", () => {
         expect(screen.getByRole("searchbox")).toHaveFocus();
 
         await user.click(screen.getByRole("button", { name: /^Delete account/ }));
-        expect(push).toHaveBeenCalledWith("/settings#danger-zone");
+        expect(push).toHaveBeenCalledWith("/settings/account#danger-zone");
     });
 
     it("focuses a section even when navigation takes longer than the former three-second deadline", async () => {
@@ -78,6 +111,7 @@ describe("SettingsSearch", () => {
         const scrollIntoView = vi.fn();
         Element.prototype.scrollIntoView = scrollIntoView;
         render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
         await user.type(screen.getByRole("searchbox"), "password");
         await user.click(screen.getByRole("button", { name: /^Password/ }));
         expect(push).toHaveBeenCalledWith("/settings/security#password");
@@ -101,9 +135,10 @@ describe("SettingsSearch", () => {
         const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
         const lookups = vi.spyOn(document, "getElementById");
         const { unmount } = render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
         await user.type(screen.getByRole("searchbox"), "delete");
         await user.click(screen.getByRole("button", { name: /^Delete account/ }));
-        expect(push).toHaveBeenCalledWith("/settings#danger-zone");
+        expect(push).toHaveBeenCalledWith("/settings/account#danger-zone");
 
         unmount();
         const before = lookups.mock.calls.length;
@@ -119,6 +154,7 @@ describe("SettingsSearch", () => {
     it("cancels a pending heading when navigation goes somewhere else", async () => {
         const user = userEvent.setup();
         const view = render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
         await user.type(screen.getByRole("searchbox"), "password");
         await user.keyboard("{Enter}");
         navigation.pathname = "/settings/appearance";
@@ -136,6 +172,7 @@ describe("SettingsSearch", () => {
         // never reach the result.
         const user = userEvent.setup();
         render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
         const input = screen.getByRole("searchbox");
         await user.type(input, "dark");
         const list = screen.getByRole("group", { name: "Settings search results" });
@@ -149,6 +186,7 @@ describe("SettingsSearch", () => {
     it("says when nothing matches", async () => {
         const user = userEvent.setup();
         render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} />);
+        openSearch();
         await user.type(screen.getByRole("searchbox"), "zzzz");
         expect(screen.getByText(/No settings match/)).toBeInTheDocument();
     });
@@ -160,6 +198,7 @@ describe("SettingsSearch", () => {
                 entries={SETTINGS_SEARCH_ENTRIES.filter((entry) => entry.tabId !== "privacy-data")}
             />,
         );
+        openSearch();
         await user.type(screen.getByRole("searchbox"), "export");
         expect(screen.queryByRole("button", { name: /^Export data/ })).toBeNull();
     });

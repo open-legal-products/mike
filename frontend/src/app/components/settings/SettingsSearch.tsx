@@ -2,19 +2,25 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { CornerDownLeft } from "lucide-react";
-import { SearchBar } from "@/app/components/ui/search-bar";
+import { ChevronRight, Search, X } from "lucide-react";
 import {
     DROPDOWN_ROWS_CLASS,
     DropdownButton,
     DropdownSurface,
+    HeaderButtonUI,
+    headerButtonClassName,
 } from "@mike/ui";
+import { LIQUID_GLASS_SELECTED_CLASS } from "@/app/components/ui/liquid-surface";
+import { cn } from "@/app/lib/utils";
 import {
     searchSettings,
     type SettingsSearchEntry,
     type SettingsSearchMatchKind,
     type SettingsSearchResult,
 } from "@/app/lib/settingsSearch";
+
+/** Characters typed before the results open. */
+const MIN_QUERY_LENGTH = 3;
 
 const GROUP_LABEL: Record<SettingsSearchMatchKind, string> = {
     exact: "Matches",
@@ -44,20 +50,29 @@ function focusSection(hash: string): (() => void) | null {
 }
 
 /**
- * A search box over a person's settings. Typing lists the sections and
- * controls that match by name first and by meaning after; choosing one opens
- * its page and scrolls to it.
+ * A search over a person's settings, as a page-header search button: it
+ * opens into a box, and typing lists the sections and controls that match by
+ * name first and by meaning after; choosing one opens its page and scrolls to
+ * it. Left empty, the box folds back into the button.
  */
 export function SettingsSearch({
     entries,
+    label = "Search settings",
 }: {
     entries: readonly SettingsSearchEntry[];
+    /** The button's and box's name, and the box's placeholder. */
+    label?: string;
 }) {
     const router = useRouter();
     const pathname = usePathname();
     const [query, setQuery] = useState("");
     const [open, setOpen] = useState(false);
+    // Whether the button has opened into a box; it stays open while it holds
+    // a query.
+    const [expanded, setExpanded] = useState(false);
     const input = useRef<HTMLInputElement>(null);
+    const button = useRef<HTMLButtonElement>(null);
+    const refocusButton = useRef(false);
     const list = useRef<HTMLDivElement>(null);
     // One pending section observation, scoped to this mounted search box.
     const cancelSectionFocus = useRef<(() => void) | null>(null);
@@ -67,7 +82,9 @@ export function SettingsSearch({
         () => searchSettings(query, entries),
         [query, entries],
     );
-    const showResults = open && query.trim().length > 0;
+    // A word or two in before anything is listed: one or two letters match
+    // almost everything.
+    const showResults = open && query.trim().length >= MIN_QUERY_LENGTH;
 
     useEffect(
         () => () => {
@@ -75,6 +92,13 @@ export function SettingsSearch({
         },
         [],
     );
+
+    useEffect(() => {
+        if (!expanded && refocusButton.current) {
+            refocusButton.current = false;
+            button.current?.focus();
+        }
+    }, [expanded]);
 
     useEffect(() => {
         if (sectionPath.current && pathname !== sectionPath.current) {
@@ -87,6 +111,7 @@ export function SettingsSearch({
     function choose(result: SettingsSearchResult) {
         setQuery("");
         setOpen(false);
+        setExpanded(false);
         router.push(result.entry.href);
         const hash = result.entry.href.split("#")[1];
         cancelSectionFocus.current?.();
@@ -109,42 +134,90 @@ export function SettingsSearch({
         }))
         .filter((group) => group.results.length > 0);
 
+    if (!expanded && !query)
+        return (
+            <HeaderButtonUI
+                ref={button}
+                iconOnly
+                title={label}
+                aria-label={label}
+                onClick={() => setExpanded(true)}
+            >
+                <Search aria-hidden="true" className="h-4 w-4" />
+            </HeaderButtonUI>
+        );
+
     return (
         <div
-            className="relative"
+            className="relative flex items-center"
             onFocus={() => setOpen(true)}
             onBlur={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
                     setOpen(false);
+                    if (!query) setExpanded(false);
+                }
             }}
         >
-            <SearchBar
-                ref={input}
-                size="sm"
-                value={query}
-                onValueChange={(value) => {
-                    setQuery(value);
-                    setOpen(true);
-                }}
-                label="Search settings"
-                placeholder="Search settings"
-                maxLength={200}
-                autoComplete="off"
-                aria-controls={showResults ? listId : undefined}
-                aria-expanded={showResults}
-                onKeyDown={(event) => {
-                    if (event.key === "Escape" && query) {
-                        event.preventDefault();
-                        setQuery("");
-                    } else if (event.key === "ArrowDown" && showResults) {
-                        event.preventDefault();
-                        focusResult("first");
-                    } else if (event.key === "Enter" && results[0]) {
-                        event.preventDefault();
-                        choose(results[0]);
-                    }
-                }}
-            />
+            <div
+                className={cn(
+                    headerButtonClassName({
+                        className:
+                            "cursor-text justify-start gap-2 px-3 text-gray-700 hover:text-gray-700",
+                    }),
+                    `w-56 sm:w-72 ${LIQUID_GLASS_SELECTED_CLASS}`,
+                )}
+            >
+                <Search
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5 shrink-0 text-gray-400"
+                />
+                <input
+                    ref={input}
+                    // Opened from the button: the box takes its focus.
+                    autoFocus
+                    type="search"
+                    aria-label={label}
+                    placeholder={label}
+                    maxLength={200}
+                    autoComplete="off"
+                    value={query}
+                    onChange={(event) => {
+                        setQuery(event.target.value);
+                        setOpen(true);
+                    }}
+                    aria-controls={showResults ? listId : undefined}
+                    onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                            event.preventDefault();
+                            if (query) setQuery("");
+                            else {
+                                refocusButton.current = true;
+                                setExpanded(false);
+                            }
+                        } else if (event.key === "ArrowDown" && showResults) {
+                            event.preventDefault();
+                            focusResult("first");
+                        } else if (event.key === "Enter" && results[0]) {
+                            event.preventDefault();
+                            choose(results[0]);
+                        }
+                    }}
+                    className="min-w-0 flex-1 bg-transparent text-sm text-gray-700 outline-none placeholder:text-gray-400 [&::-webkit-search-cancel-button]:hidden"
+                />
+                {query ? (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setQuery("");
+                            input.current?.focus();
+                        }}
+                        aria-label="Clear search"
+                        className="shrink-0 rounded-full p-0.5 text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                    >
+                        <X aria-hidden="true" className="h-3.5 w-3.5" />
+                    </button>
+                ) : null}
+            </div>
             <span role="status" className="sr-only">
                 {showResults
                     ? results.length === 1
@@ -160,10 +233,8 @@ export function SettingsSearch({
                     // target, unmount the list and lose the click. Keeping
                     // focus in the box avoids that; scrollbars still drag.
                     onMouseDown={(event) => event.preventDefault()}
-                    // Anchored to the box's right edge: the box sits at the
-                    // right end of the title row, so the list grows leftward
-                    // and never runs past the page gutter.
-                    className="absolute right-0 top-full mt-2 w-[22rem] max-w-[calc(100vw-3rem)] p-1"
+                    // Exactly as wide as the box above it.
+                    className="absolute inset-x-0 top-full mt-2 p-1"
                 >
                     <div
                         ref={list}
@@ -212,7 +283,7 @@ export function SettingsSearch({
                                 No settings match &ldquo;{query.trim()}&rdquo;.
                             </p>
                         ) : (
-                            groups.map((group, groupIndex) => (
+                            groups.map((group) => (
                                 <div
                                     key={group.kind}
                                     role="group"
@@ -227,43 +298,39 @@ export function SettingsSearch({
                                             {GROUP_LABEL[group.kind]}
                                         </p>
                                     ) : null}
-                                    {group.results.map((result, index) => {
-                                        const first = groupIndex === 0 && index === 0;
+                                    {group.results.map((result) => {
+                                        const { tab, title } = result.entry;
                                         return (
                                             <DropdownButton
                                                 key={result.entry.id}
                                                 data-settings-result
-                                                // The visible spans run together
-                                                // without this; read as a sentence.
-                                                aria-label={`${result.entry.title}${
-                                                    result.entry.tab !== result.entry.title
-                                                        ? `, ${result.entry.tab}`
-                                                        : ""
-                                                }. ${result.entry.description}`}
-                                                className="flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left"
+                                                // The crumbs run together without
+                                                // this; read as "Title, Section".
+                                                aria-label={
+                                                    title !== tab
+                                                        ? `${title}, ${tab}`
+                                                        : title
+                                                }
+                                                className="flex w-full min-w-0 items-center gap-1 rounded-lg px-3 py-2 text-left"
                                                 onClick={() => choose(result)}
                                             >
-                                                <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                                                    <span className="block text-gray-800">
-                                                        {result.entry.title}
-                                                        {result.entry.title !==
-                                                        result.entry.tab ? (
-                                                            <span className="text-gray-500">
-                                                                {" "}
-                                                                · {result.entry.tab}
-                                                            </span>
-                                                        ) : null}
-                                                    </span>
-                                                    <span className="block text-gray-500">
-                                                        {result.entry.description}
-                                                    </span>
-                                                </span>
-                                                {first ? (
-                                                    <CornerDownLeft
-                                                        aria-hidden
-                                                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400"
-                                                    />
+                                                {/* Where it is, breadcrumb style:
+                                                    "Security › Multi-Factor
+                                                    Authentication". */}
+                                                {title !== tab ? (
+                                                    <>
+                                                        <span className="shrink-0 text-gray-500">
+                                                            {tab}
+                                                        </span>
+                                                        <ChevronRight
+                                                            aria-hidden="true"
+                                                            className="h-3.5 w-3.5 shrink-0 text-gray-400"
+                                                        />
+                                                    </>
                                                 ) : null}
+                                                <span className="min-w-0 truncate text-gray-800">
+                                                    {title}
+                                                </span>
                                             </DropdownButton>
                                         );
                                     })}

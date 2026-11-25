@@ -210,13 +210,14 @@ test.describe("Settings", () => {
         page,
         e2eAccount,
     }) => {
-        await page.goto("/settings");
+        await page.goto("/settings/account");
 
-        // The settings layout renders a "Settings" h1
+        // Account, under the settings layout's "Settings" h1 (for assistive
+        // tech; the page header's breadcrumbs are its visible title)
         // REGRESSION: fails if the settings page or its layout is broken
         await expect(
             page.getByRole("heading", { name: "Settings" }),
-        ).toBeVisible({ timeout: 10_000 });
+        ).toBeAttached({ timeout: 10_000 });
 
         // The Profile section has its own h2
         await expect(
@@ -241,10 +242,10 @@ test.describe("Settings", () => {
         // past a real client-side hydration race (see below), so give it more
         // headroom than the 30 s default.
         test.setTimeout(120_000);
-        await page.goto("/settings");
+        await page.goto("/settings/account");
         await expect(
             page.getByRole("heading", { name: "Settings" }),
-        ).toBeVisible({ timeout: 10_000 });
+        ).toBeAttached({ timeout: 10_000 });
 
         // The Display Name Input has placeholder "Enter your name"
         const nameInput = page.getByPlaceholder("Enter your name");
@@ -286,7 +287,7 @@ test.describe("Settings", () => {
                     resp.ok(),
                 { timeout: 10_000 },
             );
-            await page.goto("/settings");
+            await page.goto("/settings/account");
             await profileLoaded;
             await nameInput.fill(newName);
             await expect(nameInput).toHaveValue(newName, { timeout: 2_000 });
@@ -296,7 +297,7 @@ test.describe("Settings", () => {
 
             // Navigate away and back; the freshly fetched profile must show newName.
             await page.goto("/assistant");
-            await page.goto("/settings");
+            await page.goto("/settings/account");
             await expect(nameInput).toHaveValue(newName, { timeout: 8_000 });
         }).toPass({ timeout: 90_000 });
     });
@@ -314,7 +315,7 @@ test.describe("Settings", () => {
         // The shared settings layout still renders "Settings"
         await expect(
             page.getByRole("heading", { name: "Settings" }),
-        ).toBeVisible({ timeout: 10_000 });
+        ).toBeAttached({ timeout: 10_000 });
 
         // The h2 "Saved Providers" and "Available Providers" sections are present
         // REGRESSION: fails if the /settings/byok page is broken or its provider sections are removed

@@ -5,12 +5,13 @@ import { OrganizationMembers } from "@/app/components/organizations/Organization
 import { useOrganizationSettings } from "@/app/components/organizations/OrganizationSettingsShell";
 
 export default function OrganizationMembersSettingsPage() {
-  const { orgId, reload } = useOrganizationSettings();
+  const { orgId, reload, areaName } = useOrganizationSettings();
   // `?view=departed` opens the Departed view, for the links that lead to it.
   const departed = useSearchParams().get("view") === "departed";
   return (
     <OrganizationMembers
       orgId={orgId}
+      areaName={areaName}
       onViewerRoleChanged={() => void reload()}
       initialTab={departed ? "departed" : "all"}
     />

@@ -1,0 +1,34 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF8E6"/>
+      <stop offset="0.55" stop-color="#F3E2B8"/>
+      <stop offset="1" stop-color="#D9BC80"/>
+    </linearGradient>
+    <linearGradient id="roll" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F8E5B8"/>
+      <stop offset="0.5" stop-color="#DDBA7A"/>
+      <stop offset="1" stop-color="#9C7238"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#3B1F06" stop-opacity="0.5"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="15" y="10" width="34" height="44" fill="url(#paper)" stroke="url(#rim)" stroke-width="1.4"/>
+  <g stroke="#8A5A24" stroke-opacity="0.75" stroke-width="2.8" stroke-linecap="round">
+    <path d="M22 24H42"/><path d="M22 31.5H42"/><path d="M22 39H35"/>
+  </g>
+  <rect x="7" y="5" width="44" height="11" rx="5.5" fill="url(#roll)" stroke="url(#rim)" stroke-width="1.4"/>
+  <circle cx="12.5" cy="10.5" r="3" fill="#9C7238" opacity="0.7"/>
+  <ellipse cx="30" cy="7.6" rx="14" ry="1.5" fill="url(#sheen)" opacity="0.6"/>
+  <rect x="13" y="48" width="44" height="11" rx="5.5" fill="url(#roll)" stroke="url(#rim)" stroke-width="1.4"/>
+  <circle cx="51.5" cy="53.5" r="3" fill="#9C7238" opacity="0.7"/>
+  <ellipse cx="32" cy="50.6" rx="14" ry="1.5" fill="url(#sheen)" opacity="0.6"/>
+</svg>

@@ -1,41 +1,44 @@
 <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="board" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#64748B"/>
-      <stop offset="1" stop-color="#3B4656"/>
-    </linearGradient>
-    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#ECEEF1"/>
-    </linearGradient>
-    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#E5E7EB"/>
-      <stop offset="1" stop-color="#9CA3AF"/>
-    </linearGradient>
-    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#34D399"/>
-      <stop offset="1" stop-color="#059669"/>
-    </linearGradient>
-    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#F87171"/>
-      <stop offset="1" stop-color="#DC2626"/>
+    <linearGradient id="leather" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#A86F43"/>
+      <stop offset="0.45" stop-color="#7A4A26"/>
+      <stop offset="1" stop-color="#462612"/>
     </linearGradient>
     <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.6"/>
       <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.1"/>
-      <stop offset="1" stop-color="#0F172A" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#1A0D05" stop-opacity="0.6"/>
+    </linearGradient>
+    <!-- each page darkens toward the spine, like paper curving into the gutter -->
+    <linearGradient id="pageLeft" x1="5" y1="0" x2="32" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.7" stop-color="#ECEFF3"/>
+      <stop offset="1" stop-color="#C3C9D2"/>
+    </linearGradient>
+    <linearGradient id="pageRight" x1="59" y1="0" x2="32" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.7" stop-color="#ECEFF3"/>
+      <stop offset="1" stop-color="#C3C9D2"/>
     </linearGradient>
   </defs>
-  <rect x="8" y="6" width="48" height="56" rx="8" fill="url(#board)" stroke="url(#rim)" stroke-width="1.4"/>
-  <rect x="13" y="13" width="38" height="44" rx="4" fill="url(#paper)"/>
-  <circle cx="22" cy="24" r="5" fill="url(#green)"/>
-  <path d="M19.75 24 l1.75 1.75 l3.0 -3.5" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M31 24 H44" stroke="#B6BCC6" stroke-width="3.5" stroke-linecap="round"/>
-  <circle cx="22" cy="35" r="5" fill="url(#green)"/>
-  <path d="M19.75 35 l1.75 1.75 l3.0 -3.5" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M31 35 H41" stroke="#B6BCC6" stroke-width="3.5" stroke-linecap="round"/>
-  <circle cx="22" cy="46" r="5" fill="url(#red)"/>
-  <path d="M20.0 44.0 L24.0 48.0 M24.0 44.0 L20.0 48.0" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-  <path d="M31 46 H44" stroke="#B6BCC6" stroke-width="3.5" stroke-linecap="round"/>
-  <rect x="22" y="3" width="20" height="10" rx="4" fill="url(#metal)" stroke="#6B7280" stroke-width="1"/>
+
+  <!-- leather cover, showing past the pages at the sides and bottom -->
+  <path d="M3 16 a3 3 0 0 1 3 -3 H58 a3 3 0 0 1 3 3 V48 a3 3 0 0 1 -3 3 H41 a9 9 0 0 0 -9 7 a9 9 0 0 0 -9 -7 H6 a3 3 0 0 1 -3 -3 Z"
+        fill="url(#leather)" stroke="url(#rim)" stroke-width="1.4"/>
+
+  <!-- page-block edges under the top sheet -->
+  <g fill="#B9C0CA">
+    <path d="M8 49.6 a2.7 2.7 0 0 1 -2.7 -2.7 V12.3 H32 V57.6 a8 8 0 0 0 -8 -8 Z"/>
+    <path d="M56 49.6 a2.7 2.7 0 0 0 2.7 -2.7 V12.3 H32 V57.6 a8 8 0 0 1 8 -8 Z"/>
+  </g>
+
+  <!-- open pages, in the outline of Lucide's book-open -->
+  <path d="M8 48 a2.7 2.7 0 0 1 -2.7 -2.7 V10.7 a2.7 2.7 0 0 1 2.7 -2.7 H21.3 a10.7 10.7 0 0 1 10.7 10.7 V56 a8 8 0 0 0 -8 -8 Z"
+        fill="url(#pageLeft)"/>
+  <path d="M56 48 a2.7 2.7 0 0 0 2.7 -2.7 V10.7 a2.7 2.7 0 0 0 -2.7 -2.7 H42.7 a10.7 10.7 0 0 0 -10.7 10.7 V56 a8 8 0 0 1 8 -8 Z"
+        fill="url(#pageRight)"/>
+
+  <!-- spine crease -->
+  <path d="M32 18.7 V56" stroke="#8A94A3" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
 </svg>

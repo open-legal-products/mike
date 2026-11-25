@@ -4,59 +4,58 @@
  * Test user: this worker's account (e2eAccount; e2e@mike.local on worker 0)
  *
  * Key source facts used by these selectors:
- *  - SettingsShell.tsx: the box sits at the right end of the "Settings" title
- *    row; the section tabs and the open page keep their places.
- *  - SettingsSearch.tsx: input role "searchbox" named "Search settings";
+ *  - SettingsShell.tsx: the search is a page-header search button at the
+ *    right end of the header (in the mobile header on a phone); the open
+ *    page keeps its place.
+ *  - SettingsSearch.tsx: a button named "Search settings" opens into an
+ *    input of role "searchbox" with the same name;
  *    results sit in a group named "Settings search results", split into
- *    groups "Matches" and "Related"; each result button's accessible name is
- *    "<title>, <tab>. <description>" (the tab is left off when it repeats
- *    the title); Enter opens the first result; the empty state reads
- *    "No settings match …".
+ *    groups "Matches" and "Related", opening from three characters; each
+ *    result shows "<tab> › <title>" and is named "<title>, <tab>" (the tab is
+ *    left off when it repeats the title); Enter opens the first result; the
+ *    empty state reads "No settings match …".
  *  - settingsSearch.ts: a result's href may carry a hash naming the section
  *    heading's id; the heading is scrolled into view and focused on arrival.
  */
 import { test, expect, type Page } from "./fixtures";
 
+// Opened on Account, so the search sits above a section's content.
 async function openSettings(page: Page) {
-    await page.goto("/settings");
-    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible({
+    await page.goto("/settings/account");
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeAttached({
         timeout: 10_000,
     });
-    return page.getByRole("searchbox", { name: "Search settings" });
+    await page.getByRole("button", { name: "Search settings" }).click();
+    const search = page.getByRole("searchbox", { name: "Search settings" });
+    await expect(search).toBeFocused();
+    return search;
 }
 
 const results = (page: Page) =>
     page.getByRole("group", { name: "Settings search results" });
 
 test.describe("Settings search", () => {
-    test("sits in the title row and moves nothing when it opens", async ({
+    test("sits in the page header and moves nothing when it opens", async ({
         page,
     }) => {
         const search = await openSettings(page);
-        const heading = page.getByRole("heading", { name: "Settings" });
-        const accountTab = page
-            .getByRole("navigation", { name: "Settings" })
-            .getByRole("button", { name: "Account", exact: true });
         const profile = page.getByRole("heading", { name: "Profile" });
         await expect(profile).toBeVisible();
 
-        const headingBox = (await heading.boundingBox())!;
         const searchBox = (await search.boundingBox())!;
-        const tabBefore = (await accountTab.boundingBox())!;
         const profileBefore = (await profile.boundingBox())!;
-        // Same row as the heading, to its right.
-        // REGRESSION: fails if the box moves back above the tab column.
-        expect(searchBox.x).toBeGreaterThan(headingBox.x + headingBox.width);
-        expect(Math.abs(searchBox.y + searchBox.height - (headingBox.y + headingBox.height))).toBeLessThan(12);
+        // In the header above the open section.
+        // REGRESSION: fails if the box drops into the page.
+        expect(searchBox.y + searchBox.height).toBeLessThan(profileBefore.y);
 
         await search.fill("api");
         await expect(results(page)).toBeVisible();
-        // The list overlays the page; the tabs and content do not shift.
-        expect(await accountTab.boundingBox()).toEqual(tabBefore);
+        // The list overlays the page; the content does not shift.
         expect(await profile.boundingBox()).toEqual(profileBefore);
         const list = (await results(page).boundingBox())!;
-        // Anchored to the box's right edge, inside the page.
-        expect(Math.abs(list.x + list.width - (searchBox.x + searchBox.width))).toBeLessThan(8);
+        // Exactly as wide as the box, under it.
+        expect(Math.abs(list.x - searchBox.x)).toBeLessThan(2);
+        expect(Math.abs(list.width - searchBox.width)).toBeLessThan(2);
     });
 
     test("finds a section by other words for it and opens it on click", async ({
@@ -65,12 +64,12 @@ test.describe("Settings search", () => {
         const search = await openSettings(page);
         await expect(results(page)).toHaveCount(0);
 
-        // "api key" is nowhere in the tab's name; the index knows it as a
-        // way of asking for Bring Your Own Keys.
+        // "byok" is nowhere in the tab's name; the index knows it as a way of
+        // asking for API Keys.
         // REGRESSION: fails if the related-match vocabulary stops working.
-        await search.fill("api key");
+        await search.fill("byok");
         const byok = results(page).getByRole("button", {
-            name: /^Bring Your Own Keys\./,
+            name: /^API Keys$/,
         });
         await expect(byok).toBeVisible();
 
@@ -79,10 +78,11 @@ test.describe("Settings search", () => {
         await expect(
             page.getByRole("heading", { name: "Available Providers" }),
         ).toBeVisible({ timeout: 10_000 });
-        // The box is cleared once a result is chosen.
+        // Once a result is chosen the box is cleared and folds back into its
+        // button.
         await expect(
-            page.getByRole("searchbox", { name: "Search settings" }),
-        ).toHaveValue("");
+            page.getByRole("button", { name: "Search settings" }),
+        ).toBeVisible();
     });
 
     test("lists exact matches before related ones", async ({ page }) => {
@@ -97,7 +97,7 @@ test.describe("Settings search", () => {
         // section actually called Memory.
         await expect(
             matches.getByRole("button").first(),
-        ).toHaveAccessibleName(/^Memory\./);
+        ).toHaveAccessibleName("Memory");
         // A title that merely starts with the word is still a name hit; a
         // section that only mentions it in its description is related.
         await expect(
@@ -119,7 +119,7 @@ test.describe("Settings search", () => {
         const search = await openSettings(page);
         await search.fill("password");
         await expect(
-            results(page).getByRole("button", { name: /^Password, Security\./ }),
+            results(page).getByRole("button", { name: /^Password, Security$/ }),
         ).toBeVisible();
         await search.press("Enter");
 
@@ -141,10 +141,10 @@ test.describe("Settings search", () => {
         const search = await openSettings(page);
         await search.fill("delete");
         const first = results(page).getByRole("button", {
-            name: /^Delete data, Privacy & Data\./,
+            name: /^Delete data, Privacy & Data$/,
         });
         const second = results(page).getByRole("button", {
-            name: /^Delete account, Account\./,
+            name: /^Delete account, Account$/,
         });
         await expect(first).toBeVisible();
         await expect(second).toBeVisible();
@@ -169,7 +169,7 @@ test.describe("Settings search", () => {
         const search = await openSettings(page);
         await search.fill("apearance");
         await expect(
-            results(page).getByRole("button", { name: /^Dark mode, Appearance\./ }),
+            results(page).getByRole("button", { name: /^Dark mode, Appearance$/ }),
         ).toBeVisible();
 
         await search.fill("qzxv");
@@ -180,21 +180,16 @@ test.describe("Settings search", () => {
 test.describe("Settings search on a phone", () => {
     test.use({ viewport: { width: 390, height: 844 } });
 
-    test("shares the title row and keeps its results inside the screen", async ({
+    test("opens in the mobile header and keeps its results inside the screen", async ({
         page,
     }) => {
         const search = await openSettings(page);
         await expect(search).toBeInViewport();
-        const heading = page.getByRole("heading", { name: "Settings" });
-        const headingBox = (await heading.boundingBox())!;
-        const searchBox = (await search.boundingBox())!;
-        // Still beside the heading, not wrapped under it.
-        expect(searchBox.x).toBeGreaterThan(headingBox.x + headingBox.width);
 
         await search.fill("2fa");
         const list = results(page);
         const mfa = list.getByRole("button", {
-            name: /^Multi-Factor Authentication, Security\./,
+            name: /^Multi-Factor Authentication, Security$/,
         });
         await expect(mfa).toBeVisible();
         const box = (await list.boundingBox())!;

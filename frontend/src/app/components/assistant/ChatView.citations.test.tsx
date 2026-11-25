@@ -141,7 +141,7 @@ const messages: Message[] = [
 
 function renderView(overrides: Partial<Chat> = {}) {
     render(
-        <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+        <PageChromeContext.Provider value={{ mobileActionsContainer: null, mobileBackContainer: null }}>
             <ChatView
                 chatId="chat-1"
                 chat={{ ...chat, ...overrides }}

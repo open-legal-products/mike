@@ -1788,19 +1788,26 @@ export function TRView({ reviewId, projectId }: Props) {
                                 onChange: setSearch,
                                 placeholder: "Search rows…",
                             },
+                            // Who has the review, a click away as on a
+                            // playbook. A review in a project has the
+                            // project's access instead.
+                            !projectId && {
+                                onClick: () => setAccessModalOpen(true),
+                                disabled: loading,
+                                title: "Access",
+                                iconOnly: true,
+                                icon: (
+                                    <Users
+                                        aria-hidden="true"
+                                        className="h-4 w-4"
+                                    />
+                                ),
+                            },
                             {
                                 type: "custom",
                                 render: (
                                     <HeaderActionsMenu
                                         items={[
-                                            ...(!projectId
-                                                ? [{
-                                                      label: "Access",
-                                                      icon: Users,
-                                                      onSelect: () => setAccessModalOpen(true),
-                                                      disabled: loading,
-                                                  }]
-                                                : []),
                                             {
                                                 label: "Edit details",
                                                 icon: Pencil,
@@ -2348,7 +2355,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 }
                 message={
                     apiKeyWarning?.kind === "rejected"
-                        ? `The ${apiKeyWarning.provider ? providerLabel(apiKeyWarning.provider) : "model provider"} API key was rejected. If you added your own key, check it in Settings → Bring Your Own Keys; otherwise contact your administrator.`
+                        ? `The ${apiKeyWarning.provider ? providerLabel(apiKeyWarning.provider) : "model provider"} API key was rejected. If you added your own key, check it in Settings → API Keys; otherwise contact your administrator.`
                         : undefined
                 }
                 onClose={() => setApiKeyWarning(null)}

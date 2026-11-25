@@ -396,7 +396,7 @@ export function providerFailureLevel(error: unknown): "warning" | "error" {
 // Without a key source, "the" rather than "your": requiredKey() may fall back
 // to the deployment's key, as noted on InvalidApiKeyError.
 const OUT_OF_CREDITS: Record<ProviderKeySource | "unknown", (label: string) => string> = {
-  user: (label) => `Your ${label} account is out of credits. Add credits to it, or change the key in Settings → Bring Your Own Keys.`,
+  user: (label) => `Your ${label} account is out of credits. Add credits to it, or change the key in Settings → API Keys.`,
   org: (label) => `Your organization's ${label} account is out of credits. Ask an organization admin to add credits or change the key.`,
   deployment: (label) => `The ${label} account this server uses is out of credits. Select another model, or contact support.`,
   unknown: (label) => `The ${label} account is out of credits. Top up, or select another model.`,

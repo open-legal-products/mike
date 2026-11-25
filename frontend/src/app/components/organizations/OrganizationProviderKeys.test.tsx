@@ -374,14 +374,12 @@ describe("an owner or admin", () => {
     expect(mocks.refreshOrgApiKeys).toHaveBeenCalledTimes(1);
   });
 
-  it("says members' own keys are never used", async () => {
+  it("offers no switch for members' own keys", async () => {
     renderTab();
 
-    expect(
-      await within(savedSection()).findByText(
-        "Members\u2019 own keys are never used for work in this organization.",
-      ),
-    ).toBeInTheDocument();
+    await within(savedSection()).findByRole("heading", {
+      name: "Organization Providers",
+    });
     expect(
       screen.queryByRole("switch", { name: "Allow members' own keys" }),
     ).not.toBeInTheDocument();

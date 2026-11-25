@@ -2,8 +2,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ByokPage from "./page";
 
-// The keys work in the active workspace runs on: the caller's own in
-// Personal, the organization's in its workspace.
+// The caller's own keys, in Personal. An organization's keys are managed only
+// in its own settings, so its workspace sends owners and admins there.
 
 const state = vi.hoisted(() => ({
     scope: { kind: "personal" } as
@@ -14,44 +14,45 @@ const state = vi.hoisted(() => ({
         | { kind: "managed"; orgName: string },
 }));
 
+const replace = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+    useRouter: () => ({ replace }),
+}));
+
 const refreshOrganizations = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("@/app/contexts/WorkspaceContext", () => ({
     useWorkspace: () => ({ refreshOrganizations }),
 }));
-vi.mock("@/app/hooks/useWorkspaceSettingsScope", () => ({
+vi.mock("@/app/hooks/useWorkspaceSettingsScope", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("@/app/hooks/useWorkspaceSettingsScope")
+    >()),
     useWorkspaceSettingsScope: () => state.scope,
 }));
 vi.mock("@/app/components/settings/PersonalProviderKeys", () => ({
     PersonalProviderKeys: () => <p>Your keys</p>,
 }));
-vi.mock("@/app/components/organizations/OrganizationProviderKeys", () => ({
-    OrganizationProviderKeys: ({
-        orgId,
-        orgName,
-    }: {
-        orgId: string;
-        orgName: string;
-    }) => (
-        <p>
-            Keys for {orgName} ({orgId})
-        </p>
-    ),
-}));
 
 beforeEach(() => {
     state.scope = { kind: "personal" };
+    replace.mockClear();
 });
 
-describe("Settings > Bring Your Own Keys", () => {
+describe("Settings > API Keys", () => {
     it("manages the caller's own keys in Personal", () => {
         render(<ByokPage />);
         expect(screen.getByText("Your keys")).toBeInTheDocument();
+        expect(replace).not.toHaveBeenCalled();
     });
 
-    it("manages the organization's keys for its owners and admins", () => {
+    it("sends owners and admins to the organization's own settings for its keys", () => {
         state.scope = { kind: "organization", orgId: "org-1", orgName: "Acme LLP" };
         render(<ByokPage />);
-        expect(screen.getByText("Keys for Acme LLP (org-1)")).toBeInTheDocument();
+        expect(replace).toHaveBeenCalledWith(
+            "/organizations/org-1/settings/providers",
+        );
+        expect(screen.getByTestId("workspace-settings-loading")).toBeInTheDocument();
+        expect(screen.queryByText("Keys for Acme LLP (org-1)")).toBeNull();
         expect(screen.queryByText("Your keys")).toBeNull();
     });
 

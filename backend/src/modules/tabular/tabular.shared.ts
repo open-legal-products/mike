@@ -155,7 +155,7 @@ export function missingModelApiKey(
         return {
             provider,
             model,
-            detail: `${providerLabel(provider)} is turned off. Turn it on in Settings → Bring Your Own Keys or select a different tabular review model.`,
+            detail: `${providerLabel(provider)} is turned off. Turn it on in Settings → API Keys or select a different tabular review model.`,
         };
     }
     return {

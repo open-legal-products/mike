@@ -4,6 +4,18 @@ import userEvent from "@testing-library/user-event";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { OrganizationsOverview } from "./OrganizationsOverview";
 import SettingsLayout from "@/app/(pages)/settings/layout";
+import { SettingsOverview } from "@/app/components/settings/SettingsOverview";
+
+// The page header's breadcrumbs measure themselves against a media query.
+vi.stubGlobal(
+  "matchMedia",
+  vi.fn((query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  })),
+);
 
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),
@@ -22,6 +34,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   usePathname: () => "/settings/organizations",
   useRouter: () => ({ push: mocks.push }),
+}));
+// Settings' overview shows the sections Personal offers.
+vi.mock("@/app/hooks/useWorkspaceSettingsScope", () => ({
+  useWorkspaceSettingsScope: () => ({ kind: "personal" }),
 }));
 vi.mock("@/app/contexts/AuthContext", () => ({
   useAuth: () => ({
@@ -360,15 +376,22 @@ describe("OrganizationsOverview", () => {
     answer.mockImplementation(async () => {
       mocks.listMyOrgInvitations.mockResolvedValue([]);
     });
-    render(<SettingsLayout><OrganizationsOverview /></SettingsLayout>);
+    // The count is the layout's, shown on Settings' overview card; both are
+    // drawn here so the card can be watched while the page answers.
+    render(
+      <SettingsLayout>
+        <SettingsOverview />
+        <OrganizationsOverview />
+      </SettingsLayout>,
+    );
 
-    expect(await screen.findByRole("button", {
+    expect(await screen.findByRole("link", {
       name: "Organizations 1 pending invitation",
     })).toBeVisible();
     await user.click(await screen.findByRole("button", {
       name: `${action} Inviting Chambers`,
     }));
-    expect(await screen.findByRole("button", { name: "Organizations" })).toBeVisible();
+    expect(await screen.findByRole("link", { name: "Organizations" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Invitations" })).not.toBeInTheDocument();
   });
 

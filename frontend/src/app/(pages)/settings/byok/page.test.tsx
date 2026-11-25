@@ -8,6 +8,11 @@ const { updateApiKey, updateApiKeyEnabled, azureEnabled } = vi.hoisted(() => ({
     azureEnabled: { value: true },
 }));
 
+// The page sends an organization's owners and admins to its own settings.
+vi.mock("next/navigation", () => ({
+    useRouter: () => ({ replace: vi.fn() }),
+}));
+
 vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
     MfaVerificationPopup: () => null,
     needsMfaVerification: vi.fn().mockResolvedValue(false),

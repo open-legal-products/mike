@@ -142,7 +142,7 @@ describe("AssistantMessage document events", () => {
         ]);
     });
 
-    it("opens the edit wrapper as a plain document but keeps individual edit context", () => {
+    it("leaves View to each edit in the wrapper, opening the document at that edit", () => {
         const onOpenDocument = vi.fn();
         const onEditViewClick = vi.fn();
         const events: AssistantEvent[] = [
@@ -186,22 +186,23 @@ describe("AssistantMessage document events", () => {
             />,
         );
 
+        // The wrapper's own actions are Accept all and Reject all; there is
+        // one View per edit and none for the wrapper.
         const viewButtons = screen.getAllByRole("button", { name: "View" });
-        fireEvent.click(viewButtons[0]);
-        expect(onOpenDocument).toHaveBeenCalledWith({
-            documentId: "document-1",
-            filename: "agreement.docx",
-            versionId: "version-2",
-            versionNumber: 2,
-        });
-        expect(onEditViewClick).not.toHaveBeenCalled();
+        expect(viewButtons).toHaveLength(2);
+        expect(
+            screen
+                .getByRole("group", { name: "Tracked change actions" })
+                .querySelector("button"),
+        ).toHaveTextContent("Accept all");
 
-        fireEvent.click(viewButtons[1]);
+        fireEvent.click(viewButtons[0]);
         expect(onEditViewClick).toHaveBeenCalledWith(
             expect.objectContaining({ edit_id: "edit-1" }),
             "agreement.docx",
             1,
         );
+        expect(onOpenDocument).not.toHaveBeenCalled();
     });
 
     it("offers the edits and documents a subagent made", () => {

@@ -289,8 +289,9 @@ describe("AppSidebar workspace switcher", () => {
     render(<AppSidebar isOpen onToggle={vi.fn()} />);
 
     await openAccountMenu(user);
+    // Named Organization Settings for its owners and admins.
     await user.click(
-      screen.getByRole("menuitem", { name: "Organization" }),
+      screen.getByRole("menuitem", { name: "Organization Settings" }),
     );
 
     expect(state.push).toHaveBeenCalledWith(

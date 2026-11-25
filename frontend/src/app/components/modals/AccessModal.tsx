@@ -425,6 +425,7 @@ export function AccessModal({
                             accessLoading || loadedRosterKey !== rosterKey
                         }
                         disabled={!canManage || busy}
+                        canManage={canManage}
                         error={error ?? access.error ?? grantsError}
                         visibility={access.visibility ?? "private"}
                         publicMemberRole={access.publicMemberRole}

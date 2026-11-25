@@ -5,7 +5,7 @@ import { useWorkspace } from "@/app/contexts/WorkspaceContext";
 
 /**
  * Stands in for a Workspace settings page (Features, Model Preferences,
- * Bring Your Own Keys) while the active organization has not loaded, so it
+ * API Keys) while the active organization has not loaded, so it
  * is not yet known whether the caller may change them: a skeleton of one
  * settings card, or, once reading the organizations has failed, the reason
  * and a Retry.

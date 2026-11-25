@@ -1,8 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { CloseButton } from "./CloseButton";
 import { PillButtonUI } from "./PillButtonUI";
-import { TextButtonUI } from "./TextButtonUI";
 import { TextSlabUI } from "./TextSlabUI";
 
 export type EditCardUIBusyAction =
@@ -79,7 +79,6 @@ export function EditCardUI({
     const showAcceptAndApply =
         !!onAcceptAndApply || busyAction === "accept-and-apply";
     const hasActions =
-        !!onClose ||
         !!onView ||
         showApply ||
         showAcceptAndApply ||
@@ -92,7 +91,7 @@ export function EditCardUI({
             data-edit-status={status}
             aria-busy={ariaBusy || busyAction !== undefined || undefined}
         >
-            {(changeNumber !== undefined || reason) && (
+            {(changeNumber !== undefined || reason || onClose) && (
                 <div className="mb-2 flex items-start gap-2">
                     {changeNumber !== undefined && (
                         <span
@@ -107,6 +106,14 @@ export function EditCardUI({
                         <p className="min-w-0 flex-1 font-serif text-sm text-gray-500">
                             {reason}
                         </p>
+                    )}
+                    {/* Top right, level with the change number. */}
+                    {onClose && (
+                        <CloseButton
+                            onClick={onClose}
+                            label="Close tracked change"
+                            className="ml-auto mt-0.5"
+                        />
                     )}
                 </div>
             )}
@@ -219,11 +226,6 @@ export function EditCardUI({
                             )}
                         </PillButtonUI>
                     )}
-                    {onClose && (
-                        <TextButtonUI size="xs" title="Close tracked change" onClick={onClose} className="ml-auto">
-                            Close
-                        </TextButtonUI>
-                    )}
                     {onView && (
                         <PillButtonUI
                             tone="black"
@@ -236,7 +238,7 @@ export function EditCardUI({
                                     ? "This change has been resolved and is no longer in the document."
                                     : undefined
                             }
-                            className={onClose ? undefined : "ml-auto"}
+                            className="ml-auto"
                         >
                             View
                         </PillButtonUI>

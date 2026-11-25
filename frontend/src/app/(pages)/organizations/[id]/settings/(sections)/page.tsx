@@ -1,7 +1,8 @@
 "use client";
 
-import { OrganizationGeneralSettings } from "@/app/components/organizations/OrganizationGeneralSettings";
+import { SettingsOverview } from "@/app/components/settings/SettingsOverview";
 
-export default function OrganizationGeneralSettingsPage() {
-  return <OrganizationGeneralSettings />;
+/** An organization's settings' starting page: every section offered, as cards. */
+export default function OrganizationSettingsOverviewPage() {
+  return <SettingsOverview />;
 }

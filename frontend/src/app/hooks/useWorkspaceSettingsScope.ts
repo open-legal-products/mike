@@ -5,8 +5,8 @@ import {
 import { isOrgAdmin } from "@/app/lib/permissions";
 
 /**
- * Whose Features, Model Preferences and provider keys Settings shows in the
- * active workspace, and whether the caller may change them.
+ * Whose Features, Model Preferences and provider keys apply in the active
+ * workspace, and whether the caller may change them.
  *
  *   personal      the caller's own, in Personal (and outside a workspace)
  *   organization  the organization's, which its owners and admins manage
@@ -25,6 +25,19 @@ export type WorkspaceSettingsScope =
     | { kind: "managed"; orgName: string }
     | { kind: "loading" }
     | { kind: "unavailable" };
+
+/**
+ * Where the provider keys the active workspace runs on are managed: the
+ * caller's own in Settings in Personal; an organization's only in its own
+ * settings, by its owners and admins. Null when the caller cannot manage
+ * them, or before that is known.
+ */
+export function providerKeysHref(scope: WorkspaceSettingsScope): string | null {
+    if (scope.kind === "personal") return "/settings/byok";
+    if (scope.kind === "organization")
+        return `/organizations/${scope.orgId}/settings/providers`;
+    return null;
+}
 
 export function useWorkspaceSettingsScope(): WorkspaceSettingsScope {
     const { workspaceId, activeOrganization, organizationsFailed } =

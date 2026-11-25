@@ -284,7 +284,7 @@ export function TableScrollArea({
     return (
         <div
             className={cn(
-                "mx-3 mb-2 min-h-0 min-w-0 flex-1 md:mx-6.5 md:mb-3",
+                "mx-3 mb-2 min-h-0 min-w-0 flex-1 md:mx-6 md:mb-3",
                 preserveGridBorder && "rounded-2xl",
                 className,
             )}

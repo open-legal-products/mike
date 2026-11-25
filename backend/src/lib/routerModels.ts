@@ -111,7 +111,7 @@ export async function resolveRequestedModel(
         throw new ProviderConfigurationError(
             fromOrganization
                 ? `Model ${resolved} is not in your organization's saved ${ROUTER_LABELS[router]} models — an organization admin can add it in Organization Settings.`
-                : `Model ${resolved} is not in your saved ${ROUTER_LABELS[router]} models — open ${ROUTER_LABELS[router]} in Settings → Bring Your Own Keys and add it under Model Selections.`,
+                : `Model ${resolved} is not in your saved ${ROUTER_LABELS[router]} models — open ${ROUTER_LABELS[router]} in Settings → API Keys and add it under Model Selections.`,
         );
     }
     log.warn(tpl`[router-models] user ${userId} requested ${router} model "${resolved}" outside their saved selection; using ${fallback}`,

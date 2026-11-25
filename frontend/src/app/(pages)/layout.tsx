@@ -9,6 +9,7 @@ import { WorkspaceProvider } from "@/app/contexts/WorkspaceContext";
 import { SidebarContext } from "@/app/contexts/SidebarContext";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 import { AppSidebar } from "@/app/components/shared/AppSidebar";
+import { useResponsiveSidebar } from "@/app/hooks/useResponsiveSidebar";
 import { preloadSidebarIcons } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { HeaderButtonUI, HeaderButtonsUI } from "@mike/ui";
@@ -35,54 +36,14 @@ export default function MikeLayout({
         /^\/projects\/[^/]+\/assistant\/chat\/[^/]+\/?$/.test(pathname);
     const [mobileActionsContainer, setMobileActionsContainer] =
         useState<HTMLDivElement | null>(null);
+    const [mobileBackContainer, setMobileBackContainer] =
+        useState<HTMLDivElement | null>(null);
 
-    const [isSidebarOpenDesktop, setIsSidebarOpenDesktop] = useState(() => {
-        if (typeof window !== "undefined") {
-            const saved = localStorage.getItem("sidebarOpen");
-            return saved !== null ? saved === "true" : true;
-        }
-        return true;
-    });
-
-    const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
-        if (typeof window !== "undefined" && window.innerWidth < 768) {
-            return false;
-        }
-        return true;
-    });
-
-    // Persist what is actually on screen. The mount initializer above reads
-    // this key back but `isSidebarOpen` starts open on desktop regardless, so
-    // storing anything else leaves the restored preference disagreeing with
-    // the rendered sidebar and the first toggle click is spent re-syncing
-    // them. Remembering a collapsed sidebar across reloads needs the mount
-    // path to apply the stored value too — a separate change.
-    useEffect(() => {
-        if (typeof window !== "undefined" && window.innerWidth >= 768) {
-            localStorage.setItem("sidebarOpen", isSidebarOpen.toString());
-        }
-    }, [isSidebarOpenDesktop]);
-
-    useEffect(() => {
-        if (typeof window === "undefined") return;
-        const handleResize = () => {
-            const isSmall = window.innerWidth < 768;
-            if (isSmall && isSidebarOpen) setIsSidebarOpen(false);
-            else if (!isSmall && !isSidebarOpen)
-                setIsSidebarOpen(isSidebarOpenDesktop);
-        };
-        window.addEventListener("resize", handleResize);
-        return () => window.removeEventListener("resize", handleResize);
-    }, [isSidebarOpen, isSidebarOpenDesktop]);
-
-    const handleSidebarToggle = () => {
-        if (window.innerWidth >= 768) {
-            setIsSidebarOpenDesktop(!isSidebarOpenDesktop);
-            setIsSidebarOpen(!isSidebarOpenDesktop);
-        } else {
-            setIsSidebarOpen(!isSidebarOpen);
-        }
-    };
+    const {
+        isOpen: isSidebarOpen,
+        toggle: handleSidebarToggle,
+        setOpen: setSidebarOpen,
+    } = useResponsiveSidebar();
 
     const handleMobileActionsContainerRef = useCallback(
         (node: HTMLDivElement | null) => {
@@ -91,20 +52,16 @@ export default function MikeLayout({
         [],
     );
 
-    const setSidebarOpen = useCallback((open: boolean) => {
-        const isSmall =
-            typeof window !== "undefined" && window.innerWidth < 768;
-        if (isSmall) {
-            if (!open) setIsSidebarOpen(false);
-            return;
-        }
-        setIsSidebarOpen(open);
-        setIsSidebarOpenDesktop(open);
-    }, []);
+    const handleMobileBackContainerRef = useCallback(
+        (node: HTMLDivElement | null) => {
+            setMobileBackContainer(node);
+        },
+        [],
+    );
 
     const pageChromeValue = useMemo(
-        () => ({ mobileActionsContainer }),
-        [mobileActionsContainer],
+        () => ({ mobileActionsContainer, mobileBackContainer }),
+        [mobileActionsContainer, mobileBackContainer],
     );
 
     const sidebarValue = useMemo(() => ({ setSidebarOpen }), [setSidebarOpen]);
@@ -160,6 +117,13 @@ export default function MikeLayout({
                                                 <PanelLeft className="h-4 w-4" />
                                             </HeaderButtonUI>
                                         </HeaderButtonsUI>
+                                        {/* A page's way back, drawn here by
+                                            its breadcrumbs. */}
+                                        <div
+                                            ref={handleMobileBackContainerRef}
+                                            data-slot="mobile-back"
+                                            className="pointer-events-auto flex shrink-0 empty:hidden"
+                                        />
                                         <div
                                             ref={handleMobileActionsContainerRef}
                                             className="pointer-events-auto ml-auto flex min-w-0 flex-1 items-center justify-end"

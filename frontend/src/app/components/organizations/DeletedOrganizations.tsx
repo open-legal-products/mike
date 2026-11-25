@@ -69,7 +69,10 @@ export function DeletedOrganizations({
     await Promise.allSettled([load(), onRestored(), refreshOrganizations()]);
   }
 
-  if (orgs?.length === 0 && !loadError) return null;
+  // Shown only once there is something to restore, or the list could not be
+  // read: while it loads, the page's skeleton does not include it, since most
+  // people have no deleted organizations.
+  if (!loadError && (orgs === null || orgs.length === 0)) return null;
   return (
     <section
       aria-labelledby="deleted-organizations-heading"
@@ -85,13 +88,7 @@ export function DeletedOrganizations({
         <PillButtonUI tone="white" size="sm" onClick={() => void load()}>
           Retry deleted organizations
         </PillButtonUI>
-      ) : orgs === null ? (
-        <div
-          aria-label="Loading deleted organizations"
-          aria-busy="true"
-          className="h-16 animate-pulse rounded-lg bg-gray-200"
-        />
-      ) : (
+      ) : orgs === null ? null : (
         <GlassCardUI>
           {orgs.map((org) => (
             <SettingsRow key={org.id}>

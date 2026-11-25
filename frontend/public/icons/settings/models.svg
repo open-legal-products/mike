@@ -1,0 +1,46 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pkg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#64748B"/>
+      <stop offset="0.45" stop-color="#334155"/>
+      <stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FDE68A"/>
+      <stop offset="0.5" stop-color="#E0A93B"/>
+      <stop offset="1" stop-color="#A16207"/>
+    </linearGradient>
+    <linearGradient id="pinH" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#A16207"/>
+      <stop offset="0.5" stop-color="#FDE68A"/>
+      <stop offset="1" stop-color="#A16207"/>
+    </linearGradient>
+    <linearGradient id="die" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#A5F3FC"/>
+      <stop offset="0.5" stop-color="#22B8D6"/>
+      <stop offset="1" stop-color="#0E6E8C"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#020617" stop-opacity="0.5"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g fill="url(#pinH)">
+    <rect x="21" y="5" width="5" height="10" rx="1.5"/><rect x="29.5" y="5" width="5" height="10" rx="1.5"/><rect x="38" y="5" width="5" height="10" rx="1.5"/>
+    <rect x="21" y="49" width="5" height="10" rx="1.5"/><rect x="29.5" y="49" width="5" height="10" rx="1.5"/><rect x="38" y="49" width="5" height="10" rx="1.5"/>
+  </g>
+  <g fill="url(#pin)">
+    <rect x="5" y="21" width="10" height="5" rx="1.5"/><rect x="5" y="29.5" width="10" height="5" rx="1.5"/><rect x="5" y="38" width="10" height="5" rx="1.5"/>
+    <rect x="49" y="21" width="10" height="5" rx="1.5"/><rect x="49" y="29.5" width="10" height="5" rx="1.5"/><rect x="49" y="38" width="10" height="5" rx="1.5"/>
+  </g>
+  <rect x="12" y="12" width="40" height="40" rx="6" fill="url(#pkg)" stroke="url(#rim)" stroke-width="1.4"/>
+  <ellipse cx="24" cy="15.2" rx="10" ry="1.8" fill="url(#sheen)" opacity="0.4"/>
+  <rect x="21" y="21" width="22" height="22" rx="3.5" fill="url(#die)" stroke="url(#rim)" stroke-width="1.4"/>
+  <ellipse cx="29" cy="25" rx="6.5" ry="2.4" fill="url(#sheen)" opacity="0.75"/>
+</svg>

@@ -23,7 +23,7 @@ describe("EditCardsSection", () => {
         resolveDocumentEdit.mockReset();
     });
 
-    it("pushes the bulk View action to the right edge", () => {
+    it("offers only Accept all and Reject all in the bulk actions; each card has its own View", () => {
         render(
             <EditCardsSection
                 pending={[{ annotation, filename: "agreement.docx" }]}
@@ -35,13 +35,17 @@ describe("EditCardsSection", () => {
                     <div key="two">Second change</div>,
                 ]}
                 resolvedCount={0}
-                onViewClick={vi.fn()}
             />,
         );
 
-        const view = screen.getByRole("button", { name: "View" });
-        expect(view).toHaveClass("ml-auto");
-        expect(view.parentElement).toHaveClass("w-full");
+        expect(
+            screen
+                .getByRole("group", { name: "Tracked change actions" })
+                .querySelectorAll("button"),
+        ).toHaveLength(2);
+        expect(screen.getByRole("button", { name: "Accept all" })).toBeVisible();
+        expect(screen.getByRole("button", { name: "Reject all" })).toBeVisible();
+        expect(screen.queryByRole("button", { name: "View" })).toBeNull();
     });
 
     it.each([

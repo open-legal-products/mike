@@ -14,7 +14,7 @@ export class InvalidApiKeyError extends UserFacingError {
     // deployment's environment key, so a revoked platform key would otherwise
     // tell every user to fix a key they never set.
     super(
-      `The ${providerLabel} API key was rejected. If you added your own key, check it in Settings → Bring Your Own Keys; otherwise contact your administrator.`,
+      `The ${providerLabel} API key was rejected. If you added your own key, check it in Settings → API Keys; otherwise contact your administrator.`,
       options,
     );
     this.name = "InvalidApiKeyError";

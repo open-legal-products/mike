@@ -326,7 +326,7 @@ describe("xAI adapter", () => {
     // The user reads this message (safe_to_display), so it says where THEY
     // can fix it; the env variable is the operator's and goes to the log.
     const message = await failure.catch((error: Error) => error.message);
-    expect(message).toContain("Settings → Bring Your Own Keys");
+    expect(message).toContain("Settings → API Keys");
     expect(message).not.toContain("XAI_API_KEY");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Set XAI_API_KEY."));
     warn.mockRestore();
