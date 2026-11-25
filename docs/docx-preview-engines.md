@@ -83,18 +83,26 @@ warning. Existing Mike edit cards still resolve through the backend.
 
 ## Comparing versions
 
-In Projects or Library, open a Word document and choose **Compare V2 with V1**
-beside **Versions**. On a phone, the action also appears beneath the document
-title. In a chat viewer, open the version menu and choose **Compare with V1**.
-The version numbers follow the displayed version and the nearest earlier Word
-version that is still available. The viewer then shows a
-redline, the displayed version with every difference from the earlier one as a
-tracked change. Choose **Close comparison** to return to the source.
-**Download comparison** becomes available as soon as Mike receives the redline.
-It saves those exact bytes as `<name> (Vx to Vy comparison).docx`, even if the
-preview cannot display them. Word can accept or reject the changes. Closing the
-comparison restores the source document and its citation or edit card.
-Switching versions also closes the comparison.
+**Projects and Library.** Open the document and choose **Compare versions**
+beside **Versions**. On a phone, the same action appears beneath the document
+title. Choose the version to compare against. If there is only one other Word
+version, the button opens that comparison directly.
+
+![Document preview showing V3 open and choices to compare with V2 or V1](assets/word-comparison/history.png)
+
+**Chat viewer.** Open the version menu beside the document title. Choose
+**Compare with V1** to keep the displayed version open and see how it differs
+from V1. The menu includes older and newer Word versions.
+
+![Chat viewer with V3 selected and Compare with V2 and Compare with V1 in the version menu](assets/word-comparison/chat.png)
+
+**Reading the redline.** In this example, comparing V3 against V1 shows
+“thirty” deleted and “ninety” inserted. Accepting all changes in Word produces
+V3. **Download comparison** saves the generated Word file, even if its preview
+cannot render. **Close comparison** returns to the source document. Switching
+versions also closes the comparison.
+
+![V1 to V3 redline showing the notice period changing from thirty to ninety days](assets/word-comparison/redline.png)
 
 `GET /single-documents/:documentId/versions/compare?base=<id>&target=<id>`
 returns the generated Word file. The caller must have read access, and both

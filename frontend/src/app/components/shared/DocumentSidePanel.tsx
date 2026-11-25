@@ -6,6 +6,7 @@ import {
     AlertCircle,
     AlertTriangle,
     Check,
+    ChevronDown,
     Download,
     Eye,
     GitCompareArrows,
@@ -22,9 +23,10 @@ import { PdfView } from "@/app/components/shared/views/PdfView";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { DocumentComparisonView } from "./DocumentComparisonView";
-import { comparisonWithPrevious, COMPARISON_SIZE_MESSAGE, exceedsComparisonLimit, versionLabel } from "./versionComparison";
+import { ComparisonMenuItems } from "./ComparisonMenuItems";
+import { versionComparisons, type VersionComparison, COMPARISON_SIZE_MESSAGE, exceedsComparisonLimit, versionLabel } from "./versionComparison";
 import { useDocumentComparison } from "@/app/hooks/useDocumentComparison";
-import { CloseButton, PillButtonUI, TextButtonUI } from "@mike/ui";
+import { CloseButton, Dropdown, DropdownContent, DropdownTrigger, PillButtonUI, TextButtonUI } from "@mike/ui";
 import type { Document } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { cn } from "@/app/lib/utils";
@@ -305,9 +307,12 @@ export function DocumentSidePanel({
     const ownerLabel =
         doc.owner_display_name?.trim() || doc.owner_email?.trim() || "—";
 
-    const pair = !readOnly && selectedVersionId
-        ? comparisonWithPrevious(versions, selectedVersionId)
-        : null;
+    const pairs = readOnly ? [] : versionComparisons(versions, selectedVersionId);
+    const [firstPair] = pairs;
+    function compare(pair: VersionComparison) {
+        openComparison(pair);
+        setMobilePane("document");
+    }
     const comparisonControls = comparison ? (
         <>
             <TextButtonUI size="xs" disabled={!comparison.bytes} onClick={comparison.download}>
@@ -316,16 +321,26 @@ export function DocumentSidePanel({
             </TextButtonUI>
             <TextButtonUI size="xs" onClick={closeComparison}>Close comparison</TextButtonUI>
         </>
-    ) : pair && (
+    ) : pairs.length > 1 ? (
+        <Dropdown>
+            <DropdownTrigger asChild>
+                <TextButtonUI size="xs">
+                    <GitCompareArrows aria-hidden="true" className="h-3.5 w-3.5" />
+                    Compare versions
+                    <ChevronDown aria-hidden="true" className="h-3 w-3" />
+                </TextButtonUI>
+            </DropdownTrigger>
+            <DropdownContent align="end">
+                <ComparisonMenuItems pairs={pairs} onCompare={compare} />
+            </DropdownContent>
+        </Dropdown>
+    ) : firstPair && (
         <>
-            <TextButtonUI size="xs" disabled={exceedsComparisonLimit(pair)} onClick={() => {
-                openComparison(pair);
-                setMobilePane("document");
-            }}>
+            <TextButtonUI size="xs" disabled={exceedsComparisonLimit(firstPair)} onClick={() => compare(firstPair)}>
                 <GitCompareArrows aria-hidden="true" className="h-3.5 w-3.5" />
-                Compare {versionLabel(pair.target)} with {versionLabel(pair.base)}
+                Compare {versionLabel(firstPair.target)} with {versionLabel(firstPair.base)}
             </TextButtonUI>
-            {exceedsComparisonLimit(pair) && <span className="text-xs text-muted-foreground">{COMPARISON_SIZE_MESSAGE}</span>}
+            {exceedsComparisonLimit(firstPair) && <span className="text-xs text-muted-foreground">{COMPARISON_SIZE_MESSAGE}</span>}
         </>
     );
 

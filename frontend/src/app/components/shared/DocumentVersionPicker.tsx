@@ -6,7 +6,6 @@ import { listDocumentVersions, type DocumentVersion } from "@/app/lib/mikeApi";
 import {
     Dropdown,
     DropdownContent,
-    DropdownItem,
     DropdownRadioGroup,
     DropdownRadioItem,
     DropdownSeparator,
@@ -14,7 +13,8 @@ import {
     TextButtonUI,
 } from "@mike/ui";
 import { VersionChip } from "./VersionChip";
-import { COMPARISON_SIZE_MESSAGE, comparisonWithPrevious, exceedsComparisonLimit, versionLabel, type VersionComparison } from "./versionComparison";
+import { ComparisonMenuItems } from "./ComparisonMenuItems";
+import { versionComparisons, type VersionComparison } from "./versionComparison";
 
 export function DocumentVersionPicker({
     documentId,
@@ -29,7 +29,6 @@ export function DocumentVersionPicker({
     versionNumber?: number | null;
     disabled?: boolean;
     onSelect: (version: DocumentVersion) => void;
-    /** Offers "Compare with previous version" when the host can show a redline. */
     onCompare?: (comparison: VersionComparison) => void;
 }) {
     const [open, setOpen] = useState(false);
@@ -81,8 +80,7 @@ export function DocumentVersionPicker({
     // Avoid showing a nonfunctional chevron while the count is loading or
     // when there is only one available version (deleted versions do not count).
     if (!versions || versions.length <= 1) return label;
-    const comparison = onCompare ? comparisonWithPrevious(versions, selectedId) : null;
-    const tooLarge = comparison && exceedsComparisonLimit(comparison);
+    const pairs = onCompare ? versionComparisons(versions, selectedId) : [];
     return (
         <Dropdown
             open={open}
@@ -141,17 +139,10 @@ export function DocumentVersionPicker({
                         </DropdownRadioItem>
                     ))}
                 </DropdownRadioGroup>
-                {comparison && (
+                {onCompare && !disabled && pairs.length > 0 && (
                     <>
                         <DropdownSeparator />
-                        <DropdownItem
-                            disabled={disabled || !!tooLarge}
-                            onSelect={() => onCompare?.(comparison)}
-                        >
-                            <span>Compare with {versionLabel(comparison.base)}
-                                {tooLarge && <span className="block text-xs">{COMPARISON_SIZE_MESSAGE}</span>}
-                            </span>
-                        </DropdownItem>
+                        <ComparisonMenuItems pairs={pairs} onCompare={onCompare} />
                     </>
                 )}
             </DropdownContent>

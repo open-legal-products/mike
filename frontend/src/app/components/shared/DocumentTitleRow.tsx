@@ -107,7 +107,7 @@ export function DocumentTitleRow({
                         {comparison && (
                             <>
                                 <span className="text-xs text-muted-foreground">
-                                    Changes since {versionLabel(comparison.base)}
+                                    {versionLabel(comparison.base)} to {versionLabel(comparison.target)}
                                 </span>
                                 <TextButtonUI size="xs" className="h-auto p-0.5" onClick={onCloseComparison}>
                                     Close comparison

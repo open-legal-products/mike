@@ -53,7 +53,7 @@ it("shows a read-only redline of the displayed version against the previous one,
 
     await openComparison(user, 3, 2);
     expect(await screen.findByText("Redline canvas")).toBeInTheDocument();
-    expect(screen.getByText("Changes since V2")).toBeInTheDocument();
+    expect(screen.getByText("V2 to V3")).toBeInTheDocument();
     expect(lastViewer()).toMatchObject({
         documentId: "doc",
         readOnlyFile: { bytes: expect.anything() },
@@ -67,7 +67,7 @@ it("shows a read-only redline of the displayed version against the previous one,
 
     await user.click(screen.getByRole("button", { name: "Close comparison" }));
     expect(await screen.findByText("DOCX canvas")).toBeInTheDocument();
-    expect(screen.queryByText("Changes since V2")).toBeNull();
+    expect(screen.queryByText("V2 to V3")).toBeNull();
     expect(lastViewer()).toMatchObject({ documentId: "doc", versionId: "v3", canEdit: true });
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
 });
@@ -80,7 +80,7 @@ it("leaves the comparison when the displayed version changes", async () => {
 
     view.rerender(<DocumentContent document={panelDocument("v2", 2)} mode={{ kind: "document" }} onVersionChange={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("DOCX canvas")).toBeInTheDocument());
-    expect(screen.queryByText(/Changes since/)).toBeNull();
+    expect(screen.queryByText("V2 to V3")).toBeNull();
     expect(lastViewer()).toMatchObject({ versionId: "v2" });
     view.rerender(<DocumentContent document={panelDocument("v3", 3)} mode={{ kind: "document" }} onVersionChange={vi.fn()} />);
     expect(screen.getByText("DOCX canvas")).toBeVisible();
@@ -106,7 +106,7 @@ it("downloads only the fetched redline, including from a tab menu opened during 
     const user = userEvent.setup();
     render(<DocumentContent document={panelDocument("v3", 3)} mode={{ kind: "document" }}
         onVersionChange={vi.fn()} onDownloadReady={register} />);
-    await openComparison(user, 3, 2);
+    await openComparison(user, 3, 1);
     const button = screen.getByRole("button", { name: "Download comparison" });
     expect(button).toBeDisabled();
     const tabDownload = register.mock.lastCall![0]();
@@ -118,12 +118,12 @@ it("downloads only the fetched redline, including from a tab menu opened during 
     });
     await user.click(button);
     expect(authenticatedFetch).toHaveBeenCalledOnce();
-    expect(authenticatedFetch).toHaveBeenCalledWith("/api/single-documents/doc/versions/compare?base=v2&target=v3",
+    expect(authenticatedFetch).toHaveBeenCalledWith("/api/single-documents/doc/versions/compare?base=v1&target=v3",
         expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(downloadDocumentFile).not.toHaveBeenCalled();
     expect(downloadBlob).toHaveBeenCalledTimes(2);
     for (const [blob, name] of vi.mocked(downloadBlob).mock.calls) {
-        expect(name).toBe("MSA (V2 to V3 comparison).docx");
+        expect(name).toBe("MSA (V1 to V3 comparison).docx");
         expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual([7, 8, 9]);
     }
 });

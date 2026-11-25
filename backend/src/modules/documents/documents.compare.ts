@@ -1,5 +1,5 @@
 // Compare two stored versions of one Word document. The result is a redline:
-// the newer version with every difference from the older one as a native
+// the target version with every difference from the chosen baseline as a native
 // tracked change, which any DOCX viewer (and Word) can show, accept or reject.
 // Nothing is stored; the redline is computed per request from the two
 // versions' bytes.
@@ -52,9 +52,9 @@ export async function compareVersions(params: {
     documentId: string;
     userId: string;
     userEmail: string | undefined;
-    /** The earlier version: what the redline's deletions are measured against. */
+    /** The baseline for the redline. */
     baseVersionId: string;
-    /** The later version: what accepting every change produces. */
+    /** The version produced by accepting every tracked change. */
     targetVersionId: string;
     db: Db;
     engine?: DocxDiffEngine;

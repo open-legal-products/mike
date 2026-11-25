@@ -113,7 +113,7 @@ it("allows retry without exposing backend errors", async () => {
     expect(screen.queryByText(/private storage/)).toBeNull();
 });
 
-it("offers a comparison with the previous version only when the host can show one", async () => {
+it("offers a comparison only when the host can show one", async () => {
     vi.mocked(listDocumentVersions).mockResolvedValue({
         current_version_id: "v2",
         versions: versions.map((version) => ({ ...version, file_type: "docx" })),
@@ -136,7 +136,7 @@ it("offers a comparison with the previous version only when the host can show on
     expect(onSelect).not.toHaveBeenCalled();
 });
 
-it("has no comparison to offer while the first version is displayed", async () => {
+it("allows a newer baseline while the first version is displayed", async () => {
     vi.mocked(listDocumentVersions).mockResolvedValue({
         current_version_id: "v2",
         versions: versions.map((version) => ({ ...version, file_type: "docx" })),
@@ -145,7 +145,8 @@ it("has no comparison to offer while the first version is displayed", async () =
     render(<DocumentVersionPicker documentId="doc" versionId="v1" versionNumber={1} onSelect={vi.fn()} onCompare={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "Choose document version, currently V1" }));
     await waitFor(() => expect(screen.getByRole("menuitemradio", { name: /V2/ })).toBeInTheDocument());
-    expect(screen.queryByRole("menuitem", { name: /Compare with/ })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Compare with V2" })).toBeVisible();
+    expect(screen.queryByRole("menuitem", { name: "Compare with V1" })).toBeNull();
 });
 
 it.each([0, 1])("explains the file size limit when either version exceeds it", async index => {

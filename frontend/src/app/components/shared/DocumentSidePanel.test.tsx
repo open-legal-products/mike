@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createPortal } from "react-dom";
 import { expect, it, vi } from "vitest";
 import type { Document } from "@/app/components/shared/types";
@@ -118,4 +119,18 @@ it("explains when either version exceeds the comparison size limit", () => {
     });
     expect(screen.getByRole("button", { name: "Compare V2 with V1" })).toBeDisabled();
     expect(screen.getByText(/20 MiB/)).toBeVisible();
+});
+
+it("compares the displayed version with a nonconsecutive baseline from the menu", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getDocumentComparison).mockResolvedValue(new ArrayBuffer(4));
+    renderPanel(vi.fn(), { readOnly: false, versions: [version(2), version(3), version(1)] });
+
+    await user.click(screen.getByRole("button", { name: "Compare versions" }));
+    expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual([
+        "Compare with V2", "Compare with V1",
+    ]);
+    await user.click(screen.getByRole("menuitem", { name: "Compare with V1" }));
+    expect(getDocumentComparison).toHaveBeenCalledWith("doc-1", "v1", "v3", expect.any(AbortSignal));
+    expect(await screen.findByRole("heading", { name: "agreement-v3 (V1 to V3 comparison).docx" })).toBeVisible();
 });
