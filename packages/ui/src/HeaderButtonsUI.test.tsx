@@ -27,4 +27,25 @@ describe("HeaderButtonsUI", () => {
             "liquid-glass-pressed",
         );
     });
+
+    it("shows only the icon of an icon-and-label button on a small screen", () => {
+        render(
+            <HeaderButtonUI>
+                <svg data-testid="icon" />
+                Use
+            </HeaderButtonUI>,
+        );
+        const button = screen.getByRole("button", { name: "Use" });
+        expect(button).toHaveClass("w-7", "px-0", "md:w-auto", "md:px-3");
+        expect(screen.getByText("Use")).toHaveClass("sr-only", "md:not-sr-only");
+        expect(screen.getByTestId("icon")).toBeInTheDocument();
+    });
+
+    it("keeps the text of a button that has no icon", () => {
+        render(<HeaderButtonUI>Compile</HeaderButtonUI>);
+        const button = screen.getByRole("button", { name: "Compile" });
+        expect(button).toHaveClass("px-3");
+        expect(button).not.toHaveClass("w-7");
+        expect(button.querySelector(".sr-only")).toBeNull();
+    });
 });

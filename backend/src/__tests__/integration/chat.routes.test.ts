@@ -798,7 +798,7 @@ describe("POST /chat — streaming endpoint", () => {
             "../../modules/chat/engine/index.js"
         );
         const message =
-            "Your Anthropic (Claude) API key was rejected. Check the key in Settings \u2192 Bring Your Own Keys and try again.";
+            "Your Anthropic (Claude) API key was rejected. Check the key in Settings \u2192 API Keys and try again.";
         runLLMStream.mockImplementation(async () => {
             throw new AssistantStreamError(message, "", [
                 {

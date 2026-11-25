@@ -1,0 +1,29 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="brain" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFD4DE"/>
+      <stop offset="0.45" stop-color="#F7849E"/>
+      <stop offset="1" stop-color="#C2365A"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#4C0519" stop-opacity="0.45"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M32 12A7.5 7.5 0 0 0 20 10A7.5 7.5 0 0 0 10 18A7.5 7.5 0 0 0 7 30A7.5 7.5 0 0 0 10 42A7.5 7.5 0 0 0 18 52A7.5 7.5 0 0 0 32 54A7.5 7.5 0 0 0 46 52A7.5 7.5 0 0 0 54 42A7.5 7.5 0 0 0 57 30A7.5 7.5 0 0 0 54 18A7.5 7.5 0 0 0 44 10A7.5 7.5 0 0 0 32 12Z" fill="url(#brain)" stroke="url(#rim)" stroke-width="1.4" stroke-linejoin="round"/>
+  <g fill="none" stroke-linecap="round">
+    <path d="M32 13C30.5 21 33.5 29 32 37C31 43 32 49 32 53" stroke="#9F1239" stroke-opacity="0.55" stroke-width="2.2"/>
+    <g stroke="#B4234B" stroke-opacity="0.5" stroke-width="2.2">
+      <path d="M12 27Q18 24.5 21.5 30"/><path d="M15.5 41.5Q21 37 25.5 41"/><path d="M22 15Q25 20 21 23.5"/>
+      <path d="M52 27Q46 24.5 42.5 30"/><path d="M48.5 41.5Q43 37 38.5 41"/><path d="M42 15Q39 20 43 23.5"/>
+    </g>
+  </g>
+  <ellipse cx="19" cy="12.5" rx="6" ry="2.4" fill="url(#sheen)" opacity="0.7"/>
+  <ellipse cx="45" cy="12.5" rx="6" ry="2.4" fill="url(#sheen)" opacity="0.7"/>
+</svg>

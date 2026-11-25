@@ -30,10 +30,6 @@
       <stop offset="0.5" stop-color="#D9A94E"/>
       <stop offset="1" stop-color="#B07E2C"/>
     </linearGradient>
-    <linearGradient id="ribbon" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#F59E0B"/>
-      <stop offset="1" stop-color="#B45309"/>
-    </linearGradient>
     <radialGradient id="sheen">
       <stop offset="0" stop-color="#FFFFFF"/>
       <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
@@ -41,7 +37,7 @@
     </radialGradient>
   </defs>
 
-  <!-- bottom: blue book, spine left, with a ribbon marker -->
+  <!-- bottom: blue book, spine left -->
   <g>
     <rect x="5" y="44" width="54" height="14" rx="3" fill="url(#leatherBlue)" stroke="url(#rim)" stroke-width="1.4"/>
     <rect x="15" y="47.75" width="42" height="6.5" rx="1.2" fill="url(#pages)"/>
@@ -51,7 +47,6 @@
     <rect x="8.2" y="46.5" width="1.4" height="9" rx="0.7" fill="url(#gilt)"/>
     <rect x="11.4" y="46.5" width="1.4" height="9" rx="0.7" fill="url(#gilt)"/>
     <ellipse cx="22" cy="45.3" rx="12" ry="1.1" fill="url(#sheen)" opacity="0.45"/>
-    <path d="M40 55.5 V62 L42 60.4 L44 62 V55.5 Z" fill="url(#ribbon)"/>
   </g>
 
   <!-- middle: red book, spine right -->

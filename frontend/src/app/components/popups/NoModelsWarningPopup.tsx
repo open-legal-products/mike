@@ -55,7 +55,7 @@ function VisibleNoModelsWarning({
             primaryAction={
                 settingsHref
                     ? {
-                          label: "Open Organization",
+                          label: "Open Organization Settings",
                           onClick: () => {
                               onClose();
                               router.push(settingsHref);
@@ -64,7 +64,7 @@ function VisibleNoModelsWarning({
                     : organizationFix
                       ? undefined
                       : {
-                            label: "Open Bring Your Own Keys",
+                            label: "Open API Keys",
                             onClick: () => {
                                 onClose();
                                 router.push("/settings/byok");

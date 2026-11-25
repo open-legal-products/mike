@@ -12,7 +12,7 @@ import {
 } from "./OrganizationSettingsShell";
 
 /**
- * The Bring Your Own Keys section of an organization's settings: its owners'
+ * The API Keys section of an organization's settings: its owners'
  * and admins' alone. The section is not offered to a member, and one who
  * follows a link to it is told why rather than shown controls that the
  * server would refuse.
@@ -25,13 +25,13 @@ export function OrganizationProvidersSettings() {
     return (
       <EmptyState
         icon={<OrganizationSkeuoIcon />}
-        title="Bring Your Own Keys"
+        title="API Keys"
         description="Only this organization's owners and admins can manage its keys."
         action={
           <PillButtonUI
             tone="white"
             size="sm"
-            onClick={() => router.push(organizationSettingsHref(orgId))}
+            onClick={() => router.push(organizationSettingsHref(orgId, "general"))}
           >
             Back to General
           </PillButtonUI>

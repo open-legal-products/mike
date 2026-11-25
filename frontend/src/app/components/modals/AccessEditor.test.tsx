@@ -769,3 +769,50 @@ describe("OrganizationAccessEditor — public items members only view", () => {
         ).toBeInTheDocument();
     });
 });
+
+describe("OrganizationAccessEditor — for someone who cannot change access", () => {
+    const props = {
+        members: [
+            {
+                key: "m-1",
+                user_id: "m-1",
+                email: "colleague@firm.example",
+                display_name: "Colleague",
+                role: "editor" as const,
+            },
+        ],
+        assignments: [],
+        organizationName: "Elite Law LLP",
+        resourceNoun: "tabular review",
+        onAssign: vi.fn(),
+        onRemove: vi.fn(),
+    };
+
+    it("shuts the search and says why", async () => {
+        const user = userEvent.setup();
+        render(<OrganizationAccessEditor {...props} canManage={false} disabled />);
+        const search = screen.getByRole("searchbox", { name: "People" });
+        expect(search).toBeDisabled();
+        // No caret: a click does not put them in it.
+        await user.click(search);
+        expect(search).not.toHaveFocus();
+        expect(search).toHaveAttribute(
+            "placeholder",
+            "You don't have permission to share this tabular review",
+        );
+    });
+
+    it("keeps the search open, as before, for someone who can", () => {
+        render(<OrganizationAccessEditor {...props} />);
+        const search = screen.getByRole("searchbox", { name: "People" });
+        expect(search).toBeEnabled();
+        expect(search).toHaveAttribute("placeholder", "Search members…");
+    });
+
+    it("draws the list of people with access without a surface of its own", () => {
+        render(<OrganizationAccessEditor {...props} />);
+        const list = screen.getByText("Not shared with anyone yet.").parentElement!;
+        expect(list).toHaveClass("max-h-72", "overflow-y-auto");
+        expect(list.className).not.toMatch(/(?:^|\s)bg-/);
+    });
+});

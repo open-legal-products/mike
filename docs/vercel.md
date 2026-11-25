@@ -44,7 +44,7 @@ address. Setup closes for good once that deployment has an account, and the
 first account has no special rights. Setup needs no database table: Mike asks
 Supabase Auth whether any account exists.
 
-Then add a model-provider key under **Settings > Bring Your Own Keys**, or set
+Then add a model-provider key under **Settings > API Keys**, or set
 `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `GEMINI_API_KEY` on the Vercel
 project and redeploy.
 

@@ -1,0 +1,33 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="track" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#93C5FD"/>
+      <stop offset="0.5" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="knob" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#F1F5F9"/>
+      <stop offset="1" stop-color="#CBD5E1"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.8"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#172554" stop-opacity="0.45"/>
+    </linearGradient>
+    <linearGradient id="knobRim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#334155" stop-opacity="0.45"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="4" y="15" width="56" height="34" rx="17" fill="url(#track)" stroke="url(#rim)" stroke-width="1.4"/>
+  <ellipse cx="22" cy="20.5" rx="11" ry="2.6" fill="url(#sheen)" opacity="0.55"/>
+  <circle cx="43" cy="33.2" r="13.4" fill="#172554" opacity="0.28"/>
+  <circle cx="43" cy="32" r="13" fill="url(#knob)" stroke="url(#knobRim)" stroke-width="1.4"/>
+  <ellipse cx="41" cy="25" rx="7" ry="3" fill="url(#sheen)" opacity="0.9"/>
+</svg>

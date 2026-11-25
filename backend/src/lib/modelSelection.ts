@@ -172,7 +172,7 @@ export async function resolveEffectiveChatModel(args: {
                         ok: false,
                         status: 422,
                         code: "model_unavailable",
-                        detail: "This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.",
+                        detail: "This model provider is turned off. Turn it on in Settings → API Keys or select another model.",
                     };
                 }
                 return {

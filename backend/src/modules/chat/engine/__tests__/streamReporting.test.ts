@@ -32,7 +32,7 @@ describe("terminal stream reporting ownership", () => {
         { label: "Claude", modelId: "claude-sonnet-4-5", keySource },
       ));
     expect(outOfCredits("user")).toEqual({
-      message: "Your Claude account is out of credits. Add credits to it, or change the key in Settings → Bring Your Own Keys.",
+      message: "Your Claude account is out of credits. Add credits to it, or change the key in Settings → API Keys.",
       safe_to_display: true, code: "provider_account_refused",
     });
     expect(outOfCredits("org")).toEqual({

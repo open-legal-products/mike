@@ -66,14 +66,17 @@ function accessRoleTextTone(role: AccessAssignmentRole): string {
             : "text-gray-600";
 }
 
+// A role's row in its menu, tinted with the role's colour while it is
+// highlighted or chosen. The tints are translucent, so they read on the light
+// menu and the dark one alike (a solid -100 fill stays light in dark mode).
 function accessRoleMenuTone(role: AccessAssignmentRole): string {
     return role === "owner"
-        ? "text-blue-700 hover:!bg-blue-100 focus:!bg-blue-100 data-[highlighted]:!bg-blue-100 data-[selected=true]:!bg-blue-100"
+        ? "text-blue-700 hover:!bg-blue-500/15 focus:!bg-blue-500/15 data-[highlighted]:!bg-blue-500/15 data-[selected=true]:!bg-blue-500/15"
         : role === "editor"
-          ? "text-violet-700 hover:!bg-violet-100 focus:!bg-violet-100 data-[highlighted]:!bg-violet-100 data-[selected=true]:!bg-violet-100"
+          ? "text-violet-700 hover:!bg-violet-500/15 focus:!bg-violet-500/15 data-[highlighted]:!bg-violet-500/15 data-[selected=true]:!bg-violet-500/15"
           : role === "deny"
-            ? "text-red-700 hover:!bg-red-100 focus:!bg-red-100 data-[highlighted]:!bg-red-100 data-[selected=true]:!bg-red-100"
-            : "text-gray-600 hover:!bg-gray-100 focus:!bg-gray-100 data-[highlighted]:!bg-gray-100 data-[selected=true]:!bg-gray-100";
+            ? "text-red-700 hover:!bg-red-500/15 focus:!bg-red-500/15 data-[highlighted]:!bg-red-500/15 data-[selected=true]:!bg-red-500/15"
+            : "text-gray-600 hover:!bg-gray-500/10 focus:!bg-gray-500/10 data-[highlighted]:!bg-gray-500/10 data-[selected=true]:!bg-gray-500/10";
 }
 
 function AccessRolePill({
@@ -364,7 +367,9 @@ function OrganizationAssignmentList({
     const WITH_ROLE = "grid-cols-[minmax(0,1fr)_5rem_1.5rem] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_1.5rem]";
     const WITHOUT_ROLE = "grid-cols-[minmax(0,1fr)_1.5rem] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.5rem]";
     return (
-        <div className="min-h-28 max-h-72 overflow-y-auto rounded-xl bg-white/20 p-1">
+        // No surface of its own: the rows sit on the dialog, as its other
+        // lists do.
+        <div className="min-h-28 max-h-72 overflow-y-auto p-1">
             {loading ? (
                 <div className="flex min-h-26 items-center justify-center gap-2 text-xs text-gray-400">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -467,6 +472,7 @@ export function OrganizationAccessEditor({
     resourceNoun: resourceNounProp,
     loading = false,
     disabled = false,
+    canManage = true,
     error,
     currentUserId,
     currentUserEmail,
@@ -484,6 +490,11 @@ export function OrganizationAccessEditor({
     /** The creator, and everyone the item is shared with or denied from. */
     assignments: OrganizationAccessAssignment[];
     organizationName?: string | null;
+    /**
+     * Whether the caller may change who has access. Someone who may not
+     * still sees who has it, with the pickers shut and saying why.
+     */
+    canManage?: boolean;
     ownerLabel?: string;
     /**
      * What the item is called in the descriptions. Read off `ownerLabel`
@@ -603,6 +614,10 @@ export function OrganizationAccessEditor({
     // being added is the wall. An existing list is still shown, so that
     // making the item public again is not a surprise.
     const showDenySection = isPublic || denyCount > 0;
+    const pickerPlaceholder = canManage
+        ? "Search members…"
+        : `You don't have permission to share this ${resourceNoun}`;
+    const pickerDisabled = disabled || loading || !canManage;
 
     return (
         <div
@@ -614,10 +629,10 @@ export function OrganizationAccessEditor({
                     <OrganizationMemberPicker
                         id="organization-owner-picker"
                         label={ownerLabel}
-                        placeholder="Search members…"
+                        placeholder={pickerPlaceholder}
                         description={ownerDescription}
                         members={availableMembers}
-                        disabled={disabled || loading}
+                        disabled={pickerDisabled}
                         onSelect={(member) => onAssign(member, "owner")}
                     />
                 ) : (
@@ -627,10 +642,10 @@ export function OrganizationAccessEditor({
                     <OrganizationMemberPicker
                         id="organization-people-picker"
                         label="People"
-                        placeholder="Search members…"
+                        placeholder={pickerPlaceholder}
                         description={peopleDescription}
                         members={availableMembers}
-                        disabled={disabled || loading}
+                        disabled={pickerDisabled}
                         onSelect={(member) => onAssign(member, "editor")}
                     />
                 )}
@@ -699,9 +714,9 @@ export function OrganizationAccessEditor({
                                 id="organization-deny-picker"
                                 label="Deny list"
                                 showLabel={false}
-                                placeholder="Search members…"
+                                placeholder={pickerPlaceholder}
                                 members={availableMembers}
-                                disabled={disabled || loading}
+                                disabled={pickerDisabled}
                                 onSelect={(member) => onAssign(member, "deny")}
                             />
                             <OrganizationAssignmentList

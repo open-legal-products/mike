@@ -191,7 +191,7 @@ function renderView(
     onNewChat = vi.fn(),
 ) {
     render(
-        <PageChromeContext.Provider value={{ mobileActionsContainer }}>
+        <PageChromeContext.Provider value={{ mobileActionsContainer, mobileBackContainer: null }}>
             <ChatView
                 chatId="chat-1"
                 onInitialSubmit={onInitialSubmit}
@@ -255,7 +255,7 @@ describe("ChatView streaming scroll controls", () => {
 
     function view(chunk = "Answer", initial = false) {
         return (
-            <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+            <PageChromeContext.Provider value={{ mobileActionsContainer: null, mobileBackContainer: null }}>
                 <ChatView
                     chatId="chat-1"
                     chat={activeChat}
@@ -287,7 +287,7 @@ describe("ChatView streaming scroll controls", () => {
 
     it("reveals a resumed transcript even when every animation frame receives another chunk", () => {
         const transcript = (chunk: string, chatLoading = false) => (
-            <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+            <PageChromeContext.Provider value={{ mobileActionsContainer: null, mobileBackContainer: null }}>
                 <ChatView
                     chatId="chat-1"
                     chatLoading={chatLoading}
@@ -537,7 +537,7 @@ describe("ChatView header actions", () => {
         const handleChat = vi.fn().mockResolvedValue("chat-2");
         const view = (chatLoading: boolean, messages: Message[]) => (
             <PageChromeContext.Provider
-                value={{ mobileActionsContainer: null }}
+                value={{ mobileActionsContainer: null, mobileBackContainer: null }}
             >
                 <ChatView
                     chatId="chat-2"
@@ -767,7 +767,7 @@ describe("Excel attachment previews", () => {
 it("keeps an initial attachment preview open when the first message arrives", async () => {
     const initialSubmit = vi.fn();
     const view = (messages: Message[], initial: boolean) => (
-        <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+        <PageChromeContext.Provider value={{ mobileActionsContainer: null, mobileBackContainer: null }}>
             <ChatView
                 messages={messages}
                 isResponseLoading={false}
@@ -805,7 +805,7 @@ it("suspends inactive spreadsheet tabs in the assistant side panel", async () =>
 
 describe("ChatView composer gating", () => {
     const view = (accessResolved: boolean) => (
-        <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+        <PageChromeContext.Provider value={{ mobileActionsContainer: null, mobileBackContainer: null }}>
             <ChatView
                 chatId="chat-1"
                 chat={activeChat}
@@ -845,7 +845,7 @@ describe("rejected API key", () => {
         const onDismiss = vi.fn();
         render(
             <PageChromeContext.Provider
-                value={{ mobileActionsContainer: null }}
+                value={{ mobileActionsContainer: null, mobileBackContainer: null }}
             >
                 <ChatView
                     chatId="chat-1"
@@ -899,7 +899,7 @@ describe("rejected API key", () => {
     it("stays hidden while no key has been rejected", () => {
         render(
             <PageChromeContext.Provider
-                value={{ mobileActionsContainer: null }}
+                value={{ mobileActionsContainer: null, mobileBackContainer: null }}
             >
                 <ChatView
                     chatId="chat-1"

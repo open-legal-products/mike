@@ -31,7 +31,7 @@ const CARD_GRID_CLASS = "grid grid-cols-1 gap-3 @min-[32rem]:grid-cols-2";
 /**
  * The Organizations section of a person's settings: the organizations they
  * belong to, the invitations waiting for them, and a way to start a new
- * one. Set as settings cards, like Connectors and Bring Your Own Keys.
+ * one. Set as settings cards, like Connectors and API Keys.
  *
  * An organization's settings belong to its workspace, so only the card of the
  * workspace the person is in has a Manage button. Every other organization

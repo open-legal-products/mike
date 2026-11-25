@@ -15,6 +15,8 @@ test("settings search focuses a heading after delayed navigation", async ({ page
     const requested = page.waitForRequest(request => new URL(request.url()).pathname === "/settings/security");
     await page.route(url => url.pathname === "/settings/security", async route => { await gate; await route.continue(); });
     await page.goto("/settings");
+    // A page-header search button that opens into the box.
+    await page.getByRole("button", { name: "Search settings" }).click();
     const search = page.getByRole("searchbox", { name: "Search settings" });
     await expect(search).toBeVisible();
     await page.clock.install();

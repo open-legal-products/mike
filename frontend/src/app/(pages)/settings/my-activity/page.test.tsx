@@ -154,7 +154,9 @@ describe("MyActivitySettingsPage", () => {
     expect(
       screen.getByRole("button", { name: "Audit log actions" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Organization").length).toBeGreaterThan(
+    // An organization's audit log is its owners' and admins' alone, so it
+    // leads back to Organization Settings.
+    expect(screen.getAllByText("Organization Settings").length).toBeGreaterThan(
       0,
     );
   });

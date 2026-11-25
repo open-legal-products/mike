@@ -151,6 +151,12 @@
 .dark .text-emerald-700 { color: #6ee7b7; }
 .dark .bg-blue-50,
 .dark .bg-blue-100 { background-color: rgba(3, 73, 130, 0.3); }
+.dark .text-blue-700 { color: #93c5fd; }
+/* Violet marks the middle role (an organization's admins, a project's
+   editors) beside blue for the top one. */
+.dark .bg-violet-50,
+.dark .bg-violet-100 { background-color: rgba(76, 29, 149, 0.34); }
+.dark .text-violet-700 { color: #c4b5fd; }
 
 @layer base {
     * {

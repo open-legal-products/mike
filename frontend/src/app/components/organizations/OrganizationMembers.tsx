@@ -73,6 +73,7 @@ import { userFacingApiError } from "@/app/lib/userFacingError";
 import { OrganizationDepartedMembers } from "./OrganizationDepartedMembers";
 import { InviteOrganizationMemberModal } from "./OrganizationModals";
 import { useIdSet } from "@/app/hooks/useIdSet";
+import { organizationAreaName } from "@/app/lib/organizationAreaName";
 
 /** The roster's fixed order: who decides, who runs it, everybody else. */
 const ROLE_ORDER: Record<OrgRole, number> = { owner: 0, admin: 1, member: 2 };
@@ -147,9 +148,16 @@ export function OrganizationMembers({
   orgId,
   onViewerRoleChanged,
   initialTab = "all",
+  areaName: areaNameProp,
 }: {
   orgId: string;
   onViewerRoleChanged?: () => void;
+  /**
+   * What the caller calls the organization's area (organizationAreaName),
+   * from the settings around the page, which know it before the roster has
+   * loaded.
+   */
+  areaName?: string;
   /** Opens on the Departed view, for a link that leads straight to it. */
   initialTab?: "all" | "departed";
 }) {
@@ -281,6 +289,7 @@ export function OrganizationMembers({
 
   const viewerRole = org?.role ?? null;
   const isAdmin = isOrgAdmin(viewerRole);
+  const areaName = areaNameProp ?? organizationAreaName(viewerRole);
   // The Departed view is its owners' alone: nobody else is offered the tab,
   // and a link to it opens the roster for them.
   const tabs = viewerRole === "owner" ? OWNER_TABS : ROSTER_TABS;
@@ -468,9 +477,9 @@ export function OrganizationMembers({
         loading={loading}
         breadcrumbs={[
           {
-            label: "Organization",
+            label: areaName,
             onClick: () => router.push(`/organizations/${orgId}/settings`),
-            title: "Back to Organization",
+            title: `Back to ${areaName}`,
           },
           { label: "Members", cursor: "text" },
         ]}
@@ -568,6 +577,7 @@ export function OrganizationMembers({
       {removeMember ? (
         <MemberDepartureDialog
           orgId={orgId}
+          areaName={areaName}
           departing={[removeMember]}
           leaving={removeMember.user_id === user?.id}
           members={members}
@@ -608,6 +618,7 @@ export function OrganizationMembers({
       {removeSelectedOpen ? (
         <MemberDepartureDialog
           orgId={orgId}
+          areaName={areaName}
           departing={members.filter((member) =>
             selectedMemberIdSet.has(member.id),
           )}

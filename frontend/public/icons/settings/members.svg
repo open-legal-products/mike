@@ -1,0 +1,41 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#93C5FD"/>
+      <stop offset="0.5" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="back" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#99F6E4"/>
+      <stop offset="0.5" stop-color="#14B8A6"/>
+      <stop offset="1" stop-color="#0F766E"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#0F172A" stop-opacity="0.45"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <g id="frontShape">
+      <path d="M4 56.5C4 45.5 12.5 38 24 38S44 45.5 44 56.5Q44 59 41.5 59H6.5Q4 59 4 56.5Z"/>
+      <circle cx="24" cy="23" r="11"/>
+    </g>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#FFFFFF"/>
+      <use href="#frontShape" fill="#000000" stroke="#000000" stroke-width="5"/>
+    </mask>
+  </defs>
+  <g mask="url(#cut)">
+    <path d="M24 50.5C24 40 31.5 33 41.5 33S60 40 60 50.5Q60 53 57.5 53H26.5Q24 53 24 50.5Z" fill="url(#back)" stroke="url(#rim)" stroke-width="1.4"/>
+    <circle cx="42" cy="17" r="10.5" fill="url(#back)" stroke="url(#rim)" stroke-width="1.4"/>
+    <ellipse cx="44" cy="10" rx="4.8" ry="2.2" fill="url(#sheen)" opacity="0.65"/>
+  </g>
+  <path d="M4 56.5C4 45.5 12.5 38 24 38S44 45.5 44 56.5Q44 59 41.5 59H6.5Q4 59 4 56.5Z" fill="url(#front)" stroke="url(#rim)" stroke-width="1.4"/>
+  <ellipse cx="19.5" cy="41.8" rx="8" ry="2.1" fill="url(#sheen)" opacity="0.6"/>
+  <circle cx="24" cy="23" r="11" fill="url(#front)" stroke="url(#rim)" stroke-width="1.4"/>
+  <ellipse cx="21.5" cy="16" rx="5.4" ry="2.5" fill="url(#sheen)" opacity="0.7"/>
+</svg>

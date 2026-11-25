@@ -3,7 +3,7 @@ import { Plug, type LucideIcon } from "lucide-react";
 import type { ApiKeyProvider } from "@/app/lib/mikeApi";
 
 // The model providers a key can be saved for, in the order they are listed.
-// Shared by a person's Bring Your Own Keys page and an organization's Model
+// Shared by a person's API Keys page and an organization's Model
 // Providers tab, so the two always offer the same providers under the same
 // names.
 

@@ -119,7 +119,7 @@ describe("who may use it", () => {
       ).not.toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Back to General" }));
-      expect(mocks.push).toHaveBeenCalledWith("/organizations/org-1/settings");
+      expect(mocks.push).toHaveBeenCalledWith("/organizations/org-1/settings/general");
     },
   );
 

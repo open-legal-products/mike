@@ -1,0 +1,40 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="hat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6B7280"/>
+      <stop offset="0.5" stop-color="#374151"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1F2937"/>
+      <stop offset="1" stop-color="#030712"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7DD3FC"/>
+      <stop offset="0.5" stop-color="#2563A8"/>
+      <stop offset="1" stop-color="#172554"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#020617" stop-opacity="0.5"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="crown">
+      <path d="M13.5 29L18.6 12.6Q19.7 9.6 22.7 10.6L28.2 12.6Q32 14 35.8 12.6L41.3 10.6Q44.3 9.6 45.4 12.6L50.5 29Z"/>
+    </clipPath>
+  </defs>
+  <path d="M13.5 29L18.6 12.6Q19.7 9.6 22.7 10.6L28.2 12.6Q32 14 35.8 12.6L41.3 10.6Q44.3 9.6 45.4 12.6L50.5 29Z" fill="url(#hat)" stroke="url(#rim)" stroke-width="1.4" stroke-linejoin="round"/>
+  <rect x="10" y="22" width="44" height="6" fill="url(#band)" clip-path="url(#crown)"/>
+  <ellipse cx="24" cy="14.5" rx="3.6" ry="1.6" fill="url(#sheen)" opacity="0.45"/>
+  <rect x="4" y="27" width="56" height="6.5" rx="3.25" fill="url(#hat)" stroke="url(#rim)" stroke-width="1.4"/>
+  <path d="M26.5 45Q32 40.5 37.5 45" fill="none" stroke="#111827" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="18.5" cy="46.5" r="9" fill="url(#lens)" stroke="#111827" stroke-width="3.2"/>
+  <circle cx="45.5" cy="46.5" r="9" fill="url(#lens)" stroke="#111827" stroke-width="3.2"/>
+  <ellipse cx="16.5" cy="42.5" rx="4.2" ry="2" fill="url(#sheen)" opacity="0.75"/>
+  <ellipse cx="43.5" cy="42.5" rx="4.2" ry="2" fill="url(#sheen)" opacity="0.75"/>
+</svg>

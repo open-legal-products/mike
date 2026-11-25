@@ -2,114 +2,79 @@
 
 import { useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import {
-    Brain,
-    Building2,
-    Cpu,
-    HatGlasses,
-    History,
-    KeyRound,
-    Loader2,
-    Palette,
-    Plug,
-    ShieldCheck,
-    ToggleRight,
-    UserPen,
-    UserRound,
-} from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOrganizationInvitationCount } from "@/app/hooks/useOrganizationInvitationCount";
 import { useMemberDataActions } from "@/app/hooks/useMemberDataActions";
 import { useWorkspaceSettingsScope } from "@/app/hooks/useWorkspaceSettingsScope";
+import { SettingsShell } from "@/app/components/settings/SettingsShell";
+import type { SettingsSectionGroup } from "@/app/components/settings/settingsSections";
 import {
-    SettingsShell,
-    type SettingsShellGroup,
-} from "@/app/components/settings/SettingsShell";
+    AccountSkeuoIcon,
+    ActivitySkeuoIcon,
+    AppearanceSkeuoIcon,
+    FeaturesSkeuoIcon,
+    KeysSkeuoIcon,
+    MemorySkeuoIcon,
+    ModelsSkeuoIcon,
+    PersonalisationSkeuoIcon,
+    PrivacySkeuoIcon,
+    SecuritySkeuoIcon,
+} from "@/app/components/shared/SettingsSkeuoIcons";
+import {
+    ConnectorSkeuoIcon,
+    OrganizationSkeuoIcon,
+} from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { SettingsSearch } from "@/app/components/settings/SettingsSearch";
 import { SETTINGS_SEARCH_ENTRIES } from "@/app/lib/settingsSearch";
 
-// Settings come in two groups. Workspace settings belong to the workspace in
-// view (Personal, or one of the person's organizations): each workspace keeps
+// Settings come in two groups, the person's own first. Workspace settings
+// belong to the workspace in view (Personal, or one of the person's
+// organizations): each workspace keeps
 // its own, and switching workspace switches them. In Personal they are the
-// person's own; in an organization's workspace, Features, Model Preferences
-// and Bring Your Own Keys are the organization's. Personal settings are the
-// person's own and follow them into every workspace.
-const GROUPS: SettingsShellGroup[] = [
-    {
-        id: "workspace",
-        label: "Workspace",
-        tabs: [
-            {
-                id: "memory",
-                label: "Memory",
-                href: "/settings/memory",
-                icon: Brain,
-            },
-            {
-                id: "connectors",
-                label: "Connectors",
-                href: "/settings/connectors",
-                icon: Plug,
-            },
-            {
-                id: "features",
-                label: "Features",
-                href: "/settings/features",
-                icon: ToggleRight,
-            },
-            {
-                id: "models",
-                label: "Model Preferences",
-                href: "/settings/models",
-                icon: Cpu,
-            },
-            {
-                id: "byok",
-                label: "Bring Your Own Keys",
-                href: "/settings/byok",
-                icon: KeyRound,
-            },
-            {
-                id: "privacy-data",
-                label: "Privacy & Data",
-                href: "/settings/privacy-data",
-                icon: HatGlasses,
-            },
-        ],
-    },
+// person's own; in an organization's workspace, Features and Model
+// Preferences are the organization's, and its keys are managed only in its
+// own settings. Personal settings are the person's own and follow them into
+// every workspace. /settings itself is the overview, every section as a card.
+const GROUPS: SettingsSectionGroup[] = [
     {
         id: "personal",
         label: "Personal",
-        tabs: [
+        sections: [
             {
                 id: "account",
                 label: "Account",
-                href: "/settings",
-                icon: UserRound,
+                description: "Your name, photo, email and plan.",
+                href: "/settings/account",
+                icon: AccountSkeuoIcon,
             },
             {
                 id: "personalisation",
                 label: "Personalisation",
+                description: "Your background, and how Mike shapes its answers.",
                 href: "/settings/personalisation",
-                icon: UserPen,
+                icon: PersonalisationSkeuoIcon,
             },
             {
                 id: "appearance",
                 label: "Appearance",
+                description: "Light or dark mode.",
                 href: "/settings/appearance",
-                icon: Palette,
+                icon: AppearanceSkeuoIcon,
             },
             {
                 id: "security",
                 label: "Security",
+                description: "Your password and multi-factor authentication.",
                 href: "/settings/security",
-                icon: ShieldCheck,
+                icon: SecuritySkeuoIcon,
             },
             {
                 id: "my-activity",
                 label: "My Activity",
+                description: "A log of what you have done in Mike.",
                 href: "/settings/my-activity",
-                icon: History,
+                icon: ActivitySkeuoIcon,
             },
             // The organizations the person belongs to, and their invitations.
             // Each organization's own settings are a separate area, opened
@@ -117,8 +82,57 @@ const GROUPS: SettingsShellGroup[] = [
             {
                 id: "organizations",
                 label: "Organizations",
+                description: "The organizations you belong to, and your invitations.",
                 href: "/settings/organizations",
-                icon: Building2,
+                icon: OrganizationSkeuoIcon,
+            },
+        ],
+    },
+    {
+        id: "workspace",
+        label: "Workspace",
+        sections: [
+            {
+                id: "memory",
+                label: "Memory",
+                description: "What Mike remembers about you, and whether it remembers at all.",
+                href: "/settings/memory",
+                icon: MemorySkeuoIcon,
+            },
+            {
+                id: "connectors",
+                label: "Connectors",
+                description: "The data sources and tools Mike can use in this workspace.",
+                href: "/settings/connectors",
+                icon: ConnectorSkeuoIcon,
+            },
+            {
+                id: "features",
+                label: "Features",
+                description: "Quick actions, web search and the details shown under each response.",
+                href: "/settings/features",
+                icon: FeaturesSkeuoIcon,
+            },
+            {
+                id: "models",
+                label: "Model Preferences",
+                description: "The models Mike uses for titles, reviews, memory and subagents.",
+                href: "/settings/models",
+                icon: ModelsSkeuoIcon,
+            },
+            {
+                id: "byok",
+                label: "API Keys",
+                description: "Your own keys for model providers such as Anthropic and OpenAI.",
+                href: "/settings/byok",
+                icon: KeysSkeuoIcon,
+            },
+            {
+                id: "privacy-data",
+                label: "Privacy & Data",
+                description: "Export your data, or delete it in bulk.",
+                href: "/settings/privacy-data",
+                icon: PrivacySkeuoIcon,
             },
         ],
     },
@@ -127,7 +141,10 @@ const GROUPS: SettingsShellGroup[] = [
 // In an organization's workspace these are the organization's, set by its
 // owners and admins for everyone working there; a member has nothing to
 // change, so they are not listed (useWorkspaceSettingsScope).
-const GOVERNED_TAB_IDS = new Set(["features", "models", "byok"]);
+const GOVERNED_TAB_IDS = new Set(["features", "models"]);
+// An organization's keys are managed only in its own settings, by its owners
+// and admins, so API Keys is listed only in Personal.
+const PERSONAL_ONLY_TAB_IDS = new Set(["byok"]);
 
 export default function SettingsLayout({
     children,
@@ -146,28 +163,57 @@ export default function SettingsLayout({
     const hidePrivacyData = !canExport && !canDelete;
     const scope = useWorkspaceSettingsScope().kind;
     const hideGoverned = scope !== "personal" && scope !== "organization";
+    const hidePersonalOnly = scope !== "personal";
     const visibleGroups = useMemo(
         () =>
             GROUPS.map((group) => ({
                 ...group,
-                tabs: group.tabs.filter(
-                    (tab) =>
-                        !(hidePrivacyData && tab.id === "privacy-data") &&
-                        !(hideGoverned && GOVERNED_TAB_IDS.has(tab.id)),
+                sections: group.sections.filter(
+                    (section) =>
+                        !(hidePrivacyData && section.id === "privacy-data") &&
+                        !(hideGoverned && GOVERNED_TAB_IDS.has(section.id)) &&
+                        !(
+                            hidePersonalOnly &&
+                            PERSONAL_ONLY_TAB_IDS.has(section.id)
+                        ),
                 ),
             })),
-        [hideGoverned, hidePrivacyData],
+        [hideGoverned, hidePersonalOnly, hidePrivacyData],
     );
     // Search only what is listed: an entry on a hidden tab would open a page
     // the person is not offered.
     const searchEntries = useMemo(() => {
         const visibleTabIds = new Set(
-            visibleGroups.flatMap((group) => group.tabs.map((tab) => tab.id)),
+            visibleGroups.flatMap((group) =>
+                group.sections.map((section) => section.id),
+            ),
         );
         return SETTINGS_SEARCH_ENTRIES.filter((entry) =>
             visibleTabIds.has(entry.tabId),
         );
     }, [visibleGroups]);
+    const groups = useMemo(
+        () =>
+            // Which sections a workspace offers is known once its scope is.
+            scope === "loading"
+                ? null
+                : visibleGroups.map((group) => ({
+                      ...group,
+                      sections: group.sections.map((section) =>
+                          section.id === "organizations" && invitationCount > 0
+                              ? {
+                                    ...section,
+                                    badge: (
+                                        <InvitationCountBadge
+                                            count={invitationCount}
+                                        />
+                                    ),
+                                }
+                              : section,
+                      ),
+                  })),
+        [scope, visibleGroups, invitationCount],
+    );
 
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
@@ -195,24 +241,9 @@ export default function SettingsLayout({
     return (
         <SettingsShell
             title="Settings"
-            navLabel="Settings"
-            search={<SettingsSearch entries={searchEntries} />}
-            groups={visibleGroups.map((group) => ({
-                ...group,
-                tabs: group.tabs.map((tab) =>
-                    tab.id === "organizations" && invitationCount > 0
-                        ? {
-                              ...tab,
-                              badge: (
-                                  <InvitationCountBadge
-                                      count={invitationCount}
-                                  />
-                              ),
-                          }
-                        : tab,
-                ),
-            }))}
             rootHref="/settings"
+            groups={groups}
+            search={<SettingsSearch entries={searchEntries} />}
         >
             {children}
         </SettingsShell>

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { EditCardUI } from "./EditCardUI";
@@ -114,19 +114,43 @@ describe("EditCardUI", () => {
         ).toBeDisabled();
         expect(container.firstChild).toHaveAttribute("aria-busy", "true");
     });
-    it("dismisses the card through the close control", async () => {
+    it("dismisses the card through the ✕ at its top right", async () => {
         const user = userEvent.setup();
         const onClose = vi.fn();
 
-        render(<EditCardUI reason="Use the defined term." onClose={onClose} onView={vi.fn()} />);
-        const close = screen.getByRole("button", { name: "Close" });
-        expect(close.nextElementSibling).toBe(screen.getByRole("button", { name: "View" }));
-        expect(close).toHaveClass("bg-transparent", "shadow-none");
-        expect(close.querySelector("svg")).toBeNull();
-
-        await user.click(
-            screen.getByRole("button", { name: "Close" }),
+        render(
+            <EditCardUI
+                reason="Use the defined term."
+                changeNumber={2}
+                originalText="old"
+                onClose={onClose}
+                onView={vi.fn()}
+            />,
         );
+        const close = screen.getByRole("button", {
+            name: "Close tracked change",
+        });
+        // The shared ✕, on the header line after the reason, not among the
+        // actions.
+        expect(close.querySelector("svg")).toHaveClass("lucide-x");
+        expect(close).toHaveClass("ml-auto", "h-4", "w-4");
+        expect(close.parentElement).toBe(
+            screen.getByText("Use the defined term.").parentElement,
+        );
+        expect(close.previousElementSibling).toBe(
+            screen.getByText("Use the defined term."),
+        );
+        expect(
+            within(screen.getByRole("group", { name: "Edit actions" })).queryByRole(
+                "button",
+                { name: "Close tracked change" },
+            ),
+        ).toBeNull();
+        expect(screen.getByRole("button", { name: "View" })).toHaveClass(
+            "ml-auto",
+        );
+
+        await user.click(close);
         expect(onClose).toHaveBeenCalledTimes(1);
     });
 
@@ -136,15 +160,17 @@ describe("EditCardUI", () => {
         render(<EditCardUI originalText="old" onClose={onClose} />);
 
         expect(
-            screen.getByRole("button", { name: "Close" }),
-        ).toBeInTheDocument();
+            screen.getByRole("button", { name: "Close tracked change" }),
+        ).toHaveClass("ml-auto");
+        // A card with only the ✕ has no action row.
+        expect(screen.queryByRole("group", { name: "Edit actions" })).toBeNull();
     });
 
     it("omits the close control when the card cannot be dismissed", () => {
         render(<EditCardUI reason="Use the defined term." changeNumber={2} />);
 
         expect(
-            screen.queryByRole("button", { name: "Close" }),
+            screen.queryByRole("button", { name: "Close tracked change" }),
         ).not.toBeInTheDocument();
     });
 });

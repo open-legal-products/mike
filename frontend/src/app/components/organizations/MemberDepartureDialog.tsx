@@ -45,6 +45,7 @@ export function MemberDepartureDialog({
   orgId,
   departing,
   leaving = false,
+  areaName = "Organization",
   members,
   onCancel,
   onDone,
@@ -54,6 +55,8 @@ export function MemberDepartureDialog({
   departing: DepartingMember[];
   /** The one person going is the signed-in user. */
   leaving?: boolean;
+  /** What the caller calls the organization's area (organizationAreaName). */
+  areaName?: string;
   /** The organization's members, when the caller already has them. */
   members?: OrgMember[];
   onCancel: () => void;
@@ -186,7 +189,7 @@ export function MemberDepartureDialog({
       onClose={() => {
         if (!working) onCancel();
       }}
-      breadcrumbs={["Organization", "Members", leaving ? "Leave" : "Remove"]}
+      breadcrumbs={[areaName, "Members", leaving ? "Leave" : "Remove"]}
       size="sm"
       className="h-auto max-h-[calc(100vh-2rem)]"
       cancelAction={{

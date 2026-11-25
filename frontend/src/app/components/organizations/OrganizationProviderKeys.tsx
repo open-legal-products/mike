@@ -33,7 +33,7 @@ import { PillButtonUI, ToggleSwitchUI } from "@mike/ui";
 // models each may run. A member's own keys never stand in where it has none.
 // These are the sections of the Organization page, which is its owners' and
 // admins' alone; they manage it with the same cards and the same key dialog
-// as a person's Bring Your Own Keys page.
+// as a person's API Keys page.
 //
 // `can_manage` is the server's word on the caller. Somebody demoted while
 // the page was open is shown what is set up and offered nothing to change.
@@ -224,10 +224,6 @@ export function OrganizationProviderKeys({
           <SettingsHeading id="org-providers-saved">
             Organization Providers
           </SettingsHeading>
-          <SettingsDescription>
-            Members&rsquo; own keys are never used for work in this
-            organization.
-          </SettingsDescription>
           {loading ? (
             <span className="block h-5 w-56 max-w-full animate-pulse rounded bg-gray-200" />
           ) : savedFields.length === 0 ? (

@@ -51,11 +51,28 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
             className,
             wrapperClassName,
             inputClassName,
+            disabled,
             ...props
         },
         ref,
     ) => {
         const classes = sizeClasses[size];
+        const inputRef = React.useRef<HTMLInputElement | null>(null);
+        const setInputRef = React.useCallback(
+            (node: HTMLInputElement | null) => {
+                inputRef.current = node;
+                if (typeof ref === "function") ref(node);
+                else if (ref) ref.current = node;
+            },
+            [ref],
+        );
+        // A box that shuts while it has focus (its permission settling after
+        // it was clicked) gives the focus up, so no caret is left in it.
+        React.useEffect(() => {
+            if (disabled && document.activeElement === inputRef.current) {
+                inputRef.current?.blur();
+            }
+        }, [disabled]);
 
         return (
             <div
@@ -63,6 +80,9 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
                 className={cn(
                     `flex items-center text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} transition-colors focus-within:ring-2 focus-within:ring-blue-500/40`,
                     classes.wrapper,
+                    // Shut: the same glass as an open box, with no text cursor
+                    // to suggest it takes typing. The input cannot be focused.
+                    disabled && "cursor-not-allowed",
                     className,
                     wrapperClassName,
                 )}
@@ -74,22 +94,23 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
                     )}
                 />
                 <input
-                    ref={ref}
+                    ref={setInputRef}
                     type="search"
                     value={value}
                     placeholder={placeholder}
                     aria-label={label}
+                    disabled={disabled}
                     onChange={(event) => onValueChange(event.target.value)}
                     className={cn(
                         // The wrapper carries the focus ring, so the input's own
                         // outline is suppressed to avoid a double indicator.
-                        "min-w-0 flex-1 bg-transparent text-gray-700 outline-none placeholder:text-gray-400 [&::-webkit-search-cancel-button]:hidden",
+                        "min-w-0 flex-1 bg-transparent text-gray-700 outline-none placeholder:text-gray-400 disabled:cursor-not-allowed [&::-webkit-search-cancel-button]:hidden",
                         classes.input,
                         inputClassName,
                     )}
                     {...props}
                 />
-                {value ? (
+                {value && !disabled ? (
                     <button
                         type="button"
                         onClick={() => onValueChange("")}

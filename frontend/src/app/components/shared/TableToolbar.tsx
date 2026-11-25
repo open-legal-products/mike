@@ -68,7 +68,7 @@ export function TableToolbar<T extends string>({
     return (
         <div
             className={cn(
-                "mx-3 mb-2 flex h-10 items-center md:mx-6.5",
+                "mx-3 mb-2 flex h-10 items-center md:mx-6",
                 className,
             )}
         >

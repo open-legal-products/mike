@@ -1,10 +1,23 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 import { PageHeader } from "./PageHeader";
 import {
     PAGE_HEADER_ROW_CLASS,
     PAGE_HEADER_TITLE_CLASS,
 } from "./pageHeaderStyles";
+
+// The breadcrumbs measure themselves against a media query on a later frame.
+vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+    })),
+);
 
 // A page's title is one size wherever it appears: as a plain title, as
 // breadcrumbs, and as the placeholder shown while a name loads.
@@ -82,5 +95,61 @@ describe("PageHeader title size", () => {
             "text-xl",
             "font-serif",
         );
+    });
+});
+
+// On a small screen only the current crumb shows; the way up to its parent is
+// a back button in the top bar, beside the sidebar toggle.
+describe("PageHeader on a small screen", () => {
+    it("puts the way back in the top bar, not beside the title", async () => {
+        const user = userEvent.setup();
+        const back = vi.fn();
+        const topBar = document.createElement("div");
+        document.body.appendChild(topBar);
+        const { container } = render(
+            <PageChromeContext.Provider
+                value={{ mobileActionsContainer: null, mobileBackContainer: topBar }}
+            >
+                <PageHeader
+                    breadcrumbs={[
+                        { label: "Settings", onClick: back, title: "Back to Settings" },
+                        { label: "Memory", cursor: "text" },
+                    ]}
+                />
+            </PageChromeContext.Provider>,
+        );
+        await user.click(
+            within(topBar).getByRole("button", { name: "Back to Settings" }),
+        );
+        expect(back).toHaveBeenCalledTimes(1);
+        expect(
+            within(container).queryByRole("button", { name: "Back to Settings" }),
+        ).toBeNull();
+        topBar.remove();
+    });
+
+    it("keeps it beside the title where there is no top bar", () => {
+        render(
+            <PageHeader
+                breadcrumbs={[
+                    { label: "Settings", onClick: () => {}, title: "Back to Settings" },
+                    { label: "Memory", cursor: "text" },
+                ]}
+            />,
+        );
+        expect(
+            screen
+                .getAllByRole("button", { name: "Back to Settings" })
+                .some((button) => button.classList.contains("sm:hidden")),
+        ).toBe(true);
+    });
+
+    it("lines its title up with the top bar's sidebar toggle", () => {
+        const { container } = render(
+            <PageHeader>
+                <h1>Projects</h1>
+            </PageHeader>,
+        );
+        expect(container.firstElementChild).toHaveClass("mx-4", "md:mx-6");
     });
 });

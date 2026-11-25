@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
+import { SettingsOverview } from "@/app/components/settings/SettingsOverview";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { OrganizationProvidersSettings } from "./OrganizationProvidersSettings";
 import {
@@ -11,9 +12,20 @@ import {
   useOrganizationSettings,
 } from "./OrganizationSettingsShell";
 
+// The page header's breadcrumbs measure themselves against a media query.
+vi.stubGlobal(
+  "matchMedia",
+  vi.fn((query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  })),
+);
+
 // The frame around an organization's settings, and the one section in it
 // that is not every member's: who is offered which sections, what a member
-// who follows a link to Bring Your Own Keys is told, and what the sections are
+// who follows a link to API Keys is told, and what the sections are
 // handed.
 
 const mocks = vi.hoisted(() => ({
@@ -74,10 +86,20 @@ const renderShell = (children = <Section />) =>
       <OrganizationSettingsFrame>{children}</OrganizationSettingsFrame>
     </OrganizationSettingsProvider>,
   );
+// The overview, at the area's own address: every section offered, as a card.
+const renderOverview = () =>
+  renderShell(
+    <>
+      <Section />
+      <SettingsOverview />
+    </>,
+  );
+const sectionLinks = () => screen.queryAllByRole("link");
 const sections = () =>
-  within(screen.getByRole("navigation", { name: "Organization" }))
-    .getAllByRole("button")
-    .map((button) => button.textContent);
+  sectionLinks().map((link) => {
+    const label = link.getAttribute("aria-labelledby");
+    return label ? document.getElementById(label)?.textContent : null;
+  });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -97,48 +119,58 @@ beforeEach(() => {
 });
 
 describe("the sections each role is offered", () => {
-  it("offers an owner General, Members, Bring Your Own Keys and Privacy & Data", async () => {
+  it("offers an owner General, Members, Audit log, API Keys and Privacy & Data", async () => {
     mocks.role = "owner";
-    renderShell();
+    renderOverview();
     await screen.findByText("section for Elite Law LLP");
     expect(sections()).toEqual([
       "General",
       "Members",
       "Audit log",
-      "Bring Your Own Keys",
+      "API Keys",
       "Privacy & Data",
     ]);
-    // Each section has an icon beside its name, hidden from assistive tech.
-    for (const button of within(
-      screen.getByRole("navigation", { name: "Organization" }),
-    ).getAllByRole("button"))
-      expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    // Each card has its icon beside its name, and says what it holds.
+    for (const link of sectionLinks()) {
+      expect(link.querySelector('img[aria-hidden="true"]')).not.toBeNull();
+      expect(link).toHaveAccessibleDescription(/\w/);
+    }
   });
 
-  it("offers an admin General, Members and Bring Your Own Keys, not Privacy & Data", async () => {
+  it("offers an admin General, Members, Audit log and API Keys, not Privacy & Data", async () => {
     mocks.role = "admin";
-    renderShell();
+    mocks.organizations = [{ id: "org-1", name: "Elite Law LLP", role: "admin" }];
+    renderOverview();
     await screen.findByText("section for Elite Law LLP");
-    expect(sections()).toEqual(["General", "Members", "Audit log", "Bring Your Own Keys"]);
+    expect(sections()).toEqual(["General", "Members", "Audit log", "API Keys"]);
   });
 
   it("offers a member General and Members only", async () => {
     mocks.role = "member";
-    renderShell();
+    mocks.organizations = [{ id: "org-1", name: "Elite Law LLP", role: "member" }];
+    renderOverview();
     await screen.findByText("section for Elite Law LLP");
     expect(sections()).toEqual(["General", "Members"]);
   });
 
-  it("does not offer Bring Your Own Keys before the caller's role is known", () => {
+  it("offers nothing before the caller's role is known, holding the cards' place", () => {
+    mocks.organizations = [];
     mocks.getOrg.mockReturnValue(new Promise(() => {}));
-    renderShell();
-    expect(sections()).toEqual(["General", "Members"]);
+    const { container } = renderOverview();
+    expect(sectionLinks()).toEqual([]);
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
   });
 
-  it("drops Bring Your Own Keys as soon as a re-read shows the caller was demoted", async () => {
-    renderShell();
+  it("offers an owner's sections from their list of organizations while it loads", () => {
+    mocks.getOrg.mockReturnValue(new Promise(() => {}));
+    renderOverview();
+    expect(sections()).toContain("API Keys");
+  });
+
+  it("drops API Keys as soon as a re-read shows the caller was demoted", async () => {
+    renderOverview();
     await screen.findByText("section for Elite Law LLP");
-    expect(sections()).toContain("Bring Your Own Keys");
+    expect(sections()).toContain("API Keys");
 
     mocks.role = "member";
     await act(() => latest.reload());
@@ -148,45 +180,40 @@ describe("the sections each role is offered", () => {
 });
 
 describe("the frame", () => {
-  it("is headed Organization, whichever organization it is", async () => {
+  it("is headed Organization Settings for an owner, whichever organization it is", async () => {
     renderShell();
-    // Before the organization has loaded, and after.
+    // Before the organization has loaded (the role from the caller's list of
+    // organizations), and after.
     expect(
-      screen.getByRole("heading", { level: 1, name: "Organization" }),
+      screen.getByRole("heading", { level: 1, name: "Organization Settings" }),
     ).toBeInTheDocument();
     await screen.findByText("section for Elite Law LLP");
     expect(
-      screen.getByRole("heading", { level: 1, name: "Organization" }),
+      screen.getByRole("heading", { level: 1, name: "Organization Settings" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Elite Law LLP" }),
     ).not.toBeInTheDocument();
   });
 
-  it("marks the open section, and General only on its own page", async () => {
-    mocks.pathname = "/organizations/org-1/settings/members";
+  it("names the open section in the header, General included", async () => {
+    mocks.pathname = "/organizations/org-1/settings/general";
     renderShell();
     await screen.findByText("section for Elite Law LLP");
-
-    expect(screen.getByRole("button", { name: "Members" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-    // General's path is a prefix of every section's.
-    expect(screen.getByRole("button", { name: "General" })).not.toHaveAttribute(
-      "aria-current",
-    );
+    expect(screen.getAllByText("General").length).toBeGreaterThan(0);
   });
 
-  it("opens a section by its address", async () => {
-    const user = userEvent.setup();
-    renderShell();
+  it("leads to each section by its address, the overview at the area's own", async () => {
+    renderOverview();
     await screen.findByText("section for Elite Law LLP");
 
-    await user.click(screen.getByRole("button", { name: "Bring Your Own Keys" }));
-
-    expect(mocks.push).toHaveBeenCalledWith(
+    expect(screen.getByRole("link", { name: "API Keys" })).toHaveAttribute(
+      "href",
       "/organizations/org-1/settings/providers",
+    );
+    expect(screen.getByRole("link", { name: "General" })).toHaveAttribute(
+      "href",
+      "/organizations/org-1/settings/general",
     );
     expect(organizationSettingsHref("org-1")).toBe(
       "/organizations/org-1/settings",
@@ -207,6 +234,7 @@ describe("the frame", () => {
 
   it("shares the organization with a page outside the frame, such as Members", async () => {
     // Members is a full table page: inside the provider, not the frame.
+    mocks.pathname = "/organizations/org-1/settings/members";
     render(
       <OrganizationSettingsProvider orgId="org-1">
         <Section />
@@ -215,7 +243,9 @@ describe("the frame", () => {
     expect(
       await screen.findByText("section for Elite Law LLP"),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { level: 1, name: /^Organization/ }),
+    ).not.toBeInTheDocument();
     expect(mocks.getOrg).toHaveBeenCalledExactlyOnceWith("org-1");
   });
 
@@ -230,7 +260,7 @@ describe("the frame", () => {
       await screen.findByText("Organization not found"),
     ).toBeInTheDocument();
     // No frame and no sections: there is no area to show.
-    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
     expect(screen.queryByText(/section for/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Try again" }));
@@ -249,7 +279,7 @@ describe("the frame", () => {
   });
 });
 
-describe("the Bring Your Own Keys section", () => {
+describe("the API Keys section", () => {
   it.each(["owner", "admin"] as const)("is an %s's to use", async (role) => {
     mocks.role = role;
     renderShell(<OrganizationProvidersSettings />);
@@ -273,20 +303,69 @@ describe("the Bring Your Own Keys section", () => {
     expect(screen.queryByTestId("provider-keys")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Back to General" }));
-    expect(mocks.push).toHaveBeenCalledWith("/organizations/org-1/settings");
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/organizations/org-1/settings/general",
+    );
+  });
+});
+
+describe("the frame for a member", () => {
+  it("is headed Organization", async () => {
+    mocks.role = "member";
+    mocks.organizations = [{ id: "org-1", name: "Elite Law LLP", role: "member" }];
+    renderShell();
+    await screen.findByText("section for Elite Law LLP");
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Organization" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("the search", () => {
+  it("searches only the sections the caller is offered", async () => {
+    mocks.role = "member";
+    mocks.organizations = [{ id: "org-1", name: "Elite Law LLP", role: "member" }];
+    const user = userEvent.setup();
+    renderShell();
+    await screen.findByText("section for Elite Law LLP");
+    await user.click(screen.getByRole("button", { name: "Search Organization" }));
+    await user.type(screen.getByRole("searchbox"), "api key");
+    expect(screen.getByText(/No settings match/)).toBeInTheDocument();
+  });
+
+  it("opens a section from what an owner types", async () => {
+    const user = userEvent.setup();
+    renderShell();
+    await screen.findByText("section for Elite Law LLP");
+    await user.click(
+      screen.getByRole("button", { name: "Search Organization Settings" }),
+    );
+    await user.type(screen.getByRole("searchbox"), "api key");
+    await user.keyboard("{Enter}");
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/organizations/org-1/settings/providers",
+    );
   });
 });
 
 describe("the settings title", () => {
-  it("is a display heading, one step down from the largest", async () => {
+  it("is the page header's breadcrumbs, the heading kept for assistive tech", async () => {
+    mocks.pathname = "/organizations/org-1/settings/providers";
+    const user = userEvent.setup();
     renderShell();
-    const title = screen.getByRole("heading", {
-      level: 1,
-      name: "Organization",
-    });
-    expect(title).toHaveClass("text-3xl", "font-medium");
-    expect(title).not.toHaveClass("text-4xl");
     await screen.findByText("section for Elite Law LLP");
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Organization Settings" }),
+    ).toHaveClass("sr-only");
+    // "Organization Settings › API Keys", the first leading to the
+    // overview.
+    // The header keeps hidden copies of its crumbs to measure them.
+    await user.click(
+      screen
+        .getAllByTitle("Back to Organization Settings")
+        .find((element) => element.tagName === "BUTTON")!,
+    );
+    expect(mocks.push).toHaveBeenCalledWith("/organizations/org-1/settings");
   });
 });
 
@@ -311,7 +390,7 @@ describe("an organization's settings belong to its workspace", () => {
     expect(mocks.showToast).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ title: "Switched to Elite Law LLP" }),
     );
-    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
     expect(screen.queryByText(/section for/)).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /^Switch to/ }),

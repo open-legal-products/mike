@@ -198,7 +198,8 @@ display style stays in one place. A plain page title is an `<h1>` passed as
 `PageHeader`'s children with `PAGE_HEADER_TITLE_CLASS` (from
 `shared/pageHeaderStyles.ts`), which is also what its breadcrumbs use. `PAGE_HEADER_ROW_CLASS` is what
 keeps that title on the line of the sidebar's logo text. The settings areas
-(`SettingsShell`) have a larger display title of their own, `text-3xl`.
+(`SettingsShell`) are titled by the same breadcrumbs ("Settings › Memory"),
+and each opens on an overview of its sections as cards (`SettingsOverview`).
 
 ## Spacing and radius
 

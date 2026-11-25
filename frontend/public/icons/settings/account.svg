@@ -1,0 +1,23 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#93C5FD"/>
+      <stop offset="0.5" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#172554" stop-opacity="0.45"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M8 56.5C8 44 18.5 35.5 32 35.5S56 44 56 56.5Q56 59 53.5 59H10.5Q8 59 8 56.5Z" fill="url(#body)" stroke="url(#rim)" stroke-width="1.4"/>
+  <ellipse cx="27" cy="39.5" rx="10" ry="2.4" fill="url(#sheen)" opacity="0.6"/>
+  <circle cx="32" cy="18.5" r="13" fill="url(#body)" stroke="url(#rim)" stroke-width="1.4"/>
+  <ellipse cx="29" cy="10.5" rx="6.5" ry="3" fill="url(#sheen)" opacity="0.7"/>
+</svg>

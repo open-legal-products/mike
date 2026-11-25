@@ -68,6 +68,21 @@ describe("organization recovery", () => {
       screen.getByRole("button", { name: "Restore Synthetic firm" }),
     ).not.toBeDisabled();
   });
+  it("shows nothing, not even a skeleton, while the deleted organizations load", async () => {
+    let resolve: (orgs: (typeof org)[]) => void = () => {};
+    mocks.list.mockReturnValue(
+      new Promise<(typeof org)[]>((done) => {
+        resolve = done;
+      }),
+    );
+    const { container } = render(
+      <DeletedOrganizations onRestored={vi.fn()} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    resolve([org]);
+    await screen.findByRole("button", { name: "Restore Synthetic firm" });
+    expect(screen.getByText("Recently deleted")).toBeInTheDocument();
+  });
   it("does not mistake a failed list request for an empty recovery list", async () => {
     mocks.list.mockRejectedValue(new Error("offline"));
     render(<DeletedOrganizations onRestored={vi.fn()} />);

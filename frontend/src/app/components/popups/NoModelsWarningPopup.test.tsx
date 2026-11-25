@@ -35,7 +35,7 @@ describe("NoModelsWarningPopup", () => {
 
         expect(
             screen.getByText(
-                "Your saved API keys are all turned off. Turn a provider back on in Bring Your Own Keys to select a model.",
+                "Your saved API keys are all turned off. Turn a provider back on in API Keys to select a model.",
             ),
         ).toBeInTheDocument();
         expect(
@@ -49,7 +49,7 @@ describe("NoModelsWarningPopup", () => {
         render(<NoModelsWarningPopup reason="api-keys" onClose={onClose} />);
 
         await user.click(
-            screen.getByRole("button", { name: "Open Bring Your Own Keys" }),
+            screen.getByRole("button", { name: "Open API Keys" }),
         );
 
         expect(onClose).toHaveBeenCalledTimes(1);
@@ -89,13 +89,13 @@ describe("NoModelsWarningPopup", () => {
                 // Not a trip to personal settings, where a member cannot fix it.
                 expect(
                     screen.queryByRole("button", {
-                        name: "Open Bring Your Own Keys",
+                        name: "Open API Keys",
                     }),
                 ).not.toBeInTheDocument();
 
                 await user.click(
                     screen.getByRole("button", {
-                        name: "Open Organization",
+                        name: "Open Organization Settings",
                     }),
                 );
 
@@ -124,12 +124,12 @@ describe("NoModelsWarningPopup", () => {
             ).toBeInTheDocument();
             expect(
                 screen.queryByRole("button", {
-                    name: "Open Organization",
+                    name: "Open Organization Settings",
                 }),
             ).not.toBeInTheDocument();
             expect(
                 screen.queryByRole("button", {
-                    name: "Open Bring Your Own Keys",
+                    name: "Open API Keys",
                 }),
             ).not.toBeInTheDocument();
         });
@@ -145,7 +145,7 @@ describe("NoModelsWarningPopup", () => {
             );
             expect(
                 screen.getByRole("button", {
-                    name: "Open Organization",
+                    name: "Open Organization Settings",
                 }),
             ).toBeInTheDocument();
         });
@@ -155,7 +155,7 @@ describe("NoModelsWarningPopup", () => {
                 <NoModelsWarningPopup reason="router-models" onClose={vi.fn()} />,
             );
             expect(
-                screen.getByRole("button", { name: "Open Bring Your Own Keys" }),
+                screen.getByRole("button", { name: "Open API Keys" }),
             ).toBeInTheDocument();
         });
     });

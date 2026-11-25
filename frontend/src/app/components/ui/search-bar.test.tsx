@@ -49,4 +49,54 @@ describe("SearchBar", () => {
             screen.getByRole("button", { name: "Clear search" }),
         ).toHaveClass("focus-visible:ring-2");
     });
+
+    it("cannot be clicked into or typed in while disabled", async () => {
+        const onValueChange = vi.fn();
+        const user = userEvent.setup();
+        const { container } = render(
+            <SearchBar value="" onValueChange={onValueChange} disabled />,
+        );
+        const input = screen.getByRole("searchbox");
+
+        await user.click(input);
+        await user.keyboard("abc");
+
+        expect(input).toBeDisabled();
+        expect(input).not.toHaveFocus();
+        expect(onValueChange).not.toHaveBeenCalled();
+        expect(input).toHaveClass("disabled:cursor-not-allowed");
+        expect(
+            container.querySelector('[data-slot="search-bar"]'),
+        ).toHaveClass("cursor-not-allowed");
+        // The same glass as every other input; only the cursor says it is shut.
+        expect(
+            container.querySelector('[data-slot="search-bar"]'),
+        ).not.toHaveClass("opacity-60");
+    });
+
+    it("gives up focus when it shuts while focused", () => {
+        const { rerender } = render(
+            <SearchBar value="" onValueChange={() => {}} />,
+        );
+        const input = screen.getByRole("searchbox");
+        input.focus();
+        expect(input).toHaveFocus();
+
+        rerender(<SearchBar value="" onValueChange={() => {}} disabled />);
+
+        expect(input).not.toHaveFocus();
+    });
+
+    it("still hands its input to a forwarded ref", () => {
+        const ref = { current: null as HTMLInputElement | null };
+        render(<SearchBar ref={ref} value="" onValueChange={() => {}} />);
+        expect(ref.current).toBe(screen.getByRole("searchbox"));
+    });
+
+    it("offers no clear button while disabled", () => {
+        render(<SearchBar value="draft" onValueChange={() => {}} disabled />);
+        expect(
+            screen.queryByRole("button", { name: "Clear search" }),
+        ).toBeNull();
+    });
 });

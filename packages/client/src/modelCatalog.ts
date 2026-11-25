@@ -536,7 +536,7 @@ export function unavailableModelMessage(
     ? providerLabel(provider, { withProduct: false })
     : "model provider";
   if (provider && keys[provider]?.enabled === false) {
-    return `${label} is turned off. Turn it back on in Bring Your Own Keys before using this model.`;
+    return `${label} is turned off. Turn it back on in API Keys before using this model.`;
   }
   const article = /^[aeiou]/i.test(label) ? "an" : "a";
   return `Add ${article} ${label} API key before using this model.`;
@@ -603,11 +603,11 @@ export function noModelsReason(
 
 export const NO_MODELS_MESSAGES: Record<NoModelsReason, string> = {
   "router-models":
-    "Your router is connected, but it has no saved models. Open your provider in Bring Your Own Keys and add a model under Model Selections.",
+    "Your router is connected, but it has no saved models. Open your provider in API Keys and add a model under Model Selections.",
   "providers-disabled":
-    "Your saved API keys are all turned off. Turn a provider back on in Bring Your Own Keys to select a model.",
+    "Your saved API keys are all turned off. Turn a provider back on in API Keys to select a model.",
   "api-keys":
-    "Add an API key in Bring Your Own Keys before selecting a model.",
+    "Add an API key in API Keys before selecting a model.",
   "org-router-models":
     "Your organization has not added any models for its provider yet. Ask an organization admin to add them in Organization.",
   "org-providers-disabled":

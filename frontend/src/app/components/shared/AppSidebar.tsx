@@ -55,6 +55,7 @@ import { notifyError } from "@/app/lib/userFacingError";
 import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import type { Project } from "@/app/components/shared/types";
 import { cn } from "@/app/lib/utils";
+import { organizationAreaName } from "@/app/lib/organizationAreaName";
 import { useAssistantHistoryStatuses } from "@/app/hooks/useAssistantHistoryStatuses";
 import { useSidebarHistory } from "@/app/hooks/useSidebarHistory";
 import { useTabularHistoryStatuses } from "@/app/hooks/useTabularHistoryStatuses";
@@ -902,8 +903,9 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     "flex h-9 w-full shrink-0 items-center px-[7px] outline-none [transition:border-radius_300ms_cubic-bezier(0.4,0,0.2,1),background-color_150ms,color_150ms] focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
                                     isOpen ? "rounded-xl" : "rounded-[18px]",
                                     !isOpen ? "hidden md:flex" : "",
-                                    pathname.startsWith("/settings") ||
-                                        isDropdownOpen
+                                    // Selected only while its menu is open,
+                                    // not for as long as Settings is.
+                                    isDropdownOpen
                                         ? LIQUID_GLASS_SELECTED_CLASS
                                         : LIQUID_GLASS_HOVER_CLASS,
                                 )}
@@ -963,7 +965,9 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                       className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                                   >
                                       <OrganizationSkeuoIcon className="h-4 w-4 text-black" />
-                                      Organization
+                                      {organizationAreaName(
+                                          activeOrganization.role,
+                                      )}
                                   </DropdownItem>
                               ) : null}
                               <DropdownItem

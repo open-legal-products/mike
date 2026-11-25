@@ -234,8 +234,8 @@ describe("AccessModal — per-recipient roles", () => {
         expect(editorOption).toHaveAttribute("data-selected", "true");
         expect(editorOption).toHaveClass(
             "text-violet-700",
-            "hover:!bg-violet-100",
-            "data-[selected=true]:!bg-violet-100",
+            "hover:!bg-violet-500/15",
+            "data-[selected=true]:!bg-violet-500/15",
         );
     });
 
@@ -285,12 +285,12 @@ describe("AccessModal — per-recipient roles", () => {
         expect(viewerOption).toHaveAttribute("data-selected", "true");
         expect(viewerOption).toHaveClass(
             "text-gray-600",
-            "hover:!bg-gray-100",
-            "data-[selected=true]:!bg-gray-100",
+            "hover:!bg-gray-500/10",
+            "data-[selected=true]:!bg-gray-500/10",
         );
         expect(screen.getByRole("menuitem", { name: "Owner" })).toHaveClass(
             "text-blue-700",
-            "hover:!bg-blue-100",
+            "hover:!bg-blue-500/15",
         );
         expect(
             screen.getAllByRole("menuitem").map((item) => item.textContent),

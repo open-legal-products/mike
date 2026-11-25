@@ -101,7 +101,7 @@ export function PlaybookPanels({
             ? hasPane
               ? "grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto @[41rem]/run-layout:grid-cols-[minmax(0,1fr)_6px_var(--panel-width)] @[41rem]/run-layout:gap-0 @[41rem]/run-layout:overflow-hidden"
               : "grid min-h-0 flex-1 grid-cols-1"
-            : "mx-3 mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto p-0.5 md:mx-6.5 @[48rem]:grid-cols-[var(--panel-width)_6px_minmax(0,1fr)] @[48rem]:gap-0 @[48rem]:overflow-hidden"
+            : "mx-3 mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto p-0.5 md:mx-6 @[48rem]:grid-cols-[var(--panel-width)_6px_minmax(0,1fr)] @[48rem]:gap-0 @[48rem]:overflow-hidden"
         }
       >
         {isTrailing ? children : adjustablePane}

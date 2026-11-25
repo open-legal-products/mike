@@ -57,7 +57,7 @@ function sourceCitation(type: string, url = "https://example.org/official/source
 }
 function renderView(citation: DocumentCitation) {
     return render(
-        <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+        <PageChromeContext.Provider value={{ mobileActionsContainer: null, mobileBackContainer: null }}>
             <ChatView chatId={chat.id} chat={chat}
                 messages={[{ id: "m1", role: "assistant", content: "The law provides a fair hearing [1].", events: [{ type: "content", text: "The law provides a fair hearing [1]." }], citations: [citation] }]}
                 isResponseLoading={false} handleChat={vi.fn().mockResolvedValue(chat.id)}

@@ -583,7 +583,7 @@ describe("a failure thrown by the Vercel AI Gateway SDK", () => {
       expect(providerFailureLevel(error)).toBe("error");
     }
     const credits = toProviderStreamError(apiCallError(402, "{}"), { label: "OpenRouter", modelId: "m", keySource: "user" });
-    expect(credits.message).toBe("Your OpenRouter account is out of credits. Add credits to it, or change the key in Settings → Bring Your Own Keys.");
+    expect(credits.message).toBe("Your OpenRouter account is out of credits. Add credits to it, or change the key in Settings → API Keys.");
   });
 
   it("sends Sentry the kind, status and a reviewed type, never the reason", () => {
