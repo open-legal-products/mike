@@ -25,6 +25,7 @@
         "bullmq": "^6.3.12",
         "cors": "^2.8.5",
         "docx": "^9.10.0",
+        "docxodus": "17.0.0",
         "dotenv": "^18.0.7",
         "express": "^5.3.0",
         "express-rate-limit": "^8.7.1",
@@ -707,6 +708,8 @@
     "dingbat-to-unicode": ["dingbat-to-unicode@1.0.1", "", {}, "sha512-98l0sW87ZT58pU4i61wa2OHwxbiYSbuxsCBozaVnYX2iCnr3bLM3fIes1/ej7h1YdOKuKt/MLs706TVnALA65w=="],
 
     "docx": ["docx@9.11.0", "", { "dependencies": { "@types/node": "^26.6.2", "hash.js": "^1.1.7", "jszip": "^3.10.1", "nanoid": "^6.0.1", "xml": "^1.0.1", "xml-js": "^1.6.8" } }, "sha512-vQLEYi45vlN/auiMHgx4oC95wbP5qPaD7Vanfixcd3wtTl5gLUPWqUpwbw6yVN0/U6o3p3EX4P5puAeYPXvcSQ=="],
+
+    "docxodus": ["docxodus@17.0.0", "", { "peerDependencies": { "react": ">=16.8.0" }, "optionalPeers": ["react"] }, "sha512-X/QpKJS+R0LGCqXnv/adrXzI7bn4JPWib/UaFCp/4di/SiffMSSodfO0yX6MJNFXmjm3juzgcGulQRn4OQCmcg=="],
 
     "dom-serializer": ["dom-serializer@2.0.0", "", { "dependencies": { "domelementtype": "^2.3.0", "domhandler": "^5.0.2", "entities": "^4.2.0" } }, "sha512-wIkAryiqt/nV5EQKqQpo3SToSOV9J0DnbJqwK7Wv/Trc92zIAYZ4FlMu+JPFW1DfGFt81ZTCGgDEabffXeLyJg=="],
 

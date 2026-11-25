@@ -30,6 +30,7 @@ import {
     createVersionFromDocument,
     renameVersion,
     deleteVersion,
+    compareVersions,
     resolveEdit,
 } from "./documents.service";
 
@@ -269,6 +270,31 @@ documentsRouter.get("/:documentId/versions", requireAuth, asyncRoute(async (req,
         current_version_id: result.current_version_id,
         versions: result.versions,
     });
+}));
+
+// GET /single-documents/:documentId/versions/compare?base=<id>&target=<id>
+// A redline of two Word versions of one document: `target` with every
+// difference from `base` as a tracked change.
+documentsRouter.get("/:documentId/versions/compare", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("documents.version");
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const result = await compareVersions({
+        documentId: req.params.documentId,
+        userId: res.locals.userId as string,
+        userEmail: res.locals.userEmail as string | undefined,
+        baseVersionId: text(req.query.base),
+        targetVersionId: text(req.query.target),
+        db: createServerSupabase(),
+    });
+    if (!result.ok) return void sendServiceFailure(res, result);
+    const { redline, filename } = result.data;
+
+    // Computed from the caller's own access to two specific versions.
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Type", contentTypeForDocumentType("docx"));
+    res.setHeader("Content-Length", redline.byteLength);
+    res.setHeader("Content-Disposition", buildContentDisposition("inline", filename));
+    res.end(redline);
 }));
 
 // POST /single-documents/:documentId/versions/from-document

@@ -8,10 +8,13 @@ import {
     DropdownContent,
     DropdownRadioGroup,
     DropdownRadioItem,
+    DropdownSeparator,
     DropdownTrigger,
     TextButtonUI,
 } from "@mike/ui";
 import { VersionChip } from "./VersionChip";
+import { ComparisonMenuItems } from "./ComparisonMenuItems";
+import { versionComparisons, type VersionComparison } from "./versionComparison";
 
 export function DocumentVersionPicker({
     documentId,
@@ -19,12 +22,14 @@ export function DocumentVersionPicker({
     versionNumber,
     disabled,
     onSelect,
+    onCompare,
 }: {
     documentId: string;
     versionId?: string | null;
     versionNumber?: number | null;
     disabled?: boolean;
     onSelect: (version: DocumentVersion) => void;
+    onCompare?: (comparison: VersionComparison) => void;
 }) {
     const [open, setOpen] = useState(false);
     const [result, setResult] = useState<Awaited<
@@ -75,6 +80,7 @@ export function DocumentVersionPicker({
     // Avoid showing a nonfunctional chevron while the count is loading or
     // when there is only one available version (deleted versions do not count).
     if (!versions || versions.length <= 1) return label;
+    const pairs = onCompare ? versionComparisons(versions, selectedId) : [];
     return (
         <Dropdown
             open={open}
@@ -133,6 +139,12 @@ export function DocumentVersionPicker({
                         </DropdownRadioItem>
                     ))}
                 </DropdownRadioGroup>
+                {onCompare && !disabled && pairs.length > 0 && (
+                    <>
+                        <DropdownSeparator />
+                        <ComparisonMenuItems pairs={pairs} onCompare={onCompare} />
+                    </>
+                )}
             </DropdownContent>
         </Dropdown>
     );

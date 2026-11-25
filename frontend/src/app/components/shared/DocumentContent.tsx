@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PdfView } from "./views/PdfView";
 import { DocxView } from "./views/DocxView";
+import { useDocumentComparison } from "@/app/hooks/useDocumentComparison";
+import { DocumentComparisonView } from "./DocumentComparisonView";
 import type { DocxCloseGuard, DocxSaveState } from "./views/DocxRenderer.types";
 import { SpreadsheetView } from "./views/SpreadsheetView";
 import {
@@ -142,6 +144,9 @@ export function DocumentContent({
         filename: resolvedDocument.title,
         fileType: resolvedDocument.type,
     });
+    const canCompare = viewType === "docx" && !isExternalSource;
+    const { comparison, open: openComparison, close: closeComparison } =
+        useDocumentComparison(canCompare ? documentId : null, versionId, onDownloadReady);
     const citation = mode.kind === "citation" ? mode.citation : null;
     const firstSelectableQuoteIndex =
         mode.kind === "citation"
@@ -232,18 +237,23 @@ export function DocumentContent({
                         isReloading={isReloading}
                         saveState={saveState}
                         onVersionChange={onVersionChange}
-                        onDownload={() => localDownload.current?.()}
+                        onDownload={comparison
+                            ? comparison.bytes && comparison.download
+                            : () => localDownload.current?.()}
+                        comparison={comparison?.pair}
+                        onCloseComparison={closeComparison}
+                        onCompare={canCompare && !comparison ? openComparison : undefined}
                         toolbarVisible={toolbarVisible}
                         onToggleToolbar={
-                            !isExternalSource && viewType === "docx" && canEdit
+                            !isExternalSource && viewType === "docx" && canEdit && !comparison
                                 ? () => setToolbarVisible((visible) => !visible)
                                 : undefined
                         }
                     />
                 }
                 annotation={
-                    mode.kind === "citation" ||
-                    (mode.kind === "edit" && !isExternalSource) ? (
+                    !comparison && (mode.kind === "citation" ||
+                    (mode.kind === "edit" && !isExternalSource)) ? (
                         <>
                             {mode.kind === "citation" && (
                                 <CitationQuotesSection
@@ -299,6 +309,8 @@ export function DocumentContent({
                         onRetry={retryDocument}
                         onClearQuote={() => setActiveCitationQuoteId(null)}
                     />
+                ) : comparison ? (
+                    <DocumentComparisonView documentId={documentId} comparison={comparison} onRetry={() => openComparison(comparison.pair)} />
                 ) : viewType === "docx" ? (
                     <DocxView
                         onDownloadReady={handleDownloadReady}

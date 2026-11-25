@@ -2926,6 +2926,24 @@ function documentFilePath(
     return `/single-documents/${encodeURIComponent(documentId)}/file${qs}`;
 }
 
+/**
+ * A redline .docx of two Word versions of one document: `targetVersionId`
+ * with every difference from `baseVersionId` as a tracked change. Fetched and
+ * shown like any other document file.
+ */
+export async function getDocumentComparison(
+    documentId: string,
+    baseVersionId: string,
+    targetVersionId: string,
+    signal: AbortSignal,
+): Promise<ArrayBuffer> {
+    const query = new URLSearchParams({ base: baseVersionId, target: targetVersionId });
+    const path = `/single-documents/${encodeURIComponent(documentId)}/versions/compare?${query}`;
+    const response = await apiFetch(`${API_BASE}${path}`, { signal, cache: "no-store" }, "documents.directory");
+    if (!response.ok) throw await toApiError(response, path, "GET", "documents.directory");
+    return response.arrayBuffer();
+}
+
 export function getDocumentFileUrl(
     documentId: string,
     versionId?: string | null,

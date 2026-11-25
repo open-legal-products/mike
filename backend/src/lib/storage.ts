@@ -308,7 +308,7 @@ export async function openFileStream(
       adapter.openReadStream(key, { signal: controller.signal }),
       controller,
     );
-    if (!body) throw new StorageOperationError("download");
+    if (!body) throw new MissingStreamBody("download");
     iterator = body[Symbol.asyncIterator]();
     first = await boundedStep(iterator.next(), controller);
   } catch (error) {
@@ -343,6 +343,33 @@ export async function openFileStream(
       callback(error);
     },
   });
+}
+
+// A missing body is distinct from a transport failure without a cause.
+class MissingStreamBody extends StorageOperationError {}
+
+/** Buffer a bounded object, releasing the stream as soon as it crosses the limit. */
+export async function downloadFileWithinLimit(key: string, maxBytes: number): Promise<Buffer | "too_large" | null> {
+  if (!adapter.enabled) return null;
+  let stream: Readable;
+  try {
+    stream = await openFileStream(key, { signal: AbortSignal.timeout(storageReadTimeoutMs()) });
+  } catch (error) {
+    if (error instanceof MissingStreamBody) return null;
+    // Filesystem opens on the first read (ENOENT); S3 rejects GET with NoSuchKey.
+    const cause = error instanceof StorageOperationError ? error.cause as NodeJS.ErrnoException | undefined : undefined;
+    if (cause?.code === "ENOENT" || cause?.name === "NoSuchKey") return null;
+    throw error;
+  }
+
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    size += chunk.length;
+    if (size > maxBytes) return "too_large"; // Early iterator return destroys the stream.
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, size);
 }
 
 export async function listFiles(prefix: string): Promise<string[]> {

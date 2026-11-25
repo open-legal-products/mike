@@ -425,3 +425,11 @@ it("blocks both editing controls and saves when document permission is denied", 
     expect(exportDocx).not.toHaveBeenCalled();
     expect(replaceVersion).not.toHaveBeenCalled();
 });
+
+it("unmounts a failed comparison renderer so its modal cannot block the download button", async () => {
+    render(<DocxView documentId="comparison" canEdit={false}
+        readOnlyFile={{ bytes: new Uint8Array([99]).buffer, download: vi.fn() }} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be displayed");
+    expect(screen.queryByTestId("renderer-scroll")).toBeNull();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+});

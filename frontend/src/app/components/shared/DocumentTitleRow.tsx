@@ -8,6 +8,8 @@ import { TextButtonUI, textButtonUIClassName } from "@mike/ui";
 import { WarningPopup } from "../popups/WarningPopup";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { DocumentVersionPicker } from "./DocumentVersionPicker";
+import { DocumentComparisonTitle } from "./DocumentComparisonView";
+import type { VersionComparison } from "./versionComparison";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { VersionChip } from "./VersionChip";
 import type { PanelDocument } from "./types";
@@ -33,6 +35,9 @@ export function DocumentTitleRow({
     onVersionChange,
     toolbarVisible,
     onToggleToolbar,
+    comparison,
+    onCompare,
+    onCloseComparison,
 }: {
     document: PanelDocument;
     isReloading: boolean;
@@ -42,6 +47,10 @@ export function DocumentTitleRow({
     onVersionChange?: (version: DocumentVersion) => void;
     toolbarVisible?: boolean;
     onToggleToolbar?: () => void;
+    /** The redline being shown in place of the document, if any. */
+    comparison?: VersionComparison | null;
+    onCompare?: (comparison: VersionComparison) => void;
+    onCloseComparison?: () => void;
 }) {
     const { external, legalIcon } = documentCapabilities(document);
     // Versions and the file download belong to uploads only.
@@ -55,6 +64,45 @@ export function DocumentTitleRow({
         (action) => !external || isSafeSourceUrl(action.url),
     );
     const versionNumber = document.version_number;
+
+    const versionPicker = isFile && onVersionChange ? (
+        <DocumentVersionPicker
+            key={document.document_id}
+            documentId={document.document_id}
+            versionId={document.version_id}
+            versionNumber={comparison?.target.version_number ?? versionNumber}
+            onSelect={onVersionChange}
+            onCompare={onCompare}
+            disabled={
+                isReloading ||
+                !!saveState?.dirty ||
+                saveState?.status === "saving"
+            }
+        />
+    ) : (
+        <VersionChip n={versionNumber} />
+    );
+
+    const metadata = document.metadata.length > 0 && (
+        <div className="mt-1 flex w-full flex-wrap items-center gap-x-3 gap-y-1 font-serif text-sm text-gray-600">
+            {document.metadata.map((item, index) => (
+                <span key={`${item.label}:${item.value}:${index}`}>
+                    {item.label}: {formatMetadataValue(item)}
+                </span>
+            ))}
+        </div>
+    );
+
+    if (comparison && onCloseComparison) {
+        return (
+            <>
+                <DocumentComparisonTitle filename={document.title} pair={comparison}
+                    targetPicker={onVersionChange ? versionPicker : undefined}
+                    onDownload={onDownload} onClose={onCloseComparison} />
+                {metadata && <div className="px-3 pb-2">{metadata}</div>}
+            </>
+        );
+    }
 
     return (
         <div className="shrink-0 px-3 py-2">
@@ -79,22 +127,7 @@ export function DocumentTitleRow({
                         >
                             {document.title}
                         </h2>
-                        {isFile && onVersionChange ? (
-                            <DocumentVersionPicker
-                                key={document.document_id}
-                                documentId={document.document_id}
-                                versionId={document.version_id}
-                                versionNumber={versionNumber}
-                                onSelect={onVersionChange}
-                                disabled={
-                                    isReloading ||
-                                    !!saveState?.dirty ||
-                                    saveState?.status === "saving"
-                                }
-                            />
-                        ) : (
-                            <VersionChip n={versionNumber} />
-                        )}
+                        {versionPicker}
                     </div>
                 </div>
                 <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
@@ -145,15 +178,7 @@ export function DocumentTitleRow({
                     )}
                 </div>
             </div>
-            {document.metadata.length > 0 && (
-                <div className="mt-1 flex w-full flex-wrap items-center gap-x-3 gap-y-1 font-serif text-sm text-gray-600">
-                    {document.metadata.map((item, index) => (
-                        <span key={`${item.label}:${item.value}:${index}`}>
-                            {item.label}: {formatMetadataValue(item)}
-                        </span>
-                    ))}
-                </div>
-            )}
+            {metadata}
         </div>
     );
 }

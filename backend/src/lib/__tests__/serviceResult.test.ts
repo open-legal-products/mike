@@ -32,6 +32,9 @@ describe("serviceResult", () => {
       ["forbidden", 403],
       ["not_found", 404],
       ["conflict", 409],
+      ["too_large", 413],
+      ["unprocessable", 422],
+      ["busy", 429],
       ["unavailable", 503],
     ] as const;
     for (const [kind, status] of cases) {

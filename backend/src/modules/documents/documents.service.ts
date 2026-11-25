@@ -13,6 +13,7 @@
 //   documents.access.ts    — access guards + list/delete document
 //   documents.download.ts  — display bytes, zip bundling, signed URLs, raw file
 //   documents.versions.ts  — version lifecycle (list/create/rename/delete)
+//   documents.compare.ts   — redline between two versions of a Word document
 //   documents.edits.ts     — tracked-change ids + accept/reject edits
 //   documents.trackedEdits.ts — apply tracked-change edits as a new version
 //
@@ -37,6 +38,8 @@ export {
     renameVersion,
     deleteVersion,
 } from "./documents.versions";
+
+export { compareVersions } from "./documents.compare";
 
 export {
     resolveEdit,

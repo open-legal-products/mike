@@ -1,9 +1,15 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createPortal } from "react-dom";
 import { expect, it, vi } from "vitest";
 import type { Document } from "@/app/components/shared/types";
-import type { DocumentVersion } from "@/app/lib/mikeApi";
+import { getDocumentComparison, type DocumentVersion } from "@/app/lib/mikeApi";
 import { DocumentSidePanel } from "./DocumentSidePanel";
+
+vi.mock("@/app/lib/mikeApi", async (original) => ({
+    ...(await original<typeof import("@/app/lib/mikeApi")>()),
+    getDocumentComparison: vi.fn(),
+}));
 
 // Stand in for a viewer whose context menu portals to document.body.
 vi.mock("@/app/components/shared/views/DocxView", () => ({
@@ -58,14 +64,15 @@ it("stays open for portaled menus opened from the viewer, but closes on a real o
     expect(onClose).toHaveBeenCalledOnce();
 });
 
+const version = (n: number, createdAt = "2026-09-01"): DocumentVersion => ({
+    id: `v${n}`,
+    version_number: n,
+    source: "upload",
+    created_at: createdAt,
+    filename: `agreement-v${n}.docx`,
+});
+
 it("titles the document view and lists the latest version first", () => {
-    const version = (n: number, createdAt: string): DocumentVersion => ({
-        id: `v${n}`,
-        version_number: n,
-        source: "upload",
-        created_at: createdAt,
-        filename: `agreement-v${n}.docx`,
-    });
     renderPanel(vi.fn(), {
         readOnly: false,
         // Out of order on purpose: the list must not rely on the API's order.
@@ -88,4 +95,46 @@ it("titles the document view and lists the latest version first", () => {
         "Download Version 2",
         "Download Version 1",
     ]);
+});
+
+it("opens and closes a comparison from version history without a chat", async () => {
+    vi.mocked(getDocumentComparison).mockResolvedValue(new ArrayBuffer(4));
+    renderPanel(vi.fn(), { readOnly: false, versions: [version(1), version(2)] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare V2 with V1" }));
+    expect(await screen.findByRole("heading", {
+        name: "agreement-v2.docx",
+    })).toBeVisible();
+    expect(getDocumentComparison).toHaveBeenCalledWith("doc-1", "v1", "v2", expect.any(AbortSignal));
+    expect(screen.getByRole("button", { name: "Download comparison" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close comparison" }));
+    expect(screen.getByRole("heading", { name: "agreement-v2.docx" })).toBeVisible();
+});
+
+it("names the oversized version on compare and returns to version downloads on close", async () => {
+    const message = "agreement-v1.docx (V1) exceeds the 20 MiB limit for comparison.";
+    vi.mocked(getDocumentComparison).mockRejectedValueOnce(Object.assign(new Error(message), { status: 413 }));
+    renderPanel(vi.fn(), {
+        readOnly: false,
+        versions: [{ ...version(1), size_bytes: 21 * 1024 * 1024 }, version(2)],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Compare V2 with V1" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    fireEvent.click(screen.getByRole("button", { name: "Close comparison" }));
+    expect(screen.getByRole("button", { name: "Download Version 1" })).toBeEnabled();
+});
+
+it("compares the displayed version with a nonconsecutive baseline from the menu", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getDocumentComparison).mockResolvedValue(new ArrayBuffer(4));
+    renderPanel(vi.fn(), { readOnly: false, versions: [version(2), version(3), version(1)] });
+
+    await user.click(screen.getByRole("button", { name: "Compare versions" }));
+    expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual([
+        "Compare with V2", "Compare with V1",
+    ]);
+    await user.click(screen.getByRole("menuitem", { name: "Compare with V1" }));
+    expect(getDocumentComparison).toHaveBeenCalledWith("doc-1", "v1", "v3", expect.any(AbortSignal));
+    expect(await screen.findByRole("group", { name: "Document comparison" })).toHaveTextContent("V1toV3");
 });

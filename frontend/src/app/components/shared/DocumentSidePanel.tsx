@@ -6,8 +6,10 @@ import {
     AlertCircle,
     AlertTriangle,
     Check,
+    ChevronDown,
     Download,
     Eye,
+    GitCompareArrows,
     Loader2,
     Pencil,
     Plus,
@@ -20,7 +22,11 @@ import { DocumentPaneTitle } from "@/app/components/shared/DocumentPaneTitle";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
-import { CloseButton, PillButtonUI } from "@mike/ui";
+import { DocumentComparisonTitle, DocumentComparisonView } from "./DocumentComparisonView";
+import { ComparisonMenuItems } from "./ComparisonMenuItems";
+import { versionComparisons, type VersionComparison, versionLabel } from "./versionComparison";
+import { useDocumentComparison } from "@/app/hooks/useDocumentComparison";
+import { CloseButton, Dropdown, DropdownContent, DropdownTrigger, PillButtonUI, TextButtonUI } from "@mike/ui";
 import type { Document } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { cn } from "@/app/lib/utils";
@@ -242,11 +248,6 @@ export function DocumentSidePanel({
         replaceConfirmOpen,
     ]);
 
-    if (!mounted || !doc) return null;
-
-    const activeDoc = doc;
-    const documentId = activeDoc.id;
-    const newVersionAccept = ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt";
     // Latest first: by version number, then by upload time.
     const orderedVersions = [...versions].sort(
         (a, b) =>
@@ -263,6 +264,14 @@ export function DocumentSidePanel({
         orderedVersions[0] ??
         null;
     const selectedVersionId = selectedVersion?.id ?? versionId ?? null;
+    const { comparison, open: openComparison, close: closeComparison } =
+        useDocumentComparison(readOnly ? null : doc?.id ?? null, selectedVersionId);
+
+    if (!mounted || !doc) return null;
+
+    const activeDoc = doc;
+    const documentId = activeDoc.id;
+    const newVersionAccept = ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt";
     const selectedFilename = selectedVersion?.filename?.trim() || doc.filename;
     const selectedFileType =
         selectedVersion != null
@@ -297,6 +306,36 @@ export function DocumentSidePanel({
         replaceFileType === "pdf" ? ".pdf" : ".docx,.doc";
     const ownerLabel =
         doc.owner_display_name?.trim() || doc.owner_email?.trim() || "—";
+
+    const pairs = readOnly ? [] : versionComparisons(versions, selectedVersionId);
+    const [firstPair] = pairs;
+    function compare(pair: VersionComparison) {
+        openComparison(pair);
+        setMobilePane("document");
+    }
+    const comparisonHeader = comparison && (
+        <DocumentComparisonTitle filename={selectedFilename} pair={comparison.pair}
+            onDownload={comparison.bytes ? comparison.download : undefined} onClose={closeComparison} />
+    );
+    const comparisonControls = comparison ? null : pairs.length > 1 ? (
+        <Dropdown>
+            <DropdownTrigger asChild>
+                <TextButtonUI size="xs">
+                    <GitCompareArrows aria-hidden="true" className="h-3.5 w-3.5" />
+                    Compare versions
+                    <ChevronDown aria-hidden="true" className="h-3 w-3" />
+                </TextButtonUI>
+            </DropdownTrigger>
+            <DropdownContent align="end">
+                <ComparisonMenuItems pairs={pairs} onCompare={compare} />
+            </DropdownContent>
+        </Dropdown>
+    ) : firstPair && (
+        <TextButtonUI size="xs" onClick={() => compare(firstPair)}>
+            <GitCompareArrows aria-hidden="true" className="h-3.5 w-3.5" />
+            Compare {versionLabel(firstPair.target)} with {versionLabel(firstPair.base)}
+        </TextButtonUI>
+    );
 
     async function handleSaveName() {
         if (!selectedVersionId) return;
@@ -371,6 +410,7 @@ export function DocumentSidePanel({
         setDeletingVersionId(versionIdToDelete);
         try {
             await onDeleteVersion(documentId, versionIdToDelete);
+            closeComparison();
         } catch (err) {
             notifyError(err, {
                 action: "delete this version",
@@ -412,6 +452,7 @@ export function DocumentSidePanel({
                 replaceFile,
                 replaceFile.name,
             );
+            closeComparison();
             setReplaceConfirmOpen(false);
             setReplaceTargetVersion(null);
             setReplaceFile(null);
@@ -577,6 +618,7 @@ export function DocumentSidePanel({
                 </div>
             </div>
 
+            {isMobile && comparisonHeader}
             <div
                 className="grid min-h-0 flex-1"
                 style={{
@@ -591,13 +633,16 @@ export function DocumentSidePanel({
                         mobilePane === "document" ? "flex" : "hidden",
                     )}
                 >
-                    <DocumentPaneTitle
-                        filename={selectedFilename}
-                        fileType={selectedFileType}
-                        versionNumber={selectedVersionNumber}
-                    />
+                    {comparison
+                        ? !isMobile && comparisonHeader
+                        : <DocumentPaneTitle filename={selectedFilename} fileType={selectedFileType} versionNumber={selectedVersionNumber} />}
+                    {isMobile && mobilePane === "document" && comparisonControls && (
+                        <div className="flex flex-wrap items-center gap-1 px-3 pb-2">{comparisonControls}</div>
+                    )}
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                        {selectedViewType === "spreadsheet" ? (
+                        {comparison ? (
+                            <DocumentComparisonView documentId={documentId} comparison={comparison} onRetry={() => openComparison(comparison.pair)} />
+                        ) : selectedViewType === "spreadsheet" ? (
                             <SpreadsheetView
                                 rounded="top-right"
                                 key={`${selectedVersionId ?? "current"}:${selectedUploadedAt ?? ""}:${selectedSizeBytes ?? ""}`}
@@ -767,8 +812,9 @@ export function DocumentSidePanel({
 
                     {!readOnly && (
                         <>
-                            <div className="mb-2 mt-4 shrink-0 text-xs font-medium text-gray-900">
+                            <div className="mb-2 mt-4 flex shrink-0 flex-wrap items-center justify-between gap-1 text-xs font-medium text-foreground">
                                 Versions
+                                {(!isMobile || mobilePane === "details") && comparisonControls}
                             </div>
                     <div className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2 py-2">
                             {versionsLoading && versions.length === 0 ? (
