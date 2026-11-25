@@ -249,6 +249,9 @@ Before writing the answer, record one case entry per [N] marker with cite_source
 {"ref": N, "cluster_id": 123, "quotes": [{"opinion_id": 456, "quote": "exact verbatim opinion text"}]}.
 Do not use doc_id, page, top-level quote, case_name, or citation fields for CourtListener case entries.`;
 
+const COURTLISTENER_INLINE_CITATION_REMINDER = `COURTLISTENER CITATION REMINDER:
+If your final answer relies on any CourtListener case, give the clickable markdown case link the first time you mention it, and cite each supported claim with an inline tag right after it, quoting the opinion text exactly: [[case-123 "exact verbatim opinion text"]], where 123 is the case's cluster id. Keep quotation marks inside the quoted text as they are.`;
+
 export type AiSdkAdapterConfig = {
   provider: Provider;
   label: string;
@@ -699,7 +702,11 @@ export async function streamAiSdk(
                 config.courtlistenerCitationReminder &&
                 usesCourtlistenerTool(steps)
               ) {
-                step.system = `${params.systemPrompt}\n\n${COURTLISTENER_CITATION_REMINDER}`;
+                step.system = `${params.systemPrompt}\n\n${
+                  params.inlineCitations
+                    ? COURTLISTENER_INLINE_CITATION_REMINDER
+                    : COURTLISTENER_CITATION_REMINDER
+                }`;
               }
               // Removing tools instead would break providers that reject a
               // history of calls to a tool the request no longer defines.

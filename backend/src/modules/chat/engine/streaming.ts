@@ -70,7 +70,30 @@ import {
   toolName,
   withoutDocumentMutatingTools,
 } from "./tools/toolSchemas";
-import { limitCitationPayload } from "./citations";
+import {
+  createCitation,
+  limitCitationPayload,
+  MAX_CITATIONS,
+  normalizeInlineCitation,
+  type ParsedCitation,
+} from "./citations";
+import {
+  createInlineCitationStream,
+  mapInputStrings,
+  plainReference,
+  latestReadIndex,
+  readTextOf,
+  resolveInlineCitations,
+  resolveReadCitations,
+  resolveTableCitations,
+  tableSourceExists,
+  withoutCitationMarkup,
+  sourceExists,
+  withInlineLocators,
+  type CitationFormat,
+} from "./inlineCitations";
+import { reportCitationHealth, visibleTextOf } from "./citationHealth";
+import { verifyCitations } from "./verifyCitations";
 import { runToolCalls } from "./tools/toolDispatcher";
 import {
   SCRIPT_TOOL_NAME,
@@ -368,6 +391,17 @@ export async function runLLMStream(params: {
    * and cases (the default), or the cells of `tabularStore`'s review.
    */
   citationSources?: "documents" | "tabular_cells";
+  /**
+   * How the answer cites its sources: the cite_sources tool before the
+   * answer (the default), or inline tags the stream numbers as the answer is
+   * written (see inlineCitations).
+   */
+  citationFormat?: CitationFormat;
+  /**
+   * Inline only: cut quotes taken from passages to one line of at most this
+   * many characters, for a client that searches the document for them (Word).
+   */
+  citationQuoteMaxChars?: number;
   model?: string;
   /** AI SDK reasoning effort for this interactive request. */
   reasoning?: import("../../../lib/llm").ReasoningLevel;
@@ -441,6 +475,8 @@ export async function runLLMStream(params: {
     tabularStore,
     clientTools,
     citationSources = "documents",
+    citationFormat = "cite_sources",
+    citationQuoteMaxChars,
     model,
     apiKeys,
     orgId,
@@ -487,8 +523,10 @@ export async function runLLMStream(params: {
   // An invalid model fails the answer below, before any tool runs.
   const chatModel = resolveModel(model, "");
   const citesTableCells = citationSources === "tabular_cells" && !!tabularStore;
+  const inlineFormat = citationFormat === "inline";
   const baseTools = [
-    citesTableCells ? CITE_TABLE_CELLS_TOOL : CITE_DOCUMENTS_TOOL,
+    // Inline answers cite with tags in their text, not with a tool.
+    ...(inlineFormat ? [] : [citesTableCells ? CITE_TABLE_CELLS_TOOL : CITE_DOCUMENTS_TOOL]),
     ...conversationTools,
     ...researchTools,
     ...WORKFLOW_TOOLS,
@@ -600,6 +638,8 @@ export async function runLLMStream(params: {
   let answerUsage: NonNullable<import("@mike/contracts").ResponseDetailsEvent["usage"]> | null = null;
   let fullText = "";
   let iterText = "";
+  // Inline only: the text the reader sees, without the tags in iterText.
+  let iterVisibleText = "";
   let iterReasoning = "";
   // Every citations frame carries the whole list so far, and the client
   // replaces its list with it. Only the newest is worth replaying to a
@@ -633,34 +673,216 @@ export async function runLLMStream(params: {
   const recordedCitations = () =>
     limitCitationPayload(citationRecorder.citations());
 
-  const emitCitations = (status: "partial" | "final") => {
+  const emitCitationSnapshot = (
+    status: "partial" | "final",
+    citations: unknown[],
+  ) => {
     const snapshot = ++citationSnapshotSeq;
     write(
-      `data: ${JSON.stringify({
-        type: "citations",
-        status,
-        citations: recordedCitations(),
-      })}\n\n`,
+      `data: ${JSON.stringify({ type: "citations", status, citations })}\n\n`,
       status === "partial"
         ? { replay: () => snapshot === citationSnapshotSeq }
         : undefined,
     );
   };
+  const emitCitations = (status: "partial" | "final") =>
+    emitCitationSnapshot(status, recordedCitations());
+
+  // -------------------------------------------------------------------------
+  // Inline citations (CITATION_FORMAT=inline): the model writes [[doc-0 12]]
+  // tags after its claims; the stream replaces each with a numbered [N]
+  // marker and sends its citation as it goes.
+  // -------------------------------------------------------------------------
+  const inlineCitations = inlineFormat
+    ? createInlineCitationStream({
+        maxCitations: MAX_CITATIONS,
+        exists: (source) =>
+          citesTableCells
+            ? tableSourceExists(tabularStore!, source) ?? false
+            : sourceExists(docStore, source),
+        readOf: (source) =>
+          "doc" in source ? latestReadIndex(docStore, source.doc) : undefined,
+      })
+    : null;
+
+  // Inline quotes are checked against each document's text once per turn,
+  // at the end. A request-scoped document (the Word add-in's) changes only
+  // in the client: its latest live read is its current text.
+  const inlineSourceText = new Map<string, Promise<string>>();
+  const getInlineSourceText = (docId: string): Promise<string> => {
+    let pending = inlineSourceText.get(docId);
+    if (!pending) {
+      const label = resolveDocLabel(docId, docStore, docIndex);
+      const live =
+        label && docStore.get(label)?.inline_text !== undefined
+          ? readTextOf(docStore, label)
+          : undefined;
+      pending =
+        live !== undefined ? Promise.resolve(live) : readSourceText(docId);
+      inlineSourceText.set(docId, pending);
+    }
+    return pending;
+  };
+  const inlineResolveOptions = {
+    maxQuoteChars: citationQuoteMaxChars,
+    isPdf: (label: string) => {
+      const doc = docStore.get(label);
+      return !doc?.external_source && /\.pdf$/i.test(doc?.filename ?? docIndex[label]?.filename ?? "");
+    },
+  };
+  /** The turn's inline citations, created and verified, with the tags missed. */
+  const inlineTurnCitations = async (): Promise<{
+    citations: unknown[];
+    unresolved: number;
+  }> => {
+    if (!inlineCitations) return { citations: [], unresolved: 0 };
+    if (citesTableCells) {
+      const table = resolveTableCitations(inlineCitations.entries(), tabularStore!);
+      return {
+        citations: limitCitationPayload(table.citations),
+        unresolved: table.unresolved + inlineCitations.missingCount(),
+      };
+    }
+    const { citations: raw, unresolved } = await resolveInlineCitations(
+      inlineCitations.entries(),
+      getInlineSourceText,
+      { turn: docStore, ...inlineResolveOptions },
+    );
+    const parsed = raw
+      .map(normalizeInlineCitation)
+      .filter((c): c is ParsedCitation => c !== null);
+    const verified = await verifyCitations(
+      limitCitationPayload(
+        parsed
+          .map((c) =>
+            createCitation(c, docIndex, courtlistenerTurnState.casesByClusterId, docStore),
+          )
+          .filter((citation) => citation !== null),
+      ),
+      getInlineSourceText,
+      async (clusterId) => getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
+    );
+    return {
+      citations: limitCitationPayload(
+        withInlineLocators(verified, inlineCitations.entries()),
+      ),
+      unresolved:
+        unresolved + (raw.length - parsed.length) + inlineCitations.missingCount(),
+    };
+  };
+  /** The citations a turn keeps when it ends: stopped, failed or completed. */
+  const turnCitations = async (
+    outcome: "completed" | "stopped" | "failed",
+  ): Promise<unknown[]> => {
+    if (!inlineCitations) {
+      const recorded = recordedCitations();
+      reportCitationHealth({
+        format: "cite_sources",
+        outcome,
+        surface: isSubagent ? "subagent" : "chat",
+        visibleText: visibleTextOf(events),
+        citations: recorded,
+      });
+      return recorded;
+    }
+    try {
+      const inline = await inlineTurnCitations();
+      reportCitationHealth({
+        format: "inline",
+        outcome,
+        surface: isSubagent ? "subagent" : "chat",
+        visibleText: visibleTextOf(events),
+        citations: inline.citations,
+        inlineMalformed: inlineCitations.malformedCount(),
+        inlineQuoteAsText: inlineCitations.quoteAsTextCount(),
+        inlineUnresolved: inline.unresolved,
+      });
+      return inline.citations;
+    } catch {
+      return [];
+    }
+  };
+
+  // How many inline citations the last partial frame carried.
+  let inlineCitationsSent = 0;
+  /**
+   * Sends the inline citations written so far whose documents were read this
+   * turn, so their markers open while the answer streams. Quotes are checked
+   * once the answer ends.
+   */
+  const emitInlineCitationsSoFar = () => {
+    if (!inlineCitations) return;
+    const entries = inlineCitations.entries();
+    if (entries.length === inlineCitationsSent) return;
+    inlineCitationsSent = entries.length;
+    const citations: unknown[] = citesTableCells
+      ? resolveTableCitations(entries, tabularStore!).citations
+      : resolveReadCitations(docStore, entries, inlineResolveOptions)
+          .map(normalizeInlineCitation)
+          .filter((c): c is ParsedCitation => c !== null)
+          .map((c) =>
+            createCitation(c, docIndex, courtlistenerTurnState.casesByClusterId, docStore),
+          )
+          .filter((c) => c !== null);
+    if (citations.length) {
+      emitCitationSnapshot("partial", limitCitationPayload(citations));
+    }
+  };
+
+  /**
+   * A tool call's input as the tool should see it. With inline citations,
+   * passage labels the model copied from what it read and citation tags
+   * belong to the chat, not to a document it drafts or edits: labels are
+   * removed and tags become plain references.
+   */
+  const toolInput = <T,>(input: T): T =>
+    inlineCitations
+      ? (mapInputStrings(input, (text) =>
+          withoutCitationMarkup(docStore, text, (source) =>
+            plainReference(docStore, source, {
+              filenameOf: (doc) =>
+                docStore.get(resolveDocLabel(doc, docStore, docIndex) ?? doc)?.filename,
+              caseNameOf: (clusterId) =>
+                courtlistenerTurnState.casesByClusterId.get(clusterId)?.caseName ?? undefined,
+            }),
+          ),
+        ) as T)
+      : input;
+
+  const writeContentDelta = (text: string) => {
+    if (text) write(`data: ${JSON.stringify({ type: "content_delta", text })}\n\n`);
+  };
 
   const streamVisibleContent = (delta: string) => {
     if (!delta) return;
-    write(`data: ${JSON.stringify({ type: "content_delta", text: delta })}\n\n`);
+    if (inlineCitations) {
+      const visible = inlineCitations.push(delta);
+      iterVisibleText += visible;
+      writeContentDelta(visible);
+      emitInlineCitationsSoFar();
+      return;
+    }
+    writeContentDelta(delta);
   };
 
-  const flushText = () => {
+  const flushText = (opts: { emit?: boolean } = {}) => {
     if (!iterText) return;
     fullText += iterText;
-    events.push({ type: "content", text: iterText });
+    if (inlineCitations) {
+      // A tag never spans model steps: what a broken one held back is prose.
+      const rest = inlineCitations.flush();
+      iterVisibleText += rest;
+      if (opts.emit ?? true) writeContentDelta(rest);
+      if (iterVisibleText) events.push({ type: "content", text: iterVisibleText });
+      iterVisibleText = "";
+    } else {
+      events.push({ type: "content", text: iterText });
+    }
     iterText = "";
   };
 
-  const flushPartialTurn = () => {
-    flushText();
+  const flushPartialTurn = (opts: { emit?: boolean } = {}) => {
+    flushText(opts);
     if (iterReasoning) {
       events.push({ type: "reasoning", text: iterReasoning });
       iterReasoning = "";
@@ -708,8 +930,10 @@ export async function runLLMStream(params: {
     nonce,
     signal: delegationSignal,
     write,
+    citationFormat,
     spawn: (spawn) =>
       runLLMStream({
+        citationFormat,
         // A subagent's question ends its run the way ask_inputs ends a turn.
         clientTools: {
           schemas: [ASK_PARENT_TOOL],
@@ -922,6 +1146,7 @@ export async function runLLMStream(params: {
       providerWebSearch:
         providerSearches > 0 ? { maxSearches: providerSearches } : null,
       finishWithoutToolsOnLastStep: isSubagent,
+      inlineCitations: inlineFormat,
       callbacks: {
         onActivity: params.onActivity,
         onUsage: (usage, finishReason) => {
@@ -1059,7 +1284,7 @@ export async function runLLMStream(params: {
           for (const call of permittedCalls) {
             if (!clientTools.owns(call.name)) continue;
             const { content, events: clientEvents } =
-              await clientTools.execute(call);
+              await clientTools.execute({ ...call, input: toolInput(call.input) });
             clientResultByCallId.set(call.id, content);
             events.push(...clientEvents);
             throwIfAborted(signal);
@@ -1070,7 +1295,7 @@ export async function runLLMStream(params: {
           id: c.id,
           function: {
             name: c.name,
-            arguments: JSON.stringify(c.input),
+            arguments: JSON.stringify(toolInput(c.input)),
           },
         }));
         // One batch through the server dispatcher. Its events are recorded
@@ -1109,6 +1334,7 @@ export async function runLLMStream(params: {
                 documentsScoped: subagentRun?.documentsScoped,
                 signal,
                 results: batch,
+                citationFormat,
               },
             );
           } catch (error) {
@@ -1147,7 +1373,7 @@ export async function runLLMStream(params: {
             userId,
             dispatch: async (name, args, callId) => {
               const inner = await runServerBatch(
-                [{ id: callId, function: { name, arguments: JSON.stringify(args) } }],
+                [{ id: callId, function: { name, arguments: JSON.stringify(toolInput(args)) } }],
                 scriptReadState,
                 true,
               );
@@ -1241,11 +1467,13 @@ export async function runLLMStream(params: {
       // call that rejects once the stop reached it) ends the turn as
       // stopped: that is the outcome its readers were given.
       await recordDelegations().catch(() => {});
-      flushPartialTurn();
+      // The reader saw no more than was streamed: a tag held back stays unsent.
+      flushPartialTurn({ emit: false });
+      const stoppedCitations = await turnCitations("stopped");
       throw new AssistantStreamAbortError(
         fullText,
         events.map(sanitizeAssistantEvent),
-        recordedCitations(),
+        stoppedCitations,
       );
     } else {
       delegationStop.abort();
@@ -1279,21 +1507,23 @@ export async function runLLMStream(params: {
       }
       const errorEvent = modelFailureEvent(err);
       events.push(errorEvent);
+      const failedCitations = await turnCitations("failed");
       throw new AssistantStreamError(
         errorEvent.message,
         fullText,
         events.map(sanitizeAssistantEvent),
         { cause: failure },
-        recordedCitations(),
+        failedCitations,
       );
     }
   }
 
   flushText();
 
-  // The citations recorded with cite_sources, each checked when recorded.
-  const citations = recordedCitations();
-  emitCitations("final");
+  // cite_sources: the citations recorded, each checked when recorded.
+  // Inline: the tags written, resolved and checked now.
+  const citations = await turnCitations("completed");
+  emitCitationSnapshot("final", citations);
   if (!isSubagent && answerModel) {
     const details: AssistantEvent = {
       type: "response_details",

@@ -2,6 +2,13 @@ export * from "./types";
 export * from "./prompts";
 export * from "./tools/toolSchemas";
 export * from "./citations";
+export {
+  annotatePassages,
+  chatCitationFormat,
+  rememberReadText,
+  stripCitationMarkers,
+  type CitationFormat,
+} from "./inlineCitations";
 export * from "./tools/documentOps";
 export * from "./tools/toolDispatcher";
 export * from "./tools/connectorApprovals";

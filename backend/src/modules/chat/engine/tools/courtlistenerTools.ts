@@ -11,6 +11,12 @@ export const COURTLISTENER_TOOL_NAMES = {
     verifyCitations: "courtlistener_verify_citations",
 } as const;
 
+/** How the prompt asks for case citations with cite_sources (the default). */
+const COURTLISTENER_CITE_SOURCES_RULES = `- If you mention a CourtListener case as legal support in the final answer, cite it with both: (a) the clickable markdown link returned in citationLinks, and (b) an inline [N] marker. Include the clickable case link only the first time you cite that case; later references to the same case should use the existing inline [N] marker without repeating the link unless clarity requires it.
+- Assign new annotation refs in first-use order as much as possible: [1], then [2], then [3]. Reuse an existing ref when citing the same case/passage again, even if that means a later sentence cites [3] and then [1] again.
+- Before writing the answer, record one case entry for each [N] case marker with cite_sources: {"ref": N, "cluster_id": 123, "quotes": [{"opinion_id": 456, "quote": "exact verbatim opinion text"}]}.
+- Do not use doc_id, page, top-level quote, case_name, or citation fields in case entries.`;
+
 export const COURTLISTENER_SYSTEM_PROMPT = `US CASE LAW RESEARCH:
 Use CourtListener when answering US-law questions that require case law.
 
@@ -22,10 +28,7 @@ Workflow:
 
 Citation rules:
 - Final case citations must be based on opinion text or passage snippets supplied in this turn. Do not cite cases based only on memory, metadata, search results, citationLinks, or verification results.
-- If you mention a CourtListener case as legal support in the final answer, cite it with both: (a) the clickable markdown link returned in citationLinks, and (b) an inline [N] marker. Include the clickable case link only the first time you cite that case; later references to the same case should use the existing inline [N] marker without repeating the link unless clarity requires it.
-- Assign new annotation refs in first-use order as much as possible: [1], then [2], then [3]. Reuse an existing ref when citing the same case/passage again, even if that means a later sentence cites [3] and then [1] again.
-- Before writing the answer, record one case entry for each [N] case marker with cite_sources: {"ref": N, "cluster_id": 123, "quotes": [{"opinion_id": 456, "quote": "exact verbatim opinion text"}]}.
-- Do not use doc_id, page, top-level quote, case_name, or citation fields in case entries.
+${COURTLISTENER_CITE_SOURCES_RULES}
 - If you have not obtained opinion text or snippets for a useful case, fetch/read it before citing it, or say you could not read it and do not rely on it.
 
 Limits:
@@ -137,3 +140,16 @@ export const COURTLISTENER_TOOLS = [
         },
     },
 ];
+
+
+/**
+ * COURTLISTENER_SYSTEM_PROMPT for answers cited with inline tags: a case is
+ * cited with [[case-<cluster_id> "exact opinion text"]] at the claim.
+ */
+export function inlineCourtlistenerPrompt(): string {
+  return COURTLISTENER_SYSTEM_PROMPT.replace(
+    COURTLISTENER_CITE_SOURCES_RULES,
+    `- If you mention a CourtListener case as legal support in the final answer, give (a) the clickable markdown link returned in citationLinks the first time you mention the case, and (b) an inline citation tag right after the claim, naming the case's cluster id and quoting the opinion text that supports it exactly: [[case-123 "exact verbatim opinion text"]]. Keep any quotation marks inside the quoted text as they are, and put nothing between the cluster id and the opening quotation mark.
+- Use one tag per supported claim; repeat the same tag to cite the same passage again.`,
+  );
+}

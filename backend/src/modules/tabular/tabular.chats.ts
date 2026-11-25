@@ -5,6 +5,9 @@
 // The streaming loop itself stays in tabular.routes.ts.
 
 import {
+    chatCitationFormat,
+    stripCitationMarkers,
+    type CitationFormat,
     generateSpotlightNonce,
     spotlightFilename,
     loadUserMessageSentTimes,
@@ -61,12 +64,50 @@ import {
 // Build messages for tabular chat
 // ---------------------------------------------------------------------------
 
+const TABULAR_CITE_SOURCES_CITATIONS = `TABULAR CITATION INSTRUCTIONS:
+When you rely on specific cell content, record it with the cite_sources tool BEFORE writing the answer:
+1. Read the cells you need with read_table_cells.
+2. Call cite_sources once with one entry per marker, numbered 1 through N in the order the markers will first appear:
+   {"citations": [
+     {"ref": 1, "col_index": 0, "row_index": 2, "quote": "verbatim text from the cell"},
+     {"ref": 2, "col_index": 1, "row_index": 0, "quote": "another excerpt"}
+   ]}
+3. If the result lists quotes it could not find or entries it rejected, call cite_sources again with corrected entries under the same refs, or leave those claims out.
+4. Write the answer, placing each marker [1], [2], etc. inline at the point of reference.
+
+Rules:
+- col_index and row_index are 0-based (matching the COL/ROW numbers listed above)
+- Only cite cells you have read via read_table_cells
+- quote should be verbatim text from the cell's summary
+- Never list the citations or their JSON in the answer. Skip cite_sources when the answer cites nothing
+- Do not fabricate cell content
+`;
+
+/**
+ * The citation instructions for inline citations: a [[COL:n ROW:m]] tag at
+ * the claim, which the application numbers, instead of the cite_sources tool.
+ */
+const TABULAR_INLINE_CITATIONS = `TABULAR CITATION INSTRUCTIONS:
+When you rely on a cell, cite it inline, right after the claim, with a tag naming its column and row: [[COL:0 ROW:2]].
+
+The reader never sees what is inside a tag: the application replaces it with a numbered marker such as [1]. So write the cell's content in your own sentence and put the tag after it.
+Wrong: "The landlord is [[COL:0 ROW:2]]."
+Right: "The landlord is Harbourside Properties Limited [[COL:0 ROW:2]]."
+
+Rules:
+- COL and ROW are the 0-based numbers listed above
+- Only cite cells you have read via read_table_cells
+- Never write [1]-style markers yourself, and never add a list of citations at the end
+- Do not fabricate cell content
+`;
+
 export function buildTabularMessages(
     messages: ChatMessage[],
     tabularStore: TabularCellStore,
     reviewTitle: string,
     time?: MessageTimeContext,
     nonce?: string,
+    citationFormat: CitationFormat = "cite_sources",
 ): unknown[] {
     const docList = tabularStore.documents
         .map((d, i) => `- ROW:${i} "${spotlightFilename(d.filename, nonce)}"`)
@@ -90,33 +131,22 @@ ${docList || "- (none)"}
 COLUMNS (fields):
 ${colList || "- (none)"}
 
-TABULAR CITATION INSTRUCTIONS:
-When you rely on specific cell content, record it with the cite_sources tool BEFORE writing the answer:
-1. Read the cells you need with read_table_cells.
-2. Call cite_sources once with one entry per marker, numbered 1 through N in the order the markers will first appear:
-   {"citations": [
-     {"ref": 1, "col_index": 0, "row_index": 2, "quote": "verbatim text from the cell"},
-     {"ref": 2, "col_index": 1, "row_index": 0, "quote": "another excerpt"}
-   ]}
-3. If the result lists quotes it could not find or entries it rejected, call cite_sources again with corrected entries under the same refs, or leave those claims out.
-4. Write the answer, placing each marker [1], [2], etc. inline at the point of reference.
-
-Rules:
-- col_index and row_index are 0-based (matching the COL/ROW numbers listed above)
-- Only cite cells you have read via read_table_cells
-- quote should be verbatim text from the cell's summary
-- Never list the citations or their JSON in the answer. Skip cite_sources when the answer cites nothing
-- Do not fabricate cell content
-- Answer in clear, concise prose. You may use markdown formatting.${
+${citationFormat === "inline" ? TABULAR_INLINE_CITATIONS : TABULAR_CITE_SOURCES_CITATIONS}- Answer in clear, concise prose. You may use markdown formatting.${
         time ? `\n\n${MESSAGE_TIME_PROMPT}` : ""
     }`;
 
     const formatted: unknown[] = [{ role: "system", content: systemContent }];
     const stamp = userMessageStamper(messages, time);
     for (const [index, msg] of messages.entries()) {
+        // An earlier answer's [N] markers point at citations the model
+        // cannot see; in inline mode it would copy them instead of tags.
+        const content =
+            citationFormat === "inline" && msg.role === "assistant"
+                ? stripCitationMarkers(msg.content ?? "")
+                : (msg.content ?? "");
         formatted.push({
             role: msg.role,
-            content: stamp(msg, index, msg.content ?? ""),
+            content: stamp(msg, index, content),
         });
     }
     return formatted;
@@ -792,6 +822,7 @@ export async function prepareTabularChat(
         review.title || "Untitled Review",
         { timeZone, now: new Date(), userSentAt },
         nonce,
+        chatCitationFormat(),
     );
 
     return {

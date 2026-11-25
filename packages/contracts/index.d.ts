@@ -35,12 +35,7 @@ export type SourceDocumentAction = {
 
 export type SourceDocumentQuote = {
   quote: string;
-  verification?: {
-    verified: boolean;
-    source_excerpt?: string;
-    start_char?: number;
-    end_char?: number;
-  };
+  verification?: QuoteVerification;
   target: {
     page?: number | string;
     sheet?: string;
@@ -86,6 +81,8 @@ export type QuoteVerification = {
   verified: boolean;
   start_char?: number;
   end_char?: number;
+  /** Page-local offset in PDF reading order, counting ASCII letters and digits. */
+  pdf_text_offset?: number;
   source_excerpt?: string;
 };
 

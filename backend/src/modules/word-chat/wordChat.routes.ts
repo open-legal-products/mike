@@ -27,6 +27,9 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import {
   ACTIVE_WORD_DOCUMENT_ID,
+  annotatePassages,
+  chatCitationFormat,
+  rememberReadText,
   AssistantStreamError,
   assistantStreamErrorPayload,
   buildStoppedAssistantEvent,
@@ -848,7 +851,12 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         assistantMessageId,
       })}\n\n`,
     );
+    const citationFormat = chatCitationFormat();
     const { fullText, events, citations } = await runLLMStream({
+      citationFormat,
+      // Inline: Word searches the document for a cited quote, which allows at
+      // most 255 characters and no line breaks.
+      citationQuoteMaxChars: 200,
       onActivity: run?.touch,
       apiMessages,
       docStore,
@@ -871,6 +879,16 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                   file_type: "text/markdown", filename: activeDocumentName, inline_text: text,
                 });
               },
+              // Inline citations: a live read is tagged like a stored read,
+              // and its tags refer to the text it returned.
+              ...(citationFormat === "inline"
+                ? {
+                    presentLiveRead: (text: string) => {
+                      rememberReadText(docStore, ACTIVE_WORD_DOCUMENT_ID, text);
+                      return annotatePassages(text);
+                    },
+                  }
+                : {}),
               userId,
               write: writeClientToolFrame,
               signal: stream.signal,

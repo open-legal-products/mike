@@ -8,6 +8,7 @@
 // handling, assistant-message persistence) stays in the route — its ordering
 // is delicate. Only the pre-stream preparation lives here.
 
+import { chatCitationFormat } from "../chat/chat.service";
 import type { Db } from "../../lib/supabase";
 import {
     webSearchPlanFor,
@@ -509,6 +510,7 @@ export async function prepareProjectChatStream(
             "chat_messages",
             timeZone,
             recordForUser,
+            chatCitationFormat(),
         );
         const messagesForLLM: ChatMessage[] = displayed_doc
             ? enrichedMessages.map((m, i) => {
@@ -571,6 +573,7 @@ export async function prepareProjectChatStream(
             "append",
             { timeZone, now: new Date(), userSentAt },
             recordForUser,
+            chatCitationFormat(),
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db, projectAccess.project.org_id ?? null);

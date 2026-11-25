@@ -25,9 +25,11 @@ import {
 import {
   buildSystemPrompt,
   EARLIER_TURNS_PROMPT,
+  EARLIER_TURNS_PROMPT_INLINE,
   PRIOR_TOOL_ACTIVITY_HEADER,
   PRIOR_TOOL_ACTIVITY_RECORD_HEADER,
 } from "./prompts";
+import { stripCitationMarkers, type CitationFormat } from "./inlineCitations";
 import {
   MESSAGE_TIME_PROMPT,
   answerTimeStamp,
@@ -451,6 +453,75 @@ export function priorCitationLines(
   return lines;
 }
 
+/**
+ * The previous answer with each [N] marker shown as the inline citation tag
+ * it stood for, under the handle its document has now. A marker whose
+ * document is no longer in this turn's index is removed, so the model never
+ * sees a marker it could copy without a source behind it.
+ */
+export function withPriorCitationTags(
+  text: string,
+  stored: unknown,
+  slugByDocumentId: ReadonlyMap<string, string>,
+  /**
+   * Each document's current version. A passage number means the version
+   * it was cited from; once the document has a newer one, the number may
+   * name other text, so the citation is replayed by its quote instead.
+   */
+  versionByDocumentId: ReadonlyMap<string, string | null | undefined> = new Map(),
+): string {
+  const tagByRef = new Map<number, string>();
+  if (Array.isArray(stored)) {
+    for (const citation of stored as Record<string, unknown>[]) {
+      if (!citation || typeof citation.ref !== "number") continue;
+      const tag = priorCitationTag(citation, slugByDocumentId, versionByDocumentId);
+      if (tag) tagByRef.set(citation.ref, tag);
+    }
+  }
+  return text.replace(/\[(\d{1,3})\]/g, (marker, n: string) => {
+    const tag = tagByRef.get(Number(n));
+    return tag ? `[[${tag}]]` : "";
+  });
+}
+
+function priorCitationTag(
+  citation: Record<string, unknown>,
+  slugByDocumentId: ReadonlyMap<string, string>,
+  versionByDocumentId: ReadonlyMap<string, string | null | undefined>,
+): string | null {
+  if (citation.kind === "case" && typeof citation.cluster_id === "number") {
+    const quote = firstQuote(citation);
+    return quote ? `case-${citation.cluster_id} "${quote}"` : null;
+  }
+  const slug =
+    typeof citation.document_id === "string"
+      ? slugByDocumentId.get(citation.document_id)
+      : undefined;
+  if (!slug) return null;
+  const sameVersion =
+    typeof citation.version_id === "string" &&
+    citation.version_id === versionByDocumentId.get(citation.document_id as string);
+  if (sameVersion && typeof citation.inline_locator === "string" && citation.inline_locator) {
+    return `${slug} ${citation.inline_locator}`;
+  }
+  const quote = firstQuote(citation);
+  return quote ? `${slug} "${quote}"` : null;
+}
+
+function firstQuote(citation: Record<string, unknown>): string | null {
+  const quotes = Array.isArray(citation.quotes)
+    ? (citation.quotes as Record<string, unknown>[])
+    : [];
+  const text = quotes.find((q) => typeof q?.quote === "string")?.quote ??
+    citation.quote;
+  if (typeof text !== "string" || !text.trim()) return null;
+  // A tag's quote cannot hold a double quote or close the tag.
+  return text
+    .replace(/["“”]/g, "'")
+    .replace(/\]\]/g, "] ]")
+    .slice(0, MAX_REPLAYED_QUOTE_CHARS);
+}
+
 export async function enrichWithPriorEvents(
   messages: ChatMessage[],
   chatId: string | null | undefined,
@@ -467,7 +538,24 @@ export async function enrichWithPriorEvents(
    * buildMessages, which explains the record in the system prompt.
    */
   recordForUser = false,
+  /**
+   * Inline: the previous answer's [N] markers are shown as the citation tags
+   * they stood for, so the model can cite that evidence again by copying a
+   * tag. Its cite_sources records are then not replayed.
+   */
+  citationFormat: CitationFormat = "cite_sources",
 ): Promise<ChatMessage[]> {
+  if (citationFormat === "inline") {
+    // Older answers' [N] markers point at citations the model cannot see,
+    // and would teach it to write markers instead of tags. The last answer
+    // gets its tags back below.
+    const last = messages.map((m) => m.role).lastIndexOf("assistant");
+    messages = messages.map((message, index) =>
+      message.role === "assistant" && index < last
+        ? { ...message, content: stripCitationMarkers(message.content ?? "") }
+        : message,
+    );
+  }
   if (!chatId) return messages;
   // Skip streaming reservations: routeStreaming inserts the assistant row
   // with content = null BEFORE the stream runs, so a crashed stream (or a
@@ -696,7 +784,10 @@ export async function enrichWithPriorEvents(
       `- approved ${approvalLabels.get(id) ?? "action"} has no recorded outcome. Tell the user to check the connected service before trying again; do not retry it yourself.`,
     );
   }
-  if (recordForUser) {
+  const inline = citationFormat === "inline";
+  // cite_sources: the earlier answer's citations are replayed as records of
+  // its cite_sources call. Inline: they ride in the answer as its tags.
+  if (recordForUser && !inline) {
     lines.push(
       ...priorCitationLines(lastRow?.citations, slugByDocumentId, untrustedRef),
     );
@@ -711,7 +802,20 @@ export async function enrichWithPriorEvents(
       "- Instruction: do not ask for any skipped input again. If drafting or editing a document, insert a descriptive placeholder in square brackets wherever a skipped value is required.",
     );
   }
-  if (lines.length === 0) return messages;
+  const tagged = inline
+    ? (text: string) =>
+        withPriorCitationTags(
+          text,
+          lastRow?.citations,
+          slugByDocumentId,
+          new Map(
+            Object.values(docIndex).flatMap((info) =>
+              info.document_id ? [[info.document_id, info.version_id] as const] : [],
+            ),
+          ),
+        )
+    : null;
+  if (lines.length === 0 && !tagged) return messages;
 
   let lastAssistantIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -722,7 +826,12 @@ export async function enrichWithPriorEvents(
   }
   if (lastAssistantIdx < 0) return messages;
   const enriched = messages.slice();
-  const target = enriched[lastAssistantIdx];
+  let target = enriched[lastAssistantIdx];
+  if (tagged) {
+    target = { ...target, content: tagged(target.content ?? "") };
+    enriched[lastAssistantIdx] = target;
+    if (lines.length === 0) return enriched;
+  }
   if (!recordForUser) {
     // Attach the summary to the last assistant message only.
     enriched[lastAssistantIdx] = {
@@ -844,15 +953,19 @@ export function buildMessages(
   time?: MessageTimeContext,
   /** The value enrichWithPriorEvents was given as `recordForUser`. */
   recordForUser = false,
+  /** How the answer cites documents; see inlineCitations. */
+  citationFormat: CitationFormat = "cite_sources",
 ) {
   const formatted: unknown[] = [];
   let systemContent =
     systemPromptMode === "replace"
       ? (systemPromptExtra?.trim() ?? "")
-      : buildSystemPrompt(includeResearchTools);
+      : buildSystemPrompt(includeResearchTools, citationFormat);
 
   if (recordForUser && systemContent) {
-    systemContent += `\n\n${EARLIER_TURNS_PROMPT}`;
+    systemContent += `\n\n${
+      citationFormat === "inline" ? EARLIER_TURNS_PROMPT_INLINE : EARLIER_TURNS_PROMPT
+    }`;
   }
   if (systemPromptMode === "append" && systemPromptExtra) {
     systemContent += `\n\n${systemPromptExtra.trim()}`;

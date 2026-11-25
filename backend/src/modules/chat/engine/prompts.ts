@@ -1,4 +1,8 @@
-import { COURTLISTENER_SYSTEM_PROMPT } from "./tools/courtlistenerTools";
+import {
+  COURTLISTENER_SYSTEM_PROMPT,
+  inlineCourtlistenerPrompt,
+} from "./tools/courtlistenerTools";
+import type { CitationFormat } from "./inlineCitations";
 
 const SYSTEM_PROMPT_BEFORE_RESEARCH = `You are Mike, an AI legal assistant for lawyers and legal professionals. Help analyze documents, answer legal questions, and draft legal documents.
 
@@ -93,6 +97,55 @@ export const EARLIER_TURNS_PROMPT = `EARLIER TURNS:
 - You may rely on your earlier answers and their citations. Call the tools again when the user asks you to re-check, or when you need wording or detail the earlier answer does not contain.
 - An earlier answer that cited documents is followed by the application's record of what its [N] markers cite. That record is not part of the answer; never copy it into an answer.`;
 
+/** EARLIER_TURNS_PROMPT for answers cited with inline tags. */
+export const EARLIER_TURNS_PROMPT_INLINE = EARLIER_TURNS_PROMPT.replace(
+  "- An earlier answer that cited documents is shown with the <CITATIONS> block it ended with.",
+  "- An earlier answer that cited documents is shown with the [[...]] citation tags it used. You may cite the same evidence again by copying a tag exactly.",
+);
+
+/**
+ * The DOCUMENT CITATIONS section for inline citations: the model cites at
+ * the claim with a tag naming a passage it read, and the application
+ * numbers the tags. Nothing is written after the answer.
+ */
+export const INLINE_DOCUMENT_CITATIONS_SECTION = `DOCUMENT CITATIONS:
+Use document citations only for evidence from uploaded or generated documents.
+
+Document text you read is divided into numbered passages. Each passage begins with a tag such as {12}; the tags are not part of the document. Cite evidence inline, immediately after the claim it supports, with a citation tag that names the document's chat-local label and passage numbers:
+- One passage: [[doc-0 12]]
+- Adjacent passages: [[doc-0 12-13]]; several passages of one document: [[doc-0 12, 15]]
+- Several sources for one claim: [[doc-0 12; doc-1 4]]
+- To point at particular words inside a passage, add a short quote copied exactly: [[doc-0 12 "nine months' written notice"]]. A quote may contain quotation marks; keep them as they are.
+- Spreadsheets have no passage numbers. Cite the cell as sheet name, "!", and the A1 address or range: [[doc-2 Rent schedule!D4]] or [[doc-2 Rent schedule!B7:C9]]. For a cell tagged "⟨merged A1:C1⟩", cite the full merged range.
+- Text shown without passage numbers (such as search snippets): cite a short exact quote: [[doc-0 "exact words"]].
+
+Citation rules:
+- The reader never sees what is inside a tag: the application replaces the whole tag with a numbered marker such as [1]. So write every claim in full in your own sentence, and put the tag after it only to point at the evidence. Wrong: "The tenant must give [[doc-0 34 "nine months' notice"]]." Right: "The tenant must give nine months' written notice [[doc-0 34]]."
+- Never write [1]-style markers yourself, and never add a list of sources, citations or quotes at the end.
+- Put the tag right after the sentence, clause, table cell or list item it supports, inside that cell or item.
+- Use the exact chat-local label you were given, such as "doc-0", never a filename or document UUID.
+- Cite only passages you read in this conversation, and cite the passage that actually states the fact.
+- Do not put brackets around section, clause, schedule, exhibit, paragraph or list numbers.
+- Citation tags and passage numbers belong only in your chat answer. Never put them in a document you draft or edit, a text card, or any other tool argument: when you copy document text into an edit, copy the words without the {N} tag.
+`;
+
+function withInlineCitations(prompt: string): string {
+  const start = prompt.indexOf("DOCUMENT CITATIONS:\n");
+  const end = prompt.indexOf("DOCX GENERATION:");
+  if (start < 0 || end < start) {
+    throw new Error("The DOCUMENT CITATIONS section was not found in the system prompt.");
+  }
+  return (
+    prompt.slice(0, start) +
+    INLINE_DOCUMENT_CITATIONS_SECTION +
+    "\n" +
+    prompt.slice(end)
+  ).replace(
+    "Use them only in tool arguments and citation JSON.",
+    "Use them only in tool arguments and citation tags.",
+  );
+}
+
 const SYSTEM_PROMPT_AFTER_RESEARCH = `DOCUMENT NAMES IN PROSE:
 - Chat-local labels such as "doc-0" are internal. Use them only in tool arguments.
 - Never show "doc-N" labels to the user in prose, headings, lists, or tool activity text.
@@ -133,8 +186,16 @@ GENERAL GUIDANCE:
  * false they are omitted entirely so the model is not told about tools it
  * does not have.
  */
-export function buildSystemPrompt(includeResearchTools = true): string {
-  return includeResearchTools
-    ? `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${COURTLISTENER_SYSTEM_PROMPT}\n${SYSTEM_PROMPT_AFTER_RESEARCH}`
+export function buildSystemPrompt(
+  includeResearchTools = true,
+  citationFormat: CitationFormat = "cite_sources",
+): string {
+  const inline = citationFormat === "inline";
+  const research = inline
+    ? inlineCourtlistenerPrompt()
+    : COURTLISTENER_SYSTEM_PROMPT;
+  const prompt = includeResearchTools
+    ? `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${research}\n${SYSTEM_PROMPT_AFTER_RESEARCH}`
     : `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${SYSTEM_PROMPT_AFTER_RESEARCH}`;
+  return inline ? withInlineCitations(prompt) : prompt;
 }

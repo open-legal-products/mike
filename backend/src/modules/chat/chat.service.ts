@@ -77,6 +77,11 @@ export {
   buildDocContext,
   buildWordChatSystemPrompt,
   withoutEmptyAssistantReservations,
+  chatCitationFormat,
+  annotatePassages,
+  rememberReadText,
+  stripCitationMarkers,
+  type CitationFormat,
 } from "./engine/index";
 export { generateAssistantChatTitle, logChatTitleFailure } from "./chat.title";
 
