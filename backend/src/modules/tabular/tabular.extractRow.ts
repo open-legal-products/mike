@@ -26,6 +26,7 @@ import type { TextExtractionCache } from "../../lib/textExtractionCache";
 // lease itself.
 
 import { ExtractionParseError } from "../../lib/extraction/failure";
+import { AppError } from "../../lib/appError";
 import { reportError } from "../../lib/observability/sentry";
 import { ExtractionBusyError, ExtractionLimitError } from "../../lib/extraction/limits";
 import { type UserApiKeys } from "../../lib/llm";
@@ -237,9 +238,16 @@ export async function extractRowColumns(args: {
                     .eq("review_id", reviewId)
                     .eq("row_id", row.id)
                     .eq("column_index", columnIndex);
-                await (generationId
-                    ? query.eq("generation_id", generationId)
+                const { data, error } = await (generationId
+                    ? query.eq("generation_id", generationId).select("id")
                     : query);
+                if (error) {
+                    received.delete(columnIndex);
+                    throw new AppError("tabular.generation_failed", "Could not save the extracted cell", { cause: error });
+                }
+                // A late worker whose claim was revoked must not publish
+                // a result that was never written, even if its model finished.
+                if (generationId && !data?.length) return;
                 await sink.done(row.id, columnIndex, result);
             },
             apiKeys,

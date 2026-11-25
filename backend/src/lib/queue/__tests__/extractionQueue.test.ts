@@ -120,6 +120,15 @@ describe("enqueueExtraction (single-cell)", () => {
 });
 
 describe("enqueueExtraction", () => {
+    it("keeps a job with a lost acknowledgement from swallowing a new generation", async () => {
+        await enqueueExtraction({ ...DATA, generationId: "old-generation" });
+        await enqueueExtraction({ ...DATA, generationId: "new-generation" });
+        expect(add.mock.calls.map(([, , options]) => options.jobId)).toEqual([
+            "extract_rev-1_row-1_old-generation",
+            "extract_rev-1_row-1_new-generation",
+        ]);
+    });
+
     it("dedupes with a deterministic jobId of extract_<reviewId>_<rowId>", () => {
         enqueueExtraction(DATA);
 

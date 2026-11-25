@@ -70,6 +70,8 @@ const ROW = {
     source_document_ids: ["doc-1"],
 };
 
+const claimedCells = { data: [{ column_index: 0, generation_id: GENERATION_ID }], error: null };
+
 function reviewDb(spec: FakeDbSpec = {}) {
     return makeFakeDb({
         tables: {
@@ -77,7 +79,7 @@ function reviewDb(spec: FakeDbSpec = {}) {
                 data: { columns_config: [COLUMN], model: "m", org_id: null },
                 error: null,
             },
-            tabular_cells: { data: [], error: null },
+            tabular_cells: claimedCells,
             ...spec.tables,
         },
     });
@@ -123,6 +125,18 @@ describe("runExtractionJob", () => {
             { db: reviewDb().db, publish: vi.fn() },
         );
         expect(setOperation).toHaveBeenLastCalledWith("tabular.cell");
+    });
+
+    it("skips a late delivery after the failed submission revoked its claim", async () => {
+        const fake = reviewDb({
+            tables: { tabular_cells: { data: [{ column_index: 0, generation_id: "next-generation" }], error: null } },
+        });
+        await run(fake.db, GENERATION_ID);
+        expect(service.extractRowColumns).not.toHaveBeenCalled();
+        expect(service.validateSelectedModel).not.toHaveBeenCalled();
+        expect(service.finishGenerationIfIdle).toHaveBeenCalledWith(
+            fake.db, REVIEW_ID, GENERATION_ID, console, "[extraction-worker]",
+        );
     });
 
     it("throws an incomplete extraction under its kind with the provider's error as the cause", async () => {
@@ -232,7 +246,7 @@ describe("runExtractionJob", () => {
         const fake = reviewDb({
             tables: {
                 tabular_cells: [
-                    { data: [], error: null },
+                    claimedCells,
                     { data: null, error: refused },
                 ],
             },

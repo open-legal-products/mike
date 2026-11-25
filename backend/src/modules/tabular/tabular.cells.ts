@@ -129,6 +129,7 @@ export async function clearTabularReviewCells(
                     reviewId,
                     rowIds,
                     columnIndexes,
+                    review.active_generation_id,
                 );
             } catch (err) {
                 log.error("[tabular/clear-cells] queue cancellation failed", err);

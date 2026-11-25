@@ -88,24 +88,22 @@ export function extractionJobId(
     reviewId: string,
     rowId: string,
     columnIndex?: number,
+    generationId?: string | null,
 ): string {
-    return columnIndex == null
-        ? `extract_${reviewId}_${rowId}`
-        : `extract_${reviewId}_${rowId}_${columnIndex}`;
+    const rowKey = `extract_${reviewId}_${rowId}`;
+    if (columnIndex != null) return `${rowKey}_${columnIndex}`;
+    return generationId ? `${rowKey}_${generationId}` : rowKey;
 }
 
 /**
  * Enqueue extraction for one row of a review. Retries transient failures
  * (LLM/network/storage hiccups) with exponential backoff.
  *
- * The jobId is deterministic on (reviewId, rowId) so a double submit — e.g.
- * a client reconnecting and re-POSTing /generate — is deduped by BullMQ into the
- * in-flight job instead of racing a second extraction over the same row.
- * We `removeOnComplete`/`removeOnFail` immediately (not keep-N) precisely so a
- * later re-run (regenerate) can enqueue the same jobId again; durable state
- * lives in the `tabular_cells` table, not in the job record.
+ * Full-row jobs dedupe within a generation. If the queue accepted a job but
+ * lost its reply, that job must not swallow a later generation's retry.
  */
 export async function enqueueExtraction(data: ExtractionJobData) {
+    const jobId = extractionJobId(data.reviewId, data.rowId, data.columnIndex, data.generationId);
     // Postgres driver: same job on the DB queue — same dedupe identity and
     // retry budget, same handler body (runExtractionJob). Live progress
     // frames are skipped in this mode; the SSE views' DB-poll backstops
@@ -114,7 +112,7 @@ export async function enqueueExtraction(data: ExtractionJobData) {
         return enqueueDbJob(createServerSupabase(), {
             kind: "extraction.extract",
             payload: data as unknown as Record<string, unknown>,
-            dedupeKey: extractionJobId(data.reviewId, data.rowId, data.columnIndex),
+            dedupeKey: jobId,
             maxAttempts: 3,
         });
     }
@@ -122,7 +120,7 @@ export async function enqueueExtraction(data: ExtractionJobData) {
     // hang the /generate request that is enqueuing this row.
     return withRedisTimeout("extraction enqueue", () =>
         getExtractionQueue().add("extract", data, {
-            jobId: extractionJobId(data.reviewId, data.rowId, data.columnIndex),
+            jobId,
             attempts: 3,
             backoff: { type: "exponential", delay: 2000 },
             removeOnComplete: true,
@@ -161,27 +159,25 @@ export async function removeQueuedExtractionJobs(
     reviewId: string,
     rowIds: string[],
     columnIndexes: number[],
+    generationId?: string | null,
 ): Promise<{ removed: number; canceled: number }> {
+    const jobIds = rowIds.flatMap((rowId) => [
+        extractionJobId(reviewId, rowId),
+        ...(generationId ? [extractionJobId(reviewId, rowId, undefined, generationId)] : []),
+        ...columnIndexes.map((c) => extractionJobId(reviewId, rowId, c)),
+    ]);
     // Postgres driver: one RPC deletes the pending rows and stamps a
     // persisted `canceled` marker into running ones — the exact analogue of
     // the remove + updateData split below (the RPC reports one merged count).
     if (!redisEnabled()) {
-        const keys = rowIds.flatMap((rowId) => [
-            extractionJobId(reviewId, rowId),
-            ...columnIndexes.map((c) => extractionJobId(reviewId, rowId, c)),
-        ]);
         const { data, error } = await createServerSupabase().rpc(
             "cancel_db_jobs",
-            { p_dedupe_keys: keys },
+            { p_dedupe_keys: jobIds },
         );
         if (error) throw new Error(error.message);
         return { removed: (data as number) ?? 0, canceled: 0 };
     }
     const queue = getExtractionQueue();
-    const jobIds = rowIds.flatMap((rowId) => [
-        extractionJobId(reviewId, rowId),
-        ...columnIndexes.map((c) => extractionJobId(reviewId, rowId, c)),
-    ]);
     // One pipelined EXISTS for every candidate id: most of them (every
     // per-column id of a row that was never regenerated on its own) name no
     // job at all, and asking BullMQ for each one cost a round trip apiece —

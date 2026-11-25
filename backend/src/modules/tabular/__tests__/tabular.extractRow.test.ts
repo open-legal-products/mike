@@ -10,6 +10,7 @@ vi.mock("../tabular.rows", () => ({
     loadRowDocumentText: (...a: unknown[]) => loadRowDocumentText(...a),
 }));
 
+import { tableDb } from "../../../__tests__/helpers/tableDb";
 import { ExtractionParseError } from "../../../lib/extraction/failure";
 import { ExtractionBusyError, ExtractionLimitError } from "../../../lib/extraction/limits";
 import { streamTabularGenerateSync } from "../tabular.generateStream";
@@ -44,9 +45,12 @@ function makeDb() {
                 state.filters[col] = vals;
                 return b;
             },
+            select() {
+                return b;
+            },
             then(onF: (v: unknown) => unknown) {
                 calls.push({ ...state, filters: { ...state.filters } });
-                return Promise.resolve({ data: null, error: null }).then(onF);
+                return Promise.resolve({ data: [{ id: "cell-id" }], error: null }).then(onF);
             },
         };
         return b;
@@ -360,52 +364,8 @@ describe("extractRowColumns generation isolation", () => {
                 generation_id: null as string | null,
             },
         ];
-        const db = {
-            from() {
-                const state: {
-                    payload?: Record<string, unknown>;
-                    filters: Record<string, unknown>;
-                } = { filters: {} };
-                const b: Record<string, unknown> = {
-                    update(payload: Record<string, unknown>) {
-                        state.payload = payload;
-                        return b;
-                    },
-                    insert() {
-                        return Promise.resolve({ data: null, error: null });
-                    },
-                    eq(col: string, val: unknown) {
-                        state.filters[col] = val;
-                        return b;
-                    },
-                    in(col: string, vals: unknown[]) {
-                        state.filters[col] = { in: vals };
-                        return b;
-                    },
-                    then(onF: (v: unknown) => unknown) {
-                        if (state.payload)
-                            for (const row of rows) {
-                                const matches = Object.entries(
-                                    state.filters,
-                                ).every(
-                                    ([col, val]) => {
-                                        const cell = (row as Record<string, unknown>)[col];
-                                        return val && typeof val === "object" && "in" in val
-                                            ? (val.in as unknown[]).includes(cell)
-                                            : cell === val;
-                                    },
-                                );
-                                if (matches) Object.assign(row, state.payload);
-                            }
-                        return Promise.resolve({
-                            data: null,
-                            error: null,
-                        }).then(onF);
-                    },
-                };
-                return b;
-            },
-        };
+        const { db } = tableDb({ tabular_cells: rows });
+        const sink = sinkSpy();
 
         queryTabularAllColumns.mockImplementation(
             async (_m, _f, _t, cols, onResult) => {
@@ -415,7 +375,7 @@ describe("extractRowColumns generation isolation", () => {
         );
 
         await extractRowColumns({
-            db: db as never,
+            db,
             reviewId: "rev-1",
             row: ROW,
             columns: [COLUMNS[0]],
@@ -425,10 +385,11 @@ describe("extractRowColumns generation isolation", () => {
             ]),
             model: "m",
             apiKeys: {},
-            sink: sinkSpy(),
+            sink,
             generationId: "gen-1",
         });
 
+        expect(sink.done).not.toHaveBeenCalled();
         expect(rows[0].status).toBe("done");
         expect(rows[0].content).toBe(JSON.stringify({ summary: "G2 WINNER" }));
         expect(rows[0].generation_id).toBeNull();

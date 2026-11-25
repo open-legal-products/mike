@@ -42,9 +42,9 @@ import {
 
 function dbStub() {
   const b: Record<string, unknown> = {};
-  for (const method of ["from", "update", "insert", "eq"]) b[method] = () => b;
+  for (const method of ["from", "update", "insert", "eq", "select"]) b[method] = () => b;
   b.then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: null, error: null }).then(resolve);
+    Promise.resolve({ data: [{ id: "cell-id" }], error: null }).then(resolve);
   return b as never;
 }
 afterEach(() => {
