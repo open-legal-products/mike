@@ -16,9 +16,7 @@ import { downloadFileWithinLimit } from "../../lib/storage";
 import type { Db } from "./documents.shared";
 import { ensureDocumentAccess } from "./documents.access";
 
-export const COMPARE_MAX_VERSION_BYTES = 20 * 1024 * 1024;
-
-// Reserve capacity before reading either object. Each comparison owns up to two 20 MiB inputs.
+// Reserve capacity before reading either comparison input.
 let comparisonInProgress = false;
 
 export const COMPARE_AUTHOR = "Mike comparison";
@@ -73,27 +71,31 @@ export async function compareVersions(params: {
         return failure("not_found", "Version not found");
     if (!isDocx(base) || !isDocx(target))
         return failure("validation", "Only Word (.docx) versions can be compared.");
-    const tooLarge = (bytes: number | null | undefined) => (bytes ?? 0) > COMPARE_MAX_VERSION_BYTES;
-    if (tooLarge(base.size_bytes) || tooLarge(target.size_bytes))
-        return failure("too_large", "These versions are too large to compare.");
-
     if (comparisonInProgress)
         return failure("busy", "Another comparison is running. Please try again shortly.");
     comparisonInProgress = true;
     try {
+        const engine = params.engine ?? getDocxDiffEngine();
+        const readInput = (version: ActiveVersion) => (version.size_bytes ?? 0) > engine.maxInputBytes
+            ? "too_large" as const
+            : downloadFileWithinLimit(version.storage_path, engine.maxInputBytes);
         // Both reads own the slot, including when one of them fails.
-        const [original, revised] = await Promise.allSettled([
-            downloadFileWithinLimit(base.storage_path, COMPARE_MAX_VERSION_BYTES),
-            downloadFileWithinLimit(target.storage_path, COMPARE_MAX_VERSION_BYTES),
-        ]);
+        const [original, revised] = await Promise.allSettled([readInput(base), readInput(target)]);
         if (original.status === "rejected") throw original.reason;
         if (revised.status === "rejected") throw revised.reason;
+        if (original.value === "too_large" || revised.value === "too_large") {
+            const name = (version: ActiveVersion, role: string) =>
+                `${version.filename || "Word document"} (${version.version_number == null ? role : label(version)})`;
+            const files = [];
+            if (original.value === "too_large") files.push(name(base, "baseline"));
+            if (revised.value === "too_large") files.push(name(target, "target"));
+            const limitMiB = engine.maxInputBytes / (1024 * 1024);
+            return failure("too_large",
+                `${files.join(" and ")} ${files.length === 1 ? "exceeds" : "exceed"} the ${limitMiB} MiB limit for comparison.`,
+                "comparison_input_too_large");
+        }
         if (original.value === null || revised.value === null)
             return failure("not_found", "Document bytes not available");
-        if (original.value === "too_large" || revised.value === "too_large")
-            return failure("too_large", "These versions are too large to compare.");
-
-        const engine = params.engine ?? getDocxDiffEngine();
         const redline = await engine.compare(original.value, revised.value, {
             author: COMPARE_AUTHOR,
             date: params.now ?? new Date(),

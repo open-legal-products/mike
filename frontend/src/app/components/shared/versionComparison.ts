@@ -6,12 +6,6 @@ export interface VersionComparison {
     target: DocumentVersion;
 }
 
-export const COMPARISON_SIZE_MESSAGE = "Each Word version must be 20 MiB or smaller to compare.";
-
-export function exceedsComparisonLimit({ base, target }: VersionComparison): boolean {
-    return Math.max(base.size_bytes ?? 0, target.size_bytes ?? 0) > 20 * 1024 * 1024;
-}
-
 function isWordVersion(version: DocumentVersion): boolean {
     // Older rows have no file_type; their filename still carries the suffix.
     const type = version.file_type?.toLowerCase() || version.filename?.split(".").pop()?.toLowerCase();

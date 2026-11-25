@@ -107,9 +107,13 @@ versions also closes the comparison.
 
 `GET /single-documents/:documentId/versions/compare?base=<id>&target=<id>`
 returns the generated Word file. The caller must have read access, and both
-versions must belong to the document and be Word files of 20 MiB or less.
-The menu explains the limit when a version's size is known. Tracked changes
-pending in either input are accepted before comparison, as in Word's Compare.
+versions must be Word files belonging to the document. Docxodus accepts up
+to 20 MiB per version. If either or both exceed that limit, the comparison
+returns HTTP 413 and the viewer names each oversized file and version. This
+limit applies only to generating a redline. Tracked changes pending in either
+input are accepted before comparison, as in Word's Compare.
+
+![Comparison naming both oversized Word versions, with their original downloads available in version history](assets/word-comparison/size-limit.png)
 
 `DocxDiffEngine` in `backend/src/lib/docxDiff` selects the implementation using
 `DOCX_DIFF_ENGINE`. The default is [Docxodus](https://github.com/JSv4/Docxodus).

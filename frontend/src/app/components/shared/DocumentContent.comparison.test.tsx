@@ -145,11 +145,13 @@ it("suspends the original edit actions until the user closes the comparison", as
 });
 
 it.each([413, 429])("explains HTTP %s and offers a retry only for transient failures", async status => {
-    vi.mocked(authenticatedFetch).mockResolvedValueOnce(new Response(JSON.stringify({ detail: status === 429 ? "Another comparison is running. Please try again shortly." : "Too large" }), { status }));
+    const body = status === 429 ? { detail: "Another comparison is running. Please try again shortly." }
+        : { code: "comparison_input_too_large", detail: "MSA.docx (V2) and MSA.docx (V3) exceed the 20 MiB limit for comparison." };
+    vi.mocked(authenticatedFetch).mockResolvedValueOnce(new Response(JSON.stringify(body), { status }));
     const user = userEvent.setup();
     render(<DocumentContent document={panelDocument("v3", 3)} mode={{ kind: "document" }} onVersionChange={vi.fn()} />);
     await openComparison(user, 3, 2);
-    expect(await screen.findByRole("alert")).toHaveTextContent(status === 413 ? /20 MiB/ : /Another comparison/);
+    expect(await screen.findByRole("alert")).toHaveTextContent(body.detail);
     expect(screen.getByRole("button", { name: "Download comparison" })).toBeDisabled();
     const retry = screen.queryByRole("button", { name: "Retry comparison" });
     if (status === 413) expect(retry).toBeNull();

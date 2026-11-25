@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { getDocumentComparison } from "@/app/lib/mikeApi";
 import { downloadBlob } from "@/app/lib/downloadDocument";
 import { notifyError, reportFault } from "@/app/lib/userFacingError";
-import { COMPARISON_SIZE_MESSAGE, versionLabel, type VersionComparison } from "@/app/components/shared/versionComparison";
+import { versionLabel, type VersionComparison } from "@/app/components/shared/versionComparison";
 
 export interface OpenComparison {
     pair: VersionComparison;
@@ -56,11 +56,8 @@ export function useDocumentComparison(
             setCurrent(active => active === selection ? { ...selection, bytes } : active);
         }, cause => {
             if (controller.signal.aborted) return;
-            const failure = reportFault(cause, { action: "compare these versions", operation: "documents.directory" });
-            const error = {
-                message: failure.status === 413 ? COMPARISON_SIZE_MESSAGE : failure.message,
-                retryable: failure.retryable,
-            };
+            const { message, retryable } = reportFault(cause, { action: "compare these versions", operation: "documents.directory" });
+            const error = { message, retryable };
             setCurrent(active => active === selection ? { ...selection, error } : active);
         });
     }

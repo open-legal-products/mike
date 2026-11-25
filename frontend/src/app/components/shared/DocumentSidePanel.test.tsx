@@ -112,13 +112,17 @@ it("opens and closes a comparison from version history without a chat", async ()
     expect(screen.getByRole("heading", { name: "agreement-v2.docx" })).toBeVisible();
 });
 
-it("explains when either version exceeds the comparison size limit", () => {
+it("names the oversized version on compare and returns to version downloads on close", async () => {
+    const message = "agreement-v1.docx (V1) exceeds the 20 MiB limit for comparison.";
+    vi.mocked(getDocumentComparison).mockRejectedValueOnce(Object.assign(new Error(message), { status: 413 }));
     renderPanel(vi.fn(), {
         readOnly: false,
         versions: [{ ...version(1), size_bytes: 21 * 1024 * 1024 }, version(2)],
     });
-    expect(screen.getByRole("button", { name: "Compare V2 with V1" })).toBeDisabled();
-    expect(screen.getByText(/20 MiB/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Compare V2 with V1" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    fireEvent.click(screen.getByRole("button", { name: "Close comparison" }));
+    expect(screen.getByRole("button", { name: "Download Version 1" })).toBeEnabled();
 });
 
 it("compares the displayed version with a nonconsecutive baseline from the menu", async () => {

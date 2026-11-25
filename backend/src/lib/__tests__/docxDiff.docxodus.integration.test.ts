@@ -29,6 +29,13 @@ describe("Docxodus diff engine (real WebAssembly runtime)", () => {
     expect(await validateDocxPackage(arrayBuffer(result))).toBe(true);
   });
 
+  it("rejects oversized inputs at the Docxodus boundary", async () => {
+    const oversized = Buffer.alloc(20 * 1024 * 1024 + 1);
+    for (const pair of [[oversized, revised], [original, oversized]]) {
+      await expect(docxodusDiffEngine.compare(pair[0], pair[1], OPTIONS)).rejects.toThrow("Docxodus size limit");
+    }
+  });
+
   it("reads as the revised document once every change is accepted", async () => {
     // extractDocxBodyText is Mike's accepted view: insertions kept, deletions dropped.
     expect(await extractDocxBodyText(result)).toBe(await extractDocxBodyText(revised));

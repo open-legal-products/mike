@@ -2,6 +2,7 @@
 // real route, service, version lookup and Docxodus engine, over an in-memory
 // database and object store holding real .docx files.
 import express from "express";
+import { Readable } from "node:stream";
 import request from "supertest";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { agreementDocx, ORIGINAL_CLAUSES, REVISED_CLAUSES } from "../../../__tests__/helpers/docxFixtures";
@@ -30,6 +31,8 @@ vi.mock("../documents.access", async (importOriginal) => ({
 vi.mock("../../../lib/storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/storage")>()),
   downloadFileWithinLimit: async (key: string) => state.objects.get(key) ?? null,
+  headFile: async (key: string) => ({ size: state.objects.get(key)!.length }),
+  createFileReadStream: (key: string) => Readable.from([state.objects.get(key)!]),
 }));
 import { documentsRouter } from "../documents.routes";
 
@@ -54,12 +57,14 @@ beforeAll(async () => {
       row("v1", 1), row("v2", 2),
       row("v3", 3, { filename: "MSA.pdf", file_type: "pdf" }),
       row("v4", 4),
+      row("v5", 5, { size_bytes: 20 * 1024 * 1024 + 1 }),
       row("s1", 1, { document_id: "secret", storage_path: "secret/s1" }),
     ],
   }).db;
   state.objects.set("doc/v1", await agreementDocx(ORIGINAL_CLAUSES));
   state.objects.set("doc/v2", await agreementDocx(REVISED_CLAUSES));
   state.objects.set("doc/v4", Buffer.from("this upload was never a Word document"));
+  state.objects.set("doc/v5", Buffer.alloc(20 * 1024 * 1024 + 1));
   state.objects.set("secret/s1", await agreementDocx(["Confidential settlement terms."]));
 }, 60_000);
 
@@ -91,5 +96,13 @@ describe("GET /single-documents/:documentId/versions/compare", () => {
     const response = await compare("base=s1&target=v1", "secret").expect(404);
     expect(response.body).toEqual({ detail: "Document not found" });
     expect(JSON.stringify(response.body)).not.toContain("settlement");
+  });
+
+  it("rejects only the comparison and still serves the oversized version for preview and download", async () => {
+    const response = await compare("base=v1&target=v5").expect(413);
+    expect(response.body).toEqual({ code: "comparison_input_too_large",
+      detail: "MSA.docx (V5) exceeds the 20 MiB limit for comparison." });
+    const file = await request(app).get("/single-documents/doc/file?version_id=v5").buffer(true).parse(binary).expect(200);
+    expect(file.body.byteLength).toBe(state.objects.get("doc/v5")!.length);
   });
 });

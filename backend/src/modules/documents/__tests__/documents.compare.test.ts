@@ -15,8 +15,9 @@ vi.mock("../../../lib/storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/storage")>()),
   downloadFileWithinLimit: mocks.downloadFileWithinLimit,
 }));
-import { COMPARE_AUTHOR, COMPARE_MAX_VERSION_BYTES, compareVersions } from "../documents.compare";
+import { COMPARE_AUTHOR, compareVersions } from "../documents.compare";
 
+const ENGINE_LIMIT = 1024 * 1024;
 const NOW = new Date("2026-11-24T12:00:00Z");
 const version = (id: string, n: number, extra: Record<string, unknown> = {}) => ({
   id, document_id: "doc", version_number: n, storage_path: `doc/${id}.docx`, filename: "MSA.docx",
@@ -29,7 +30,7 @@ function setup(versions = [version("v1", 1), version("v2", 2), version("v3", 3)]
     document_versions: [...versions, version("x1", 1, { document_id: "other", storage_path: "other/x1.docx" })],
   });
   const compare = vi.fn<DocxDiffEngine["compare"]>(async () => Buffer.from("redline"));
-  const engine: DocxDiffEngine = { id: "fake", compare };
+  const engine: DocxDiffEngine = { id: "fake", maxInputBytes: ENGINE_LIMIT, compare };
   const run = (baseVersionId: string, targetVersionId: string, documentId = "doc") => compareVersions({
     documentId, userId: "u", userEmail: "u@example.com", baseVersionId, targetVersionId, db: fake.db, engine, now: NOW,
   });
@@ -50,7 +51,7 @@ describe("compareVersions", () => {
       data: { redline: Buffer.from("redline"), filename: "MSA (V1 to V3 comparison).docx" },
     });
     expect(mocks.downloadFileWithinLimit.mock.calls).toEqual([
-      ["doc/v1.docx", COMPARE_MAX_VERSION_BYTES], ["doc/v3.docx", COMPARE_MAX_VERSION_BYTES],
+      ["doc/v1.docx", ENGINE_LIMIT], ["doc/v3.docx", ENGINE_LIMIT],
     ]);
     const [original, revised, options] = compare.mock.calls[0];
     expect(original.toString()).toBe("doc/v1.docx");
@@ -102,17 +103,27 @@ describe("compareVersions", () => {
     expect(await legacy.run("v1", "v2")).toMatchObject({ ok: true });
   });
 
-  it("refuses an oversized version from its metadata, without downloading it", async () => {
-    const { run, compare } = setup([version("v1", 1), version("v2", 2, { size_bytes: COMPARE_MAX_VERSION_BYTES + 1 })]);
-    expect(await run("v1", "v2")).toMatchObject({ ok: false, kind: "too_large" });
-    expect(mocks.downloadFileWithinLimit).not.toHaveBeenCalled();
-    expect(compare).not.toHaveBeenCalled();
+  it("uses the engine's inclusive per-version limit, even when the pair exceeds it in total", async () => {
+    const { run, compare } = setup([version("v1", 1, { size_bytes: ENGINE_LIMIT }), version("v2", 2, { size_bytes: ENGINE_LIMIT })]);
+    mocks.downloadFileWithinLimit.mockResolvedValue(Buffer.alloc(ENGINE_LIMIT));
+    expect(await run("v1", "v2")).toMatchObject({ ok: true });
+    expect(compare).toHaveBeenCalledOnce();
   });
 
-  it.each([null, 1000])("refuses an oversized object with stored size %s", async size => {
-    const { run, compare } = setup([version("v1", 1, { size_bytes: size }), version("v2", 2)]);
-    mocks.downloadFileWithinLimit.mockResolvedValue("too_large");
-    expect(await run("v1", "v2")).toMatchObject({ ok: false, kind: "too_large" });
+  it.each([
+    [true, false, "MSA.docx (V1) exceeds"],
+    [false, true, "Final.docx (V2) exceeds"],
+    [true, true, "MSA.docx (V1) and Final.docx (V2) exceed"],
+  ] as const)("reports oversized inputs (base=%s, target=%s) from metadata and actual bytes", async (baseOver, targetOver, names) => {
+    const { run, compare } = setup([
+      version("v1", 1, { size_bytes: baseOver ? ENGINE_LIMIT + 1 : null }),
+      version("v2", 2, { size_bytes: 1000, filename: "Final.docx" }),
+    ]);
+    mocks.downloadFileWithinLimit.mockImplementation(async key =>
+      key === "doc/v2.docx" && targetOver ? "too_large" : Buffer.alloc(4));
+    expect(await run("v1", "v2")).toEqual({ ok: false, kind: "too_large", code: "comparison_input_too_large",
+      detail: `${names} the 1 MiB limit for comparison.` });
+    if (baseOver) expect(mocks.downloadFileWithinLimit).not.toHaveBeenCalledWith("doc/v1.docx", ENGINE_LIMIT);
     expect(compare).not.toHaveBeenCalled();
   });
 
@@ -120,6 +131,16 @@ describe("compareVersions", () => {
     const { run, compare } = setup();
     mocks.downloadFileWithinLimit.mockImplementation(async (key: string) => key.includes("v2") ? null : Buffer.alloc(4));
     expect(await run("v1", "v2")).toEqual({ ok: false, kind: "not_found", detail: "Document bytes not available" });
+    expect(compare).not.toHaveBeenCalled();
+  });
+
+  it("identifies both inputs from storage when neither version has a recorded size or number", async () => {
+    const legacy = { size_bytes: null, version_number: null };
+    const { run, compare } = setup([version("v1", 1, legacy), version("v2", 2, legacy)]);
+    mocks.downloadFileWithinLimit.mockResolvedValue("too_large");
+    expect(await run("v1", "v2")).toMatchObject({
+      kind: "too_large", detail: "MSA.docx (baseline) and MSA.docx (target) exceed the 1 MiB limit for comparison.",
+    });
     expect(compare).not.toHaveBeenCalled();
   });
 

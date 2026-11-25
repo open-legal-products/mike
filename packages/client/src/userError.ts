@@ -175,6 +175,7 @@ export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     upload_session_rate_limit_exceeded: "rate_limited",
     // Size limits
     request_too_large: "payload_too_large",
+    comparison_input_too_large: "payload_too_large",
     upload_file_too_large: "payload_too_large",
     upload_batch_too_large: "payload_too_large",
     // Input the user can correct

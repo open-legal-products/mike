@@ -149,13 +149,15 @@ it("allows a newer baseline while the first version is displayed", async () => {
     expect(screen.queryByRole("menuitem", { name: "Compare with V1" })).toBeNull();
 });
 
-it.each([0, 1])("explains the file size limit when either version exceeds it", async index => {
+it.each([0, 1])("lets the comparison engine decide whether version at index %i is too large", async index => {
     vi.mocked(listDocumentVersions).mockResolvedValue({
         current_version_id: "v2", versions: versions.map((version, i) =>
             ({ ...version, size_bytes: i === index ? 20 * 1024 * 1024 + 1 : null })),
     });
     const user = userEvent.setup();
-    render(<DocumentVersionPicker documentId="doc" onSelect={vi.fn()} onCompare={vi.fn()} />);
+    const onCompare = vi.fn();
+    render(<DocumentVersionPicker documentId="doc" onSelect={vi.fn()} onCompare={onCompare} />);
     await user.click(await screen.findByRole("button", { name: /Choose document version/ }));
-    expect(screen.getByRole("menuitem", { name: /Compare with V1.*20 MiB/ })).toHaveAttribute("aria-disabled", "true");
+    await user.click(await screen.findByRole("menuitem", { name: "Compare with V1" }));
+    expect(onCompare).toHaveBeenCalledWith(expect.objectContaining({ base: expect.objectContaining({ id: "v1" }) }));
 });

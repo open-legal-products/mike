@@ -53,7 +53,7 @@ export function DocumentComparisonView({ documentId, comparison, onRetry }: {
     if (error) {
         return (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-5 text-sm">
-                <p role="alert">{error.message}</p>
+                <p role="alert" className="[overflow-wrap:anywhere]">{error.message}</p>
                 {error.retryable && <TextButtonUI onClick={onRetry}>Retry comparison</TextButtonUI>}
             </div>
         );

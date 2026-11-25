@@ -24,7 +24,7 @@ import { DocxView } from "@/app/components/shared/views/DocxView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { DocumentComparisonTitle, DocumentComparisonView } from "./DocumentComparisonView";
 import { ComparisonMenuItems } from "./ComparisonMenuItems";
-import { versionComparisons, type VersionComparison, COMPARISON_SIZE_MESSAGE, exceedsComparisonLimit, versionLabel } from "./versionComparison";
+import { versionComparisons, type VersionComparison, versionLabel } from "./versionComparison";
 import { useDocumentComparison } from "@/app/hooks/useDocumentComparison";
 import { CloseButton, Dropdown, DropdownContent, DropdownTrigger, PillButtonUI, TextButtonUI } from "@mike/ui";
 import type { Document } from "@/app/components/shared/types";
@@ -331,13 +331,10 @@ export function DocumentSidePanel({
             </DropdownContent>
         </Dropdown>
     ) : firstPair && (
-        <>
-            <TextButtonUI size="xs" disabled={exceedsComparisonLimit(firstPair)} onClick={() => compare(firstPair)}>
-                <GitCompareArrows aria-hidden="true" className="h-3.5 w-3.5" />
-                Compare {versionLabel(firstPair.target)} with {versionLabel(firstPair.base)}
-            </TextButtonUI>
-            {exceedsComparisonLimit(firstPair) && <span className="text-xs text-muted-foreground">{COMPARISON_SIZE_MESSAGE}</span>}
-        </>
+        <TextButtonUI size="xs" onClick={() => compare(firstPair)}>
+            <GitCompareArrows aria-hidden="true" className="h-3.5 w-3.5" />
+            Compare {versionLabel(firstPair.target)} with {versionLabel(firstPair.base)}
+        </TextButtonUI>
     );
 
     async function handleSaveName() {
