@@ -16,8 +16,27 @@ import {
   getUserExportStatus,
   startUserExport,
   type AuditEvent,
+  type Org,
 } from "@/app/lib/mikeApi";
 import MyActivitySettingsPage from "./page";
+
+// The organizations the person belongs to, as the app shell's provider
+// would supply them. `null` is "not loaded", as outside the provider.
+const workspaceState = vi.hoisted(() => ({
+  organizations: null as Org[] | null,
+}));
+vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>()),
+  useWorkspace: () => ({
+    workspaceId: null,
+    organizations: workspaceState.organizations,
+    activeOrganization: null,
+    orgApiKeys: null,
+    setWorkspace: () => {},
+    refreshOrganizations: async () => {},
+    refreshOrgApiKeys: async () => {},
+  }),
+}));
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -157,6 +176,7 @@ describe("MyActivitySettingsPage", () => {
   });
 
   beforeEach(() => {
+    workspaceState.organizations = null;
     // Pin local calendar dates while retaining real timers for user-event.
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 5, 15, 12, 0, 0));
@@ -253,14 +273,20 @@ describe("MyActivitySettingsPage", () => {
     expect(
       screen.getByRole("button", { name: "Filter by action" }),
     ).toBeInTheDocument();
-    const applicationHeader = screen.getByText("Application", {
+    const featureHeader = screen.getByText("Feature", {
       exact: true,
     }).parentElement!;
     expect(
-      within(applicationHeader).getByRole("button", {
-        name: "Filter by application",
+      within(featureHeader).getByRole("button", {
+        name: "Filter by feature",
       }),
     ).toBeInTheDocument();
+    expect(screen.queryByText("Application")).not.toBeInTheDocument();
+    // Someone with only Personal has nothing to tell apart.
+    expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Filter by workspace" }),
+    ).not.toBeInTheDocument();
     const row = screen.getByRole("button", {
       name: `View details for ${EVENT.title}`,
     });
@@ -281,10 +307,14 @@ describe("MyActivitySettingsPage", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Filter by application" }),
+      screen.getByRole("button", { name: "Filter by feature" }),
     );
+    // Playbooks carries its sidebar icon like the other features.
+    expect(
+      screen.getByRole("menuitem", { name: "Playbooks" }).querySelector("img"),
+    ).not.toBeNull();
     await user.click(
-      screen.getByRole("menuitem", { name: "Word" }),
+      screen.getByRole("menuitem", { name: "Word add-in" }),
     );
     await waitFor(() =>
       expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
@@ -293,9 +323,9 @@ describe("MyActivitySettingsPage", () => {
       ),
     );
     await user.click(
-      screen.getByRole("button", { name: "Filter by application" }),
+      screen.getByRole("button", { name: "Filter by feature" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "All applications" }));
+    await user.click(screen.getByRole("menuitem", { name: "All features" }));
     await waitFor(() =>
       expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
         expect.objectContaining({ surface: undefined, page: 1 }),
@@ -334,6 +364,102 @@ describe("MyActivitySettingsPage", () => {
         sortDirection: "asc",
         ...expectedDefaultDateRange(),
       }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("names each row's workspace and narrows personal activity to one, including its export", async () => {
+    const user = userEvent.setup();
+    workspaceState.organizations = [
+      { id: "org-a", name: "Acme LLP", created_by: null, role: "member" },
+      { id: "org-b", name: "Beacon Partners", created_by: null, role: "admin" },
+    ];
+    mockedGetAuditHistory.mockResolvedValue({
+      events: [
+        EVENT,
+        { ...EVENT, id: "event-2", title: "Firm memo", org_id: "org-a", org_name: "Acme LLP" },
+        { ...EVENT, id: "event-3", title: "Old matter", org_id: "org-gone", org_name: null },
+      ],
+      total: 3,
+      page: 1,
+      pageSize: 50,
+    });
+    render(<MyActivitySettingsPage />);
+    await screen.findByText(EVENT.title!);
+
+    const row = (title: string) =>
+      screen.getByRole("button", { name: `View details for ${title}` });
+    expect(within(row(EVENT.title!)).getByTitle("Personal")).toHaveTextContent("Personal");
+    expect(within(row("Firm memo")).getByTitle("Acme LLP")).toBeVisible();
+    // An organization that no longer exists is still not passed off as Personal.
+    expect(within(row("Old matter")).getByTitle("Organization")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Filter by workspace" }));
+    expect(screen.getByRole("menuitem", { name: "All workspaces" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Personal" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Beacon Partners" })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Acme LLP" }));
+    await waitFor(() =>
+      expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ workspace: "org-a", page: 1 }),
+        expect.any(AbortSignal),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "My Activity actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export" }));
+    await user.click(screen.getByRole("button", { name: "Export CSV" }));
+    await waitFor(() =>
+      expect(mockedStartUserExport).toHaveBeenCalledWith(
+        "audit-csv",
+        expect.objectContaining({ workspace: "org-a" }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filter by workspace" }));
+    await user.click(screen.getByRole("menuitem", { name: "All workspaces" }));
+    await waitFor(() =>
+      expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ workspace: undefined, page: 1 }),
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("shows the workspace in event details for personal activity only", async () => {
+    const user = userEvent.setup();
+    mockedGetAuditHistory.mockResolvedValue({
+      events: [{ ...EVENT, org_id: "org-a", org_name: "Acme LLP", surface: "word" }],
+      total: 1,
+      page: 1,
+      pageSize: 50,
+    });
+    render(<MyActivitySettingsPage />);
+    // A row from an organization shows the column even with no memberships loaded.
+    expect(await screen.findByTitle("Acme LLP")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: `View details for ${EVENT.title}` }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Workspace")).toBeInTheDocument();
+    expect(within(dialog).getByText("Feature")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Word add-in").length).toBeGreaterThan(0);
+    expect(within(dialog).queryByText("Application")).not.toBeInTheDocument();
+  });
+
+  it("never offers a workspace filter in an organization's audit log", async () => {
+    workspaceState.organizations = [
+      { id: "org-a", name: "Acme LLP", created_by: null, role: "owner" },
+    ];
+    mockedGetAuditHistory.mockResolvedValue({
+      events: [{ ...EVENT, org_id: "org-a" }],
+      total: 1,
+      page: 1,
+      pageSize: 50,
+    });
+    render(<AuditHistory orgId="org-a" />);
+    await screen.findByText(EVENT.title!);
+    expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
+    expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
+      expect.objectContaining({ orgId: "org-a", workspace: undefined }),
       expect.any(AbortSignal),
     );
   });

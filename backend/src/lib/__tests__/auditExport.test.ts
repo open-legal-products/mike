@@ -62,8 +62,8 @@ describe("buildAuditCsv", () => {
         ]);
         const csv = await buildAuditCsv(db, "u1", "u1@example.com", query);
         expect(csv.split("\n")).toEqual([
-            "created_at,user,action,status,title,application,project_id,model",
-            "2026-08-10T08:30:00.000Z,lawyer@example.com,document.edited,completed,Share purchase agreement,project,p1,gpt-5",
+            "created_at,user,action,status,title,application,project_id,model,workspace,organization_id",
+            "2026-08-10T08:30:00.000Z,lawyer@example.com,document.edited,completed,Share purchase agreement,project,p1,gpt-5,Personal,",
         ]);
     });
 
@@ -213,8 +213,8 @@ describe("audit CSV user column", () => {
         const csv = await buildAuditCsv(db, "u1", undefined, query);
         expect(wasProfileLookupRun()).toBe(false);
         expect(csv.split("\n")).toEqual([
-            "created_at,user,action,status,title,application,project_id,model",
-            "2026-08-10T08:30:00.000Z,lawyer@example.com,document.edited,completed,Share purchase agreement,project,p1,gpt-5",
+            "created_at,user,action,status,title,application,project_id,model,workspace,organization_id",
+            "2026-08-10T08:30:00.000Z,lawyer@example.com,document.edited,completed,Share purchase agreement,project,p1,gpt-5,Personal,",
         ]);
     });
 });
@@ -223,7 +223,12 @@ describe("audit CSV user column", () => {
 // cap as PostgREST. Counts describe the full matching set, not the capped page.
 function makePagedAuditDb(
     events: Record<string, unknown>[],
-    options: { projectIds?: string[]; maxRows?: number; failAt?: number } = {},
+    options: {
+        projectIds?: string[];
+        maxRows?: number;
+        failAt?: number;
+        organizations?: { id: string; name: string }[];
+    } = {},
 ) {
     const projectIds = options.projectIds ?? ["project"];
     const ranges: [number, number][] = [];
@@ -240,7 +245,9 @@ function makePagedAuditDb(
                                 user_id: "u1",
                                 org_id: null,
                             }))
-                          : [];
+                          : table === "organizations"
+                            ? [...(options.organizations ?? [])]
+                            : [];
                 const ordering: { column: string; ascending: boolean }[] = [];
                 const builder = {
                     select: () => builder,
@@ -419,4 +426,81 @@ describe("audit pagination with tied sort values", () => {
             expect(actual).toEqual(eventRows(100).map((row) => row.id));
         },
     );
+});
+
+describe("personal activity workspaces", () => {
+    const ORG_A = "0b6f6f4e-6b1c-4f4e-9a57-3a0c3c1f0a01";
+    const ORG_GONE = "0b6f6f4e-6b1c-4f4e-9a57-3a0c3c1f0a02";
+    const rows = [
+        { id: "1", created_at: "2026-08-10T08:30:00.000Z", user_id: "u1", user_email: "u1@example.com", action: "chat.message", status: "completed", title: "Personal note", surface: "assistant", org_id: null },
+        { id: "2", created_at: "2026-08-10T08:31:00.000Z", user_id: "u1", user_email: "u1@example.com", action: "document.edited", status: "completed", title: "Firm memo", surface: "project", org_id: ORG_A },
+        { id: "3", created_at: "2026-08-10T08:32:00.000Z", user_id: "u1", user_email: "u1@example.com", action: "document.edited", status: "completed", title: "Old matter", surface: "project", org_id: ORG_GONE },
+        { id: "4", created_at: "2026-08-10T08:33:00.000Z", user_id: "u2", user_email: "u2@example.com", action: "document.edited", status: "completed", title: "Colleague edit", surface: "project", org_id: ORG_A },
+    ];
+    const organizations = [{ id: ORG_A, name: "  Acme LLP  " }];
+    const ascending = { ...query, sortDirection: "asc" as const };
+
+    it("parses Personal or an organization id, and only for personal activity", () => {
+        expect(parseQuery({ workspace: " Personal " }, 50)).toMatchObject({
+            ok: true,
+            query: { workspace: "personal" },
+        });
+        expect(parseQuery({ workspace: ORG_A.toUpperCase() }, 50)).toMatchObject({
+            ok: true,
+            query: { workspace: ORG_A },
+        });
+        for (const workspace of ["", "everyone", "org-a", ["personal"]])
+            expect(parseQuery({ workspace }, 50)).toEqual({
+                ok: false,
+                error: "Invalid workspace",
+            });
+        expect(parseQuery({ workspace: "personal", org_id: ORG_A }, 50)).toEqual({
+            ok: false,
+            error: "Workspace filtering applies to personal activity",
+        });
+    });
+
+    it("names each row's workspace across all of the caller's workspaces", async () => {
+        const { db } = makePagedAuditDb(rows, { organizations });
+        const { data } = await queryEvents(db, "u1", undefined, ascending);
+        expect(
+            data?.map((row) => [row.title, row.org_id, row.org_name]),
+        ).toEqual([
+            ["Personal note", null, undefined],
+            ["Firm memo", ORG_A, "Acme LLP"],
+            // A purged organization has no name left to show.
+            ["Old matter", ORG_GONE, null],
+        ]);
+    });
+
+    it("narrows to Personal or one organization without leaving the caller's rows", async () => {
+        const personal = await queryEvents(
+            makePagedAuditDb(rows, { organizations }).db,
+            "u1",
+            undefined,
+            { ...ascending, workspace: "personal" },
+        );
+        expect(personal.data?.map((row) => row.title)).toEqual(["Personal note"]);
+        expect(personal.count).toBe(1);
+
+        const firm = await queryEvents(
+            makePagedAuditDb(rows, { organizations }).db,
+            "u1",
+            undefined,
+            { ...ascending, workspace: ORG_A },
+        );
+        expect(firm.data?.map((row) => row.title)).toEqual(["Firm memo"]);
+        expect(firm.count).toBe(1);
+    });
+
+    it("adds each row's workspace to the personal CSV", async () => {
+        const { db } = makePagedAuditDb(rows, { organizations });
+        const csv = await buildAuditCsv(db, "u1", undefined, ascending);
+        expect(csv.split("\n")).toEqual([
+            "created_at,user,action,status,title,application,project_id,model,workspace,organization_id",
+            "2026-08-10T08:30:00.000Z,u1@example.com,chat.message,completed,Personal note,assistant,,,Personal,",
+            `2026-08-10T08:31:00.000Z,u1@example.com,document.edited,completed,Firm memo,project,,,Acme LLP,${ORG_A}`,
+            `2026-08-10T08:32:00.000Z,u1@example.com,document.edited,completed,Old matter,project,,,Organization,${ORG_GONE}`,
+        ]);
+    });
 });

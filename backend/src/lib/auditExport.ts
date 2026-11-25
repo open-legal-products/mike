@@ -6,9 +6,11 @@
 // surface.
 
 import { getOrgRole, isOrgAdmin } from "./access";
+import { chunkArray } from "./arrays";
 import { mapWithConcurrency } from "./concurrency";
 import { normalizeDisplayName, normalizeEmail } from "./userLookup";
 import type { Db } from "./supabase";
+import { PERSONAL_WORKSPACE } from "./workspace";
 
 /** One CSV export is a single flat page; this caps the artifact size. */
 export const AUDIT_EXPORT_LIMIT = 2000;
@@ -21,6 +23,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export type AuditQuery = {
     orgId?: string;
+    /**
+     * Narrows the caller's own activity to one workspace: "personal" or an
+     * organization id. It only filters rows already scoped to the caller, so
+     * an organization they have since left still matches its past events.
+     */
+    workspace?: string;
     userName?: string;
     actorUserId?: string;
     eventIds?: string[];
@@ -77,6 +85,16 @@ export function parseQuery(
         return { ok: false, error: "Actor filtering requires an organization" };
     if (userName && !orgId)
         return { ok: false, error: "Username filtering requires an organization" };
+    const workspace = str(raw.workspace)?.toLowerCase();
+    if (
+        raw.workspace !== undefined &&
+        (!workspace ||
+            (workspace !== PERSONAL_WORKSPACE && !UUID_RE.test(workspace)))
+    )
+        return { ok: false, error: "Invalid workspace" };
+    // An organization's audit log already covers exactly one workspace.
+    if (workspace && orgId)
+        return { ok: false, error: "Workspace filtering applies to personal activity" };
     let eventIds: string[] | undefined;
     if (raw.event_ids !== undefined) {
         if (!Array.isArray(raw.event_ids) || raw.event_ids.length === 0 ||
@@ -114,6 +132,7 @@ export function parseQuery(
         ok: true,
         query: {
             ...(orgId ? { orgId } : {}),
+            ...(workspace ? { workspace } : {}),
             ...(userName ? { userName } : {}),
             ...(actorUserId ? { actorUserId } : {}),
             ...(eventIds ? { eventIds } : {}),
@@ -182,7 +201,7 @@ async function affectedUserNames(db: Db, events: AuditRow[]) {
         const values = [...new Set(targets
             .filter((target) => target.column === column)
             .map((target) => target.value))];
-        for (const batch of chunk(values, ID_FILTER_CHUNK)) {
+        for (const batch of chunkArray(values, ID_FILTER_CHUNK)) {
             // Fetch names only, scoped to affected people on the final authorized
             // page. An ID never falls back to email, which may have changed owners.
             const { data, error } = await db.from("user_profiles")
@@ -196,6 +215,30 @@ async function affectedUserNames(db: Db, events: AuditRow[]) {
                     : profile.user_id;
                 if (name) names.set(`${column}:${key}`, name);
             }
+        }
+    }
+    return names;
+}
+
+/**
+ * Current names of the organizations a page of the caller's own activity
+ * happened in, so each row can say which workspace it belongs to. The caller
+ * acted there, so the name is theirs to see even after they left. A missing
+ * name (a purged organization, or a failed read) leaves the row unnamed.
+ */
+async function organizationNames(db: Db, events: AuditRow[]) {
+    const ids = [...new Set(events
+        .map((event) => event.org_id)
+        .filter((id): id is string => typeof id === "string" && Boolean(id)))];
+    const names = new Map<string, string>();
+    for (const batch of chunkArray(ids, ID_FILTER_CHUNK)) {
+        const { data, error } = await db.from("organizations")
+            .select("id, name")
+            .in("id", batch);
+        if (error) continue;
+        for (const org of data ?? []) {
+            const name = typeof org.name === "string" ? org.name.trim() : "";
+            if (name) names.set(org.id, name);
         }
     }
     return names;
@@ -215,6 +258,7 @@ type EventsResult = {
  */
 type EventsQuery = {
     eq(column: string, value: unknown): EventsQuery;
+    is(column: string, value: null): EventsQuery;
     in(column: string, values: unknown[]): EventsQuery;
     ilike(column: string, pattern: string): EventsQuery;
     gte(column: string, value: unknown): EventsQuery;
@@ -225,12 +269,6 @@ type EventsQuery = {
     ): EventsQuery;
     range(from: number, to: number): PromiseLike<EventsResult>;
 };
-
-function chunk<T>(values: T[], size: number): T[][] {
-    const out: T[][] = [];
-    for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
-    return out;
-}
 
 // PostgREST caps each response independently of the requested range. Read
 // through the complete requested window, advancing by the actual row count so
@@ -341,7 +379,7 @@ export async function queryEvents(
     // Organization RPCs send selected IDs in a JSON body. Personal queries
     // retain bounded URL partitions; username matching stays inside org SQL.
     const eventChunks = q.orgId ? [q.eventIds]
-        : q.eventIds ? chunk(q.eventIds, ID_FILTER_CHUNK) : [undefined];
+        : q.eventIds ? chunkArray(q.eventIds, ID_FILTER_CHUNK) : [undefined];
     const queries = eventChunks.map((eventIds) => () => {
         if (q.orgId) {
             return {
@@ -375,6 +413,8 @@ export async function queryEvents(
             };
         }
         let query = base().eq("user_id", userId);
+        if (q.workspace === PERSONAL_WORKSPACE) query = query.is("org_id", null);
+        else if (q.workspace) query = query.eq("org_id", q.workspace);
         if (eventIds) query = query.in("id", eventIds);
         return applyFilters(query);
     });
@@ -453,6 +493,9 @@ export async function queryEvents(
     const affectedNames = resolveDisplayNames
         ? await affectedUserNames(db, result.data)
         : new Map<string, string>();
+    // Personal activity spans workspaces, so its rows (and its CSV) name
+    // theirs. An organization's own log is a single workspace.
+    const orgNames = q.orgId ? null : await organizationNames(db, result.data);
 
     return {
         ...result,
@@ -465,6 +508,9 @@ export async function queryEvents(
             const affectedName = target && affectedNames.get(`${target.column}:${target.value}`);
             return {
                 ...event,
+                ...(orgNames && typeof event.org_id === "string" && event.org_id
+                    ? { org_name: orgNames.get(event.org_id) ?? null }
+                    : {}),
                 ...(affectedName ? { affected_user_display_name: affectedName } : {}),
                 user_display_name:
                     displayNameByUserId.get(userId as string) ?? null,
@@ -513,8 +559,11 @@ export async function buildAuditCsv(
     // `cause` keeps the PostgrestError (code/details/hint) attached so the
     // sync route can log it exactly as it did before this helper existed.
     if (error) throw new Error(error.message, { cause: error });
+    // Personal activity spans workspaces, so each row names its own; the
+    // organization's export is one workspace and keeps just its id.
     const header =
-        "created_at,user,action,status,title,application,project_id,model" + (query.orgId ? ",organization_id" : "");
+        "created_at,user,action,status,title,application,project_id,model" +
+        (query.orgId ? ",organization_id" : ",workspace,organization_id");
     const rows = ((data ?? []) as Record<string, unknown>[]).map((e) =>
         [
             e.created_at,
@@ -525,7 +574,9 @@ export async function buildAuditCsv(
             e.surface,
             e.project_id,
             e.model,
-            ...(query.orgId ? [e.org_id] : []),
+            ...(query.orgId
+                ? [e.org_id]
+                : [e.org_id ? (e.org_name ?? "Organization") : "Personal", e.org_id]),
         ]
             .map(csvCell)
             .join(","),

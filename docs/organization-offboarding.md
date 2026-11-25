@@ -85,11 +85,18 @@ MIKE_TEST_POSTGRES_CONTAINER=supabase_db_backend npm test --prefix backend -- \
 ## Organization audit log
 
 Owners and admins open **Organization → Audit log**. It uses the
-same table, date selector, type/status/application filters, search, scrolling,
+same table, date selector, type/status/feature filters, search, scrolling,
 event details and export modal as **Settings → My Activity**. It has no entry in the
 account dropdown. CSV exports preserve the selected organization and filters,
 include its ID, and contain up to 2,000 events; narrow the period for larger logs.
 Authorization is rechecked when listing, queuing, building and downloading.
+
+**Settings → My Activity** is the person's own actions across every workspace.
+For someone with an organization, each row names its workspace (Personal or the
+organization's current name, still shown after they leave it) and a workspace
+filter narrows the list and its export to one. The CSV adds `workspace` and
+`organization_id` columns. The organization audit log is one workspace and has
+neither.
 
 Events carry an immutable organization identifier independent of the actor's
 current membership and the continued existence of a resource. Creation is
