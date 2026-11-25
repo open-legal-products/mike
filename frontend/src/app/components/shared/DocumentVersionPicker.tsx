@@ -14,7 +14,7 @@ import {
     TextButtonUI,
 } from "@mike/ui";
 import { VersionChip } from "./VersionChip";
-import { comparisonWithPrevious, versionLabel, type VersionComparison } from "./versionComparison";
+import { COMPARISON_SIZE_MESSAGE, comparisonWithPrevious, exceedsComparisonLimit, versionLabel, type VersionComparison } from "./versionComparison";
 
 export function DocumentVersionPicker({
     documentId,
@@ -82,6 +82,7 @@ export function DocumentVersionPicker({
     // when there is only one available version (deleted versions do not count).
     if (!versions || versions.length <= 1) return label;
     const comparison = onCompare ? comparisonWithPrevious(versions, selectedId) : null;
+    const tooLarge = comparison && exceedsComparisonLimit(comparison);
     return (
         <Dropdown
             open={open}
@@ -144,10 +145,12 @@ export function DocumentVersionPicker({
                     <>
                         <DropdownSeparator />
                         <DropdownItem
-                            disabled={disabled}
+                            disabled={disabled || !!tooLarge}
                             onSelect={() => onCompare?.(comparison)}
                         >
-                            Compare with {versionLabel(comparison.base)}
+                            <span>Compare with {versionLabel(comparison.base)}
+                                {tooLarge && <span className="block text-xs">{COMPARISON_SIZE_MESSAGE}</span>}
+                            </span>
                         </DropdownItem>
                     </>
                 )}

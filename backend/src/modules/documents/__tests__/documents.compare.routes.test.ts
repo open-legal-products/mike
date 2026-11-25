@@ -77,18 +77,6 @@ describe("GET /single-documents/:documentId/versions/compare", () => {
     expect(await extractDocxBodyText(response.body)).toBe(await extractDocxBodyText(state.objects.get("doc/v2")!));
   });
 
-  it("returns the change list and counts as JSON on request", async () => {
-    const response = await compare("base=v1&target=v2&format=json").expect(200);
-    expect(response.body).toMatchObject({
-      engine: "docxodus",
-      base: { id: "v1", version_number: 1 },
-      target: { id: "v2", version_number: 2 },
-      summary: { insertions: 2, deletions: 1, total: 3 },
-    });
-    expect(response.body.revisions.map((revision: { kind: string }) => revision.kind)).toEqual(["insert", "delete", "insert"]);
-    expect(response.body.revisions[1]).toMatchObject({ kind: "delete", text: "thirty (30" });
-  });
-
   it.each([
     ["the same version twice", "base=v1&target=v1", 400, "Choose two different versions to compare."],
     ["a missing target", "base=v1", 400, "base and target versions are required."],

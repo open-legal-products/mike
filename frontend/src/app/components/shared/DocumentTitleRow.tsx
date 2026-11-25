@@ -140,7 +140,12 @@ export function DocumentTitleRow({
                             <SquarePen aria-hidden="true" className="h-3.5 w-3.5" />
                         </TextButtonUI>
                     )}
-                    {isFile && (
+                    {comparison ? (
+                        <TextButtonUI size="icon-xs" aria-label="Download comparison" title="Download comparison"
+                            disabled={!onDownload} onClick={onDownload}>
+                            <Download aria-hidden="true" className="h-3.5 w-3.5" />
+                        </TextButtonUI>
+                    ) : isFile && (
                         <DownloadButton
                             documentId={document.document_id}
                             versionId={document.version_id ?? null}
@@ -149,7 +154,7 @@ export function DocumentTitleRow({
                             onDownload={onDownload}
                         />
                     )}
-                    {actions.map((action, index) =>
+                    {!comparison && actions.map((action, index) =>
                         action.type === "download" ? (
                             <UrlDownloadButton
                                 key={`${action.type}:${action.url}:${index}`}

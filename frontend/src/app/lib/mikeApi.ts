@@ -2928,13 +2928,17 @@ function documentFilePath(
  * with every difference from `baseVersionId` as a tracked change. Fetched and
  * shown like any other document file.
  */
-export function getDocumentComparisonUrl(
+export async function getDocumentComparison(
     documentId: string,
     baseVersionId: string,
     targetVersionId: string,
-): string {
+    signal: AbortSignal,
+): Promise<ArrayBuffer> {
     const query = new URLSearchParams({ base: baseVersionId, target: targetVersionId });
-    return `${API_BASE}/single-documents/${encodeURIComponent(documentId)}/versions/compare?${query}`;
+    const path = `/single-documents/${encodeURIComponent(documentId)}/versions/compare?${query}`;
+    const response = await apiFetch(`${API_BASE}${path}`, { signal, cache: "no-store" }, "documents.directory");
+    if (!response.ok) throw await toApiError(response, path, "GET", "documents.directory");
+    return response.arrayBuffer();
 }
 
 export function getDocumentFileUrl(

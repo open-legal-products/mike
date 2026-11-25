@@ -38,6 +38,8 @@ interface Props {
     author?: string;
     versionId?: string | null;
     displayUrl?: string | null;
+    /** Generated file whose original bytes must also be used for Save. */
+    readOnlyFile?: { bytes: ArrayBuffer; download: () => Promise<void> };
     onReady?: () => void;
     onCloseGuardReady?: (guard: DocxCloseGuard | null) => void;
     onDownloadReady?: (download: (() => Promise<void>) | null) => void;
@@ -94,11 +96,11 @@ function DocxViewContent(props: Props) {
     const [initialMode] = useState<DocxMode>(props.defaultMode ?? "view");
     const [downloading, setDownloading] = useState(false);
     const [downloadError, setDownloadError] = useState<string | null>(null);
-    const fetched = useFetchDocxBytes(documentId, versionId, refetchKey, displayUrl, cacheBytes);
+    const fetched = useFetchDocxBytes(props.readOnlyFile ? null : documentId, versionId, refetchKey, displayUrl, cacheBytes);
     // Metadata refreshes after an autosave must not remount the editor, lose
     // its undo stack, or discard edits typed while the upload was in flight.
     const [editedBytes, setEditedBytes] = useState<ArrayBuffer | null>(null);
-    const bytes = editedBytes ?? fetched.bytes;
+    const bytes = props.readOnlyFile?.bytes ?? editedBytes ?? fetched.bytes;
     const { loading } = fetched;
     const error = editedBytes ? null : fetched.error;
     const renderKey = bytes ? String(bufferId(bytes)) : null;
@@ -107,7 +109,7 @@ function DocxViewContent(props: Props) {
     const surfaceRef = useRef<DocxSurface | null>(null);
     const autosave = useDocxAutosave({
         documentId, versionId, filename: props.filename, bytes,
-        enabled: props.canEdit !== false && !displayUrl,
+        enabled: !props.readOnlyFile && props.canEdit !== false && !displayUrl,
         exportDocx: () => surfaceRef.current?.exportDocx?.(),
     });
     const { markChanged, adoptSnapshot, captureSnapshotRevision } = autosave;
@@ -233,10 +235,11 @@ function DocxViewContent(props: Props) {
                 {message && <div role="alert" className="flex h-full items-center justify-center p-5 text-sm text-destructive">{message}</div>}
                 {!onSaveStateChange && <DocxSaveErrorPopup error={saveError} />}
                 <div className="docx-view-container min-h-0 flex-1" hidden={!!message}>
-                    {bytes && (
+                    {/* A failed read-only renderer can leave a native modal open even while hidden. */}
+                    {bytes && !(props.readOnlyFile && renderError) && (
                         <DocxRenderBoundary key={renderKey} onError={onError}>
                             <Suspense fallback={null}>
-                                <DocxRenderer bytes={bytes} mode={initialMode} toolbarVisible={props.canEdit === false ? false : props.toolbarVisible} filename={props.filename} author={props.author} onChange={onChange} onSave={displayUrl ? download : autosave.save} onReady={onReady} onError={onError} />
+                                <DocxRenderer bytes={bytes} mode={initialMode} toolbarVisible={props.canEdit === false ? false : props.toolbarVisible} filename={props.filename} author={props.author} onChange={onChange} onSave={props.readOnlyFile?.download ?? (displayUrl ? download : autosave.save)} onReady={onReady} onError={onError} />
                             </Suspense>
                         </DocxRenderBoundary>
                     )}

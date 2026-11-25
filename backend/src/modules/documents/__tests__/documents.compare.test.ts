@@ -28,11 +28,7 @@ function setup(versions = [version("v1", 1), version("v2", 2), version("v3", 3)]
     documents: [{ id: "doc", current_version_id: "v3" }, { id: "other", current_version_id: "x1" }],
     document_versions: [...versions, version("x1", 1, { document_id: "other", storage_path: "other/x1.docx" })],
   });
-  const compare = vi.fn<DocxDiffEngine["compare"]>(async () => ({
-    redline: Buffer.from("redline"),
-    revisions: [{ kind: "insert" as const, text: "sixty", wordIds: ["1"] }],
-    summary: { insertions: 1, deletions: 0, moves: 0, formatChanges: 0, structuralChanges: 0, total: 1 },
-  }));
+  const compare = vi.fn<DocxDiffEngine["compare"]>(async () => Buffer.from("redline"));
   const engine: DocxDiffEngine = { id: "fake", compare };
   const run = (baseVersionId: string, targetVersionId: string, documentId = "doc") => compareVersions({
     documentId, userId: "u", userEmail: "u@example.com", baseVersionId, targetVersionId, db: fake.db, engine, now: NOW,
@@ -50,9 +46,7 @@ describe("compareVersions", () => {
     const { run, compare } = setup();
     const result = await run("v1", "v3");
     expect(result).toMatchObject({
-      ok: true, engine: "fake",
-      base: { id: "v1", version_number: 1 }, target: { id: "v3", version_number: 3 },
-      summary: { insertions: 1, total: 1 },
+      ok: true, redline: Buffer.from("redline"),
       filename: "MSA (V1 to V3 comparison).docx",
     });
     const [original, revised, options] = compare.mock.calls[0];
@@ -130,6 +124,22 @@ describe("compareVersions", () => {
     const { run, compare } = setup();
     compare.mockRejectedValue(new DocxDiffError("The documents could not be compared.", { cause: new Error("zip offset 0x1f") }));
     expect(await run("v1", "v2")).toEqual({ ok: false, kind: "unprocessable", detail: "These versions could not be compared." });
+  });
+
+  it("limits concurrent comparisons before downloading, then frees the slot", async () => {
+    const { run, compare } = setup();
+    let finish!: (bytes: Buffer) => void;
+    compare.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = run("v1", "v2");
+    await vi.waitFor(() => expect(compare).toHaveBeenCalledOnce());
+    try {
+      expect(await run("v2", "v3")).toMatchObject({ ok: false, kind: "busy" });
+      expect(mocks.downloadFile).toHaveBeenCalledTimes(2);
+    } finally {
+      finish(Buffer.from("redline"));
+      await first;
+    }
+    expect(await run("v2", "v3")).toMatchObject({ ok: true });
   });
 
   it("lets an unexpected engine failure propagate so it is reported, not shown as a bad document", async () => {

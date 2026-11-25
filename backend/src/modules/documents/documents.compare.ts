@@ -9,39 +9,27 @@ import {
     DocxDiffError,
     getDocxDiffEngine,
     type DocxDiffEngine,
-    type DocxDiffRevision,
-    type DocxDiffSummary,
 } from "../../lib/docxDiff";
 import { loadActiveVersion, type ActiveVersion } from "../../lib/documentVersions";
 import { downloadFile } from "../../lib/storage";
 import type { Db } from "./documents.shared";
 import { ensureDocumentAccess } from "./documents.access";
 
-/**
- * Per-version ceiling. The engine parses both documents in this process, so
- * the limit bounds memory and how long one comparison can hold the event loop.
- */
 export const COMPARE_MAX_VERSION_BYTES = 20 * 1024 * 1024;
+
+// Reserve capacity before reading either object. Each comparison owns up to two 20 MiB inputs.
+let comparisonInProgress = false;
 
 export const COMPARE_AUTHOR = "Mike comparison";
 
 export type CompareVersionsFailure = {
     ok: false;
-    kind: "not_found" | "invalid" | "too_large" | "unprocessable";
+    kind: "not_found" | "invalid" | "too_large" | "unprocessable" | "busy";
     detail: string;
 };
 
 export type CompareVersionsResult =
-    | {
-          ok: true;
-          engine: string;
-          redline: Buffer;
-          filename: string;
-          base: { id: string; version_number: number | null };
-          target: { id: string; version_number: number | null };
-          summary: DocxDiffSummary;
-          revisions: DocxDiffRevision[];
-      }
+    | { ok: true; redline: Buffer; filename: string }
     | CompareVersionsFailure;
 
 function isDocx(version: ActiveVersion): boolean {
@@ -81,6 +69,7 @@ export async function compareVersions(params: {
     // One answer for a missing document and one the caller may not read, so
     // the endpoint cannot be used to probe for documents.
     const access = await ensureDocumentAccess(documentId, userId, userEmail, db);
+    if (!access.ok && access.kind === "error") throw access.error;
     if (!access.ok) return { ok: false, kind: "not_found", detail: "Document not found" };
 
     // loadActiveVersion only returns a live version that belongs to this
@@ -97,35 +86,31 @@ export async function compareVersions(params: {
     if (tooLarge(base.size_bytes) || tooLarge(target.size_bytes))
         return { ok: false, kind: "too_large", detail: "These versions are too large to compare." };
 
-    const [baseBytes, targetBytes] = await Promise.all([
-        downloadFile(base.storage_path),
-        downloadFile(target.storage_path),
-    ]);
-    if (!baseBytes || !targetBytes)
-        return { ok: false, kind: "not_found", detail: "Document bytes not available" };
-    // size_bytes is metadata; the stored object is what the engine will parse.
-    if (tooLarge(baseBytes.byteLength) || tooLarge(targetBytes.byteLength))
-        return { ok: false, kind: "too_large", detail: "These versions are too large to compare." };
-
-    const engine = params.engine ?? getDocxDiffEngine();
+    if (comparisonInProgress)
+        return { ok: false, kind: "busy", detail: "Another comparison is running. Please try again shortly." };
+    comparisonInProgress = true;
     try {
-        const result = await engine.compare(Buffer.from(baseBytes), Buffer.from(targetBytes), {
+        const [baseBytes, targetBytes] = await Promise.all([
+            downloadFile(base.storage_path),
+            downloadFile(target.storage_path),
+        ]);
+        if (!baseBytes || !targetBytes)
+            return { ok: false, kind: "not_found", detail: "Document bytes not available" };
+        // size_bytes is metadata; the stored object is what the engine will parse.
+        if (tooLarge(baseBytes.byteLength) || tooLarge(targetBytes.byteLength))
+            return { ok: false, kind: "too_large", detail: "These versions are too large to compare." };
+
+        const engine = params.engine ?? getDocxDiffEngine();
+        const redline = await engine.compare(Buffer.from(baseBytes), Buffer.from(targetBytes), {
             author: COMPARE_AUTHOR,
             date: params.now ?? new Date(),
         });
-        return {
-            ok: true,
-            engine: engine.id,
-            redline: result.redline,
-            filename: redlineFilename(base, target),
-            base: { id: base.id, version_number: base.version_number },
-            target: { id: target.id, version_number: target.version_number },
-            summary: result.summary,
-            revisions: result.revisions,
-        };
+        return { ok: true, redline, filename: redlineFilename(base, target) };
     } catch (error) {
         if (error instanceof DocxDiffError)
             return { ok: false, kind: "unprocessable", detail: "These versions could not be compared." };
         throw error;
+    } finally {
+        comparisonInProgress = false;
     }
 }

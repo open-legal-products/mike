@@ -88,34 +88,24 @@ row offers **Compare with V*n***: the displayed version against the nearest
 earlier Word version that has not been deleted. The viewer then shows a
 redline, the displayed version with every difference from the earlier one as a
 tracked change, under a "Changes since V*n*" label with **Close comparison**.
-The redline is read-only, is never autosaved, and is not stored as a version;
-**Download** saves it as `<name> (Vx to Vy comparison).docx`, which Word opens
-with the changes ready to accept or reject. Switching version or document
-leaves the comparison.
+**Download comparison** becomes available as soon as Mike receives the redline.
+It saves those exact bytes as `<name> (Vx to Vy comparison).docx`, even if the
+preview cannot display them. Word can accept or reject the changes. Closing the
+comparison restores the source document and its citation or edit card.
+Switching versions also closes the comparison.
 
-The redline comes from `GET /single-documents/:documentId/versions/compare`
-with `base` and `target` version ids. It needs only read access to the
-document, both versions must belong to it, and both must be `.docx` no larger
-than 20 MB. The response is the `.docx` itself; `format=json` returns the
-change list and counts (`insertions`, `deletions`, `moves`, `formatChanges`,
-`structuralChanges`) instead. Because the redline is an ordinary Word file, the
-viewer needs no comparison code of its own.
+`GET /single-documents/:documentId/versions/compare?base=<id>&target=<id>`
+returns the generated Word file. The caller must have read access, and both
+versions must belong to the document and be Word files of 20 MiB or less.
+The menu explains the limit when a version's size is known. Tracked changes
+pending in either input are accepted before comparison, as in Word's Compare.
 
-Tracked changes still pending in either version are accepted before comparing,
-as Word's own Compare does, so a version holding an unresolved assistant edit
-is compared by the text that edit proposes.
-
-Comparison runs behind `DocxDiffEngine` (`backend/src/lib/docxDiff`).
-[Docxodus](https://github.com/JSv4/Docxodus) (MIT), a .NET OOXML engine
-compiled to WebAssembly, is the only engine today and runs inside the API
-process, loaded on the first comparison. `DOCX_DIFF_ENGINE` selects the engine
-and an unknown name fails the request rather than falling back. Another engine
-implements the interface and is added to the map in `docxDiff/index.ts`.
-
-Limits to know about: a comparison runs on the API's event loop (the size cap
-bounds it; a small agreement takes under a second), nothing is cached, and
-changes inside headers, footers and footnotes are in the redline but only as
-far as the viewer displays those parts.
+`DocxDiffEngine` in `backend/src/lib/docxDiff` selects the implementation using
+`DOCX_DIFF_ENGINE`. The default is [Docxodus](https://github.com/JSv4/Docxodus).
+Each API process admits one comparison at a time, before downloading the two
+inputs. A dedicated worker runs the WebAssembly engine with a 60-second
+deadline. Concurrent requests receive HTTP 429 and the viewer offers a retry.
+The generated redline is held in memory for the request.
 
 ## Version and behavior
 

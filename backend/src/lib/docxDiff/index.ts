@@ -5,16 +5,7 @@
 import { docxodusDiffEngine } from "./docxodus";
 import type { DocxDiffEngine } from "./types";
 
-export {
-  DocxDiffError,
-  summarizeDocxDiff,
-  type DocxDiffEngine,
-  type DocxDiffOptions,
-  type DocxDiffResult,
-  type DocxDiffRevision,
-  type DocxDiffRevisionKind,
-  type DocxDiffSummary,
-} from "./types";
+export { DocxDiffError, type DocxDiffEngine } from "./types";
 
 export const DEFAULT_DOCX_DIFF_ENGINE = "docxodus";
 

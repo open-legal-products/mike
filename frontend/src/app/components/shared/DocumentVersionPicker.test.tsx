@@ -147,3 +147,14 @@ it("has no comparison to offer while the first version is displayed", async () =
     await waitFor(() => expect(screen.getByRole("menuitemradio", { name: /V2/ })).toBeInTheDocument());
     expect(screen.queryByRole("menuitem", { name: /Compare with/ })).toBeNull();
 });
+
+it.each([0, 1])("explains the file size limit when either version exceeds it", async index => {
+    vi.mocked(listDocumentVersions).mockResolvedValue({
+        current_version_id: "v2", versions: versions.map((version, i) =>
+            ({ ...version, size_bytes: i === index ? 20 * 1024 * 1024 + 1 : null })),
+    });
+    const user = userEvent.setup();
+    render(<DocumentVersionPicker documentId="doc" onSelect={vi.fn()} onCompare={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: /Choose document version/ }));
+    expect(screen.getByRole("menuitem", { name: /Compare with V1.*20 MiB/ })).toHaveAttribute("aria-disabled", "true");
+});

@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PdfView } from "./views/PdfView";
 import { DocxView } from "./views/DocxView";
-import { versionLabel, type VersionComparison } from "./versionComparison";
-import { getDocumentComparisonUrl } from "@/app/lib/mikeApi";
+import { useDocumentComparison } from "@/app/hooks/useDocumentComparison";
+import { DocumentComparisonView } from "./DocumentComparisonView";
 import type { DocxCloseGuard, DocxSaveState } from "./views/DocxRenderer.types";
 import { SpreadsheetView } from "./views/SpreadsheetView";
 import {
@@ -144,11 +144,9 @@ export function DocumentContent({
         filename: resolvedDocument.title,
         fileType: resolvedDocument.type,
     });
-    // A comparison belongs to the version it was opened from: switching the
-    // document or its version returns to the document itself.
-    const comparisonKey = `${documentId}:${versionId ?? ""}`;
-    const [openComparison, setOpenComparison] = useState<{ key: string; pair: VersionComparison } | null>(null);
-    const comparison = viewType === "docx" && openComparison?.key === comparisonKey ? openComparison.pair : null;
+    const canCompare = viewType === "docx" && !isExternalSource;
+    const { comparison, open: openComparison, close: closeComparison } =
+        useDocumentComparison(canCompare ? documentId : null, versionId, onDownloadReady);
     const citation = mode.kind === "citation" ? mode.citation : null;
     const firstSelectableQuoteIndex =
         mode.kind === "citation"
@@ -239,12 +237,12 @@ export function DocumentContent({
                         isReloading={isReloading}
                         saveState={saveState}
                         onVersionChange={onVersionChange}
-                        onDownload={() => localDownload.current?.()}
-                        comparison={comparison}
-                        onCompare={viewType === "docx" && !isExternalSource
-                            ? (pair) => setOpenComparison({ key: comparisonKey, pair })
-                            : undefined}
-                        onCloseComparison={() => setOpenComparison(null)}
+                        onDownload={comparison
+                            ? comparison.bytes && comparison.download
+                            : () => localDownload.current?.()}
+                        comparison={comparison?.pair}
+                        onCloseComparison={closeComparison}
+                        onCompare={canCompare && !comparison ? openComparison : undefined}
                         toolbarVisible={toolbarVisible}
                         onToggleToolbar={
                             !isExternalSource && viewType === "docx" && canEdit && !comparison
@@ -254,8 +252,8 @@ export function DocumentContent({
                     />
                 }
                 annotation={
-                    mode.kind === "citation" ||
-                    (mode.kind === "edit" && !isExternalSource) ? (
+                    !comparison && (mode.kind === "citation" ||
+                    (mode.kind === "edit" && !isExternalSource)) ? (
                         <>
                             {mode.kind === "citation" && (
                                 <CitationQuotesSection
@@ -312,18 +310,7 @@ export function DocumentContent({
                         onClearQuote={() => setActiveCitationQuoteId(null)}
                     />
                 ) : comparison ? (
-                    // The redline is an ordinary .docx with tracked changes,
-                    // so the regular viewer shows it; it is read-only and
-                    // Download saves the redline, never the stored version.
-                    <DocxView
-                        onDownloadReady={handleDownloadReady}
-                        cacheBytes={false}
-                        canEdit={false}
-                        documentId={documentId}
-                        displayUrl={getDocumentComparisonUrl(documentId, comparison.base.id, comparison.target.id)}
-                        filename={`${resolvedDocument.title.replace(/\.docx$/i, "")} (${versionLabel(comparison.base)} to ${versionLabel(comparison.target)} comparison).docx`}
-                        rounded={false}
-                    />
+                    <DocumentComparisonView documentId={documentId} comparison={comparison} onRetry={() => openComparison(comparison.pair)} />
                 ) : viewType === "docx" ? (
                     <DocxView
                         onDownloadReady={handleDownloadReady}
