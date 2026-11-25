@@ -1,5 +1,4 @@
-# ponytail: single stage. LibreOffice dwarfs everything, multi-stage saves little.
-FROM node:22-slim AS app
+FROM node:22-slim AS base
 
 # libreoffice-convert shells out to soffice for doc conversion (see src/lib/convert.ts).
 # postgresql-client: docker-compose.yml runs db-init from this image so the
@@ -9,6 +8,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends libreoffice util-linux postgresql-client ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+FROM base AS build
 WORKDIR /app
 # .npmrc sets engine-strict: on a stale cached node:22-slim older than the
 # engines floor, `npm ci` fails here with "notsup" instead of building an
@@ -24,6 +24,13 @@ COPY docker/db-init/adopt-ledger.sh ./docker/db-init/adopt-ledger.sh
 # Compile, then drop the build and test tooling (TypeScript, Vitest, Stryker):
 # every entrypoint runs compiled dist/ with production dependencies only.
 RUN npm run build && npm prune --omit=dev && npm cache clean --force
+
+# Copy the pruned tree into a fresh runtime so the install layer with dev
+# dependencies stays in the build stage.
+FROM base AS app
+WORKDIR /app
+COPY --from=build /app /app
+COPY --from=build /packages/contracts /packages/contracts
 
 # --enable-source-maps: every entrypoint in this image (API, worker,
 # sync:workflows) reports stack frames as src/*.ts lines, not dist/*.js.

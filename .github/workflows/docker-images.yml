@@ -64,8 +64,8 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: false
-          # The backend image is loaded so the next step can run it.
-          load: ${{ matrix.image == 'backend' }}
+          # Load the images exercised by the runtime checks below.
+          load: ${{ matrix.image != 'word-addin' }}
           tags: mike-${{ matrix.image }}:ci
           # GIT_SHA becomes the Sentry release (docs/observability.md); an
           # image without it reports events nobody can map to a commit.
@@ -74,6 +74,18 @@ jobs:
             ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Serve a page and assets from the standalone frontend
+        if: matrix.image == 'frontend'
+        run: |
+          container=$(docker run -d -p 127.0.0.1::3000 -e SENTRY_DISABLED=true mike-frontend:ci)
+          trap 'docker logs "$container"; docker rm -f "$container" >/dev/null' EXIT
+          origin="http://$(docker port "$container" 3000/tcp)"
+          curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "$origin/" -o home.html
+          chunk=$(node -p 'require("fs").readFileSync("home.html", "utf8").match(/<script[^>]+src="(\/_next\/static\/[^"]+\.js[^"]*)"/)[1]')
+          curl -fsS "$origin$chunk" -o /dev/null
+          curl -fsS "$origin/link-image.jpg" -o /dev/null
+          docker exec "$container" node --input-type=module -e 'await import("@sentry/server-runtime-injection/hook")'
 
       # Compose's storage-cors job runs docker/storage-cors.mjs inside this
       # image against its compiled /app/dist/lib/origins.js (CommonJS) to
