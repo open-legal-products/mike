@@ -225,6 +225,7 @@ export function AuditHistory({
   // narrows it to Personal or one organization. An organization's audit log
   // is already a single workspace.
   const [workspace, setWorkspace] = useState<string | null>(null);
+  const workspaceFilter = orgId ? undefined : (workspace ?? undefined);
   const { organizations } = useWorkspace();
   const [sort, setSort] = useState<{
     key: AuditSortKey;
@@ -263,7 +264,7 @@ export function AuditHistory({
         const out = await getAuditHistory(
           {
             ...(orgId ? { orgId } : {}),
-            workspace: (!orgId && workspace) || undefined,
+            workspace: workspaceFilter,
             actorUserId: actor?.user_id,
             q: debouncedSearch || undefined,
             action: action || undefined,
@@ -301,7 +302,7 @@ export function AuditHistory({
         }
       }
     },
-    [orgId, workspace, actor?.user_id, action, debouncedSearch, from, sort, status, surface, to],
+    [orgId, workspaceFilter, actor?.user_id, action, debouncedSearch, from, sort, status, surface, to],
   );
 
   useEffect(() => {
@@ -327,7 +328,7 @@ export function AuditHistory({
         ...(eventIds
           ? { event_ids: eventIds }
           : {
-              ...(!orgId && workspace ? { workspace } : {}),
+              workspace: workspaceFilter,
               actor_user_id: actor?.user_id,
               q: search.trim() || undefined,
               action: action || undefined,

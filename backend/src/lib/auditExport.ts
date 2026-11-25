@@ -6,9 +6,11 @@
 // surface.
 
 import { getOrgRole, isOrgAdmin } from "./access";
+import { chunkArray } from "./arrays";
 import { mapWithConcurrency } from "./concurrency";
 import { normalizeDisplayName, normalizeEmail } from "./userLookup";
 import type { Db } from "./supabase";
+import { PERSONAL_WORKSPACE } from "./workspace";
 
 /** One CSV export is a single flat page; this caps the artifact size. */
 export const AUDIT_EXPORT_LIMIT = 2000;
@@ -18,9 +20,6 @@ export const AUDIT_EXPORT_LIMIT = 2000;
 const MAX_PAGE = 100_000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Personal activity's workspace filter: no organization, or one organization. */
-export const PERSONAL_AUDIT_WORKSPACE = "personal";
 
 export type AuditQuery = {
     orgId?: string;
@@ -90,7 +89,7 @@ export function parseQuery(
     if (
         raw.workspace !== undefined &&
         (!workspace ||
-            (workspace !== PERSONAL_AUDIT_WORKSPACE && !UUID_RE.test(workspace)))
+            (workspace !== PERSONAL_WORKSPACE && !UUID_RE.test(workspace)))
     )
         return { ok: false, error: "Invalid workspace" };
     // An organization's audit log already covers exactly one workspace.
@@ -202,7 +201,7 @@ async function affectedUserNames(db: Db, events: AuditRow[]) {
         const values = [...new Set(targets
             .filter((target) => target.column === column)
             .map((target) => target.value))];
-        for (const batch of chunk(values, ID_FILTER_CHUNK)) {
+        for (const batch of chunkArray(values, ID_FILTER_CHUNK)) {
             // Fetch names only, scoped to affected people on the final authorized
             // page. An ID never falls back to email, which may have changed owners.
             const { data, error } = await db.from("user_profiles")
@@ -232,7 +231,7 @@ async function organizationNames(db: Db, events: AuditRow[]) {
         .map((event) => event.org_id)
         .filter((id): id is string => typeof id === "string" && Boolean(id)))];
     const names = new Map<string, string>();
-    for (const batch of chunk(ids, ID_FILTER_CHUNK)) {
+    for (const batch of chunkArray(ids, ID_FILTER_CHUNK)) {
         const { data, error } = await db.from("organizations")
             .select("id, name")
             .in("id", batch);
@@ -270,12 +269,6 @@ type EventsQuery = {
     ): EventsQuery;
     range(from: number, to: number): PromiseLike<EventsResult>;
 };
-
-function chunk<T>(values: T[], size: number): T[][] {
-    const out: T[][] = [];
-    for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
-    return out;
-}
 
 // PostgREST caps each response independently of the requested range. Read
 // through the complete requested window, advancing by the actual row count so
@@ -386,7 +379,7 @@ export async function queryEvents(
     // Organization RPCs send selected IDs in a JSON body. Personal queries
     // retain bounded URL partitions; username matching stays inside org SQL.
     const eventChunks = q.orgId ? [q.eventIds]
-        : q.eventIds ? chunk(q.eventIds, ID_FILTER_CHUNK) : [undefined];
+        : q.eventIds ? chunkArray(q.eventIds, ID_FILTER_CHUNK) : [undefined];
     const queries = eventChunks.map((eventIds) => () => {
         if (q.orgId) {
             return {
@@ -420,7 +413,7 @@ export async function queryEvents(
             };
         }
         let query = base().eq("user_id", userId);
-        if (q.workspace === PERSONAL_AUDIT_WORKSPACE) query = query.is("org_id", null);
+        if (q.workspace === PERSONAL_WORKSPACE) query = query.is("org_id", null);
         else if (q.workspace) query = query.eq("org_id", q.workspace);
         if (eventIds) query = query.in("id", eventIds);
         return applyFilters(query);
@@ -502,9 +495,7 @@ export async function queryEvents(
         : new Map<string, string>();
     // Personal activity spans workspaces, so its rows (and its CSV) name
     // theirs. An organization's own log is a single workspace.
-    const orgNames = q.orgId
-        ? new Map<string, string>()
-        : await organizationNames(db, result.data);
+    const orgNames = q.orgId ? null : await organizationNames(db, result.data);
 
     return {
         ...result,
@@ -517,7 +508,7 @@ export async function queryEvents(
             const affectedName = target && affectedNames.get(`${target.column}:${target.value}`);
             return {
                 ...event,
-                ...(!q.orgId && typeof event.org_id === "string" && event.org_id
+                ...(orgNames && typeof event.org_id === "string" && event.org_id
                     ? { org_name: orgNames.get(event.org_id) ?? null }
                     : {}),
                 ...(affectedName ? { affected_user_display_name: affectedName } : {}),
