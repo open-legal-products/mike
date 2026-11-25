@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build from the repository root: `docker build -f frontend/Dockerfile .`
-# (docker-compose.yml does the same). The image mirrors the repository layout
+# (docker-compose.yml does the same). The build mirrors the repository layout
 # under /app: the frontend at /app/frontend plus the sibling directories
 # production code reaches through tsconfig `paths` aliases, `@mike/contracts`
 # -> /app/packages/contracts, `@mike/ui` -> /app/packages/ui and
@@ -14,7 +14,7 @@
 # resolves to the same path; frontend/src/__tests__/architecture.test.ts
 # checks that the two agree, and .github/workflows/docker-images.yml builds
 # this file in CI so a miss fails the pull request, not the next fresh install.
-# Two stages so the publish workflow can rebuild `app` (where the Sentry
+# The publish workflow can rebuild `app` (where the Sentry
 # source-map upload happens inside `next build`) without redoing `npm ci`:
 # BuildKit would otherwise reuse the build layer from a token-less build and
 # silently skip the upload, because secret contents are not part of the cache
@@ -25,12 +25,8 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 
-FROM deps AS app
-COPY frontend/ ./
-COPY packages/contracts /app/packages/contracts
-COPY packages/ui /app/packages/ui
-COPY packages/client /app/packages/client
-
+FROM node:22-slim AS configured
+WORKDIR /app/frontend
 # Baked Sentry defaults for the Next server and browser tunnel (optional).
 # Non-empty runtime SENTRY_* values override them. See docs/observability.md.
 ARG NEXT_PUBLIC_SENTRY_DSN=
@@ -54,6 +50,13 @@ ENV NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN \
     MIKE_VERSION=$MIKE_VERSION \
     GIT_SHA=$GIT_SHA
 
+FROM configured AS app
+COPY --from=deps /app/frontend/node_modules ./node_modules
+COPY frontend/ ./
+COPY packages/contracts /app/packages/contracts
+COPY packages/ui /app/packages/ui
+COPY packages/client /app/packages/client
+
 # Sentry source-map upload (docs/observability.md). Needs all three; the token
 # is a build secret so it never lands in an image layer.
 ARG SENTRY_ORG=
@@ -70,8 +73,14 @@ RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN,env=SENTRY_AUTH_TOKEN \
          fi ;; \
       *) echo "SENTRY_UPLOAD_ENABLED must be 0 or 1" >&2; exit 1 ;; \
     esac; \
-    npm run build
+    NEXT_OUTPUT_STANDALONE=1 npm run build
 
-ENV NODE_ENV=production
+# The tracing root is /app, so the generated server lives under frontend/.
+# Next serves public assets and client chunks alongside that server.
+FROM configured AS runtime
+COPY --from=app /app/frontend/.next/standalone /app
+COPY --from=app /app/frontend/.next/static ./.next/static
+COPY --from=app /app/frontend/public ./public
+ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

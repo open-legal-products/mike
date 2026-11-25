@@ -968,11 +968,12 @@ Backend and frontend Docker build contexts are now the repository root, so both
 can compile against `packages/contracts`. For a manual backend image build use
 `docker build -f backend/Dockerfile -t mike-backend .` from the root.
 
-Each image reads only what its Dockerfile copies: the frontend image contains
-`frontend/`, `packages/contracts`, `packages/ui` and `packages/client`; the
-add-in image holds `word-addin/`, the same three packages and
-`frontend/public/icons`, which its bundle includes. In the frontend image
-`next build` type-checks `frontend/tsconfig.build.json`, which excludes test
+The frontend builds from `frontend/`, `packages/contracts`, `packages/ui` and
+`packages/client`. Its runtime image ships the Next.js standalone server, traced
+dependencies, static chunks and public assets. The add-in builds from
+`word-addin/`, the same three packages and `frontend/public/icons`.
+
+The frontend build type-checks `frontend/tsconfig.build.json`, which excludes test
 files, so test fixtures and sibling applications never become build inputs. CI builds all three
 images on every pull request (`.github/workflows/docker-images.yml`), so a
 source change that reaches outside a build context fails before merge instead
