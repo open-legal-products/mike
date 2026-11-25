@@ -281,6 +281,8 @@ describe("async generation enqueue failures", () => {
                 rows: ROWS as never, cellMap, log: { error: vi.fn() } as never,
             });
             await vi.advanceTimersByTimeAsync(3_000);
+            // A dead queue is not asked again for the rows behind the failure.
+            expect(enqueueExtraction).toHaveBeenCalledTimes(failure === "all" ? 1 : 2);
             expect(cells[2]).toMatchObject({ status: "error", generation_id: null });
             expect(cells[0]).toMatchObject({ status: failure === "all" ? "error" : "done", generation_id: null });
             expect(cells[1]).toMatchObject({ status: "done", content: done, generation_id: null });

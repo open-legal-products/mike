@@ -549,8 +549,10 @@ export async function streamTabularGenerateAsync(args: {
         log,
         pending,
         afterSubscribe: async () => {
-            const rejectedRows: string[] = [];
-            for (const rowId of rowIds) {
+            // The first rejection ends submission. An unreachable queue costs
+            // a full timeout per row, so the rows behind it are settled too.
+            let rejectedRows: string[] = [];
+            for (const [index, rowId] of rowIds.entries()) {
                 try {
                     await enqueueExtraction({
                         reviewId,
@@ -559,12 +561,13 @@ export async function streamTabularGenerateAsync(args: {
                         generationId,
                     });
                 } catch (err) {
-                    rejectedRows.push(rowId);
+                    rejectedRows = rowIds.slice(index);
                     log.error("[tabular/generate-async] enqueue failed", {
                         err,
                         reviewId,
                         rowId,
                     });
+                    break;
                 }
             }
             if (!rejectedRows.length) return;

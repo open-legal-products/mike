@@ -227,7 +227,6 @@ export async function extractRowColumns(args: {
             markdown,
             processed,
             async (columnIndex, result) => {
-                received.add(columnIndex);
                 const query = db
                     .from("tabular_cells")
                     .update({
@@ -238,13 +237,16 @@ export async function extractRowColumns(args: {
                     .eq("review_id", reviewId)
                     .eq("row_id", row.id)
                     .eq("column_index", columnIndex);
-                const { data, error } = await (generationId
+                const { data, error: writeError } = await (generationId
                     ? query.eq("generation_id", generationId).select("id")
                     : query);
-                if (error) {
-                    received.delete(columnIndex);
-                    throw new AppError("tabular.generation_failed", "Could not save the extracted cell", { cause: error });
+                if (writeError) {
+                    // Returned, not thrown: the parser discards a throw from
+                    // this callback. The column stays missing for the caller.
+                    error = new AppError("tabular.generation_failed", "Could not save the extracted cell", { cause: writeError });
+                    return;
                 }
+                received.add(columnIndex);
                 // A late worker whose claim was revoked must not publish
                 // a result that was never written, even if its model finished.
                 if (generationId && !data?.length) return;

@@ -395,6 +395,41 @@ describe("extractRowColumns generation isolation", () => {
         expect(rows[0].generation_id).toBeNull();
     });
 
+    it("reports a cell it could not save as missing, with the database error as the cause", async () => {
+        const refused = { message: "write refused" };
+        let status: unknown;
+        const b: Record<string, unknown> = {
+            update: (payload: { status: string }) => ((status = payload.status), b),
+            eq: () => b,
+            in: () => b,
+            select: () => b,
+            then: (onF: (v: unknown) => unknown) =>
+                Promise.resolve(
+                    status === "done" ? { data: null, error: refused } : { data: [], error: null },
+                ).then(onF),
+        };
+        const sink = sinkSpy();
+        queryTabularAllColumns.mockImplementation(async (_m, _f, _t, cols, onResult) => {
+            for (const c of cols) await onResult(c.index, RESULT(c.index));
+        });
+
+        const result = await extractRowColumns({
+            db: { from: () => b } as never,
+            reviewId: "rev-1",
+            row: ROW,
+            columns: [COLUMNS[0]],
+            existingByColumn: new Map([[0, { id: "c0", status: "pending", content: null }]]),
+            model: "m",
+            apiKeys: {},
+            sink,
+            generationId: "gen-1",
+        });
+
+        expect(result.missing).toEqual([0]);
+        expect(result.error).toMatchObject({ kind: "tabular.generation_failed", cause: refused });
+        expect(sink.done).not.toHaveBeenCalled();
+    });
+
     it("still reports unreturned columns when the stream is aborted mid-run", async () => {
         // The caller (the sync route) resets these to "pending" rather than
         // "error" — but it can only do that if they are reported as missing.
