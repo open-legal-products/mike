@@ -244,6 +244,8 @@ export async function streamAssistant(
     wordDocumentId: string;
     documentName: string;
     wordChatStorage: "cloud" | "local";
+    /** "personal" or an organization id; an organization is sent as org_id. */
+    workspace?: string;
     editApplyMode?: "direct" | "approval";
     signal?: AbortSignal;
   },
@@ -258,6 +260,7 @@ export async function streamAssistant(
     document_id: params.wordDocumentId,
     document_name: params.documentName,
     storage: params.wordChatStorage,
+    workspace: params.workspace,
     edit_apply_mode: params.editApplyMode ?? "approval",
     // Capability is advertised by the code that can actually honour it, so
     // the flag can never drift from the implementation.

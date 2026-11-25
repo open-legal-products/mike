@@ -1,4 +1,8 @@
-import { BACKEND_REPORTING_OWNER } from "@mike/client";
+import {
+  BACKEND_REPORTING_OWNER,
+  PERSONAL_WORKSPACE,
+  workspaceOrgId,
+} from "@mike/client";
 import type {
   ApiKeyStatus,
   Document,
@@ -16,6 +20,10 @@ export type { ApiKeyStatus } from "../types";
 import type { RouterProfileLists } from "@mike/client";
 import { networkFailure } from "../lib/networkError";
 import { sessionHandledError } from "../lib/sessionRefresh";
+import {
+  WORKSPACE_NOT_FOUND_CODE,
+  announceWorkspaceGone,
+} from "../lib/workspaceState";
 import {
   reportApiFailure,
   reportError,
@@ -244,6 +252,11 @@ export async function responseError(
     message: handled?.message ?? parsed.message,
     reportingOwner: parsed.reportingOwner,
   });
+  // Whichever list found out that the caller has left the organization the
+  // pane is in, the workspace provider re-reads their organizations.
+  if (response.status === 404 && parsed.code === WORKSPACE_NOT_FOUND_CODE) {
+    announceWorkspaceGone();
+  }
   // A 5xx is the server's fault and worth an event; 4xx are user-facing
   // outcomes (validation, permission) and stay out of Sentry.
   if (response.status >= 500) {
@@ -324,11 +337,32 @@ async function uploadSessionFiles<T>(args: {
   });
 }
 
+/**
+ * The workspace a list request is narrowed to: "personal" or an organization
+ * id. The server checks membership and answers 404 `workspace_not_found` for
+ * an organization the caller has left.
+ */
+export type RequestWorkspace = string;
+
+/** The team organizations the caller belongs to, for the workspace menu. */
+export interface Org {
+  id: string;
+  name: string;
+}
+
+export async function listOrgs(): Promise<Org[]> {
+  return apiRequest<Org[]>("organizations.list", "/orgs");
+}
+
 export async function listProjects(pagination?: {
   limit?: number;
   offset?: number;
+  workspace?: RequestWorkspace;
 }): Promise<Project[]> {
-  const params = new URLSearchParams({ view: "summary", workspace: "personal" });
+  const params = new URLSearchParams({
+    view: "summary",
+    workspace: pagination?.workspace ?? PERSONAL_WORKSPACE,
+  });
   if (pagination?.limit != null) {
     params.set("limit", String(pagination.limit));
   }
@@ -387,11 +421,13 @@ export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
 
 export async function uploadStandaloneDocuments(
   files: File[],
-  options?: UploadRequestOptions<Document>,
+  options?: UploadRequestOptions<Document> & { workspace?: RequestWorkspace },
 ): Promise<UploadOutcome<Document>[]> {
+  // Filed in the workspace the pane is in, as a standalone web upload is.
+  const orgId = workspaceOrgId(options?.workspace);
   return uploadSessionFiles<Document>({
     purpose: "document_create",
-    destination: { scope: "standalone" },
+    destination: { scope: "standalone", ...(orgId ? { org_id: orgId } : {}) },
     files,
     onProgress: options?.onProgress,
     signal: options?.signal,
@@ -408,9 +444,11 @@ interface LibraryCollection {
 
 export async function getLibrary(
   kind: LibraryKind,
-  pagination?: { limit?: number; offset?: number },
+  pagination?: { limit?: number; offset?: number; workspace?: RequestWorkspace },
 ): Promise<LibraryCollection> {
-  const params = new URLSearchParams({ workspace: "personal" });
+  const params = new URLSearchParams({
+    workspace: pagination?.workspace ?? PERSONAL_WORKSPACE,
+  });
   if (pagination?.limit != null) {
     params.set("limit", String(pagination.limit));
   }
@@ -426,9 +464,12 @@ export async function getLibrary(
 export async function getLibraryFolderChildren(
   kind: LibraryKind,
   folderId: string,
-  pagination?: { limit?: number; offset?: number },
+  pagination?: { limit?: number; offset?: number; workspace?: RequestWorkspace },
 ): Promise<LibraryCollection> {
-  const params = new URLSearchParams({ parent_folder_id: folderId, workspace: "personal" });
+  const params = new URLSearchParams({
+    parent_folder_id: folderId,
+    workspace: pagination?.workspace ?? PERSONAL_WORKSPACE,
+  });
   if (pagination?.limit != null) {
     params.set("limit", String(pagination.limit));
   }
@@ -487,9 +528,16 @@ export async function streamWordChat(payload: {
   edit_apply_mode: "direct" | "approval";
   /** Declares that this pane executes client_tool_call frames. */
   client_tools?: boolean;
+  /**
+   * The workspace a new chat starts in. Only an organization is sent, as
+   * `org_id`; a resumed chat keeps the workspace it was created in.
+   */
+  workspace?: RequestWorkspace;
   signal?: AbortSignal;
 }): Promise<Response> {
-  const { signal, ...body } = payload;
+  const { signal, workspace, ...rest } = payload;
+  const orgId = workspaceOrgId(workspace);
+  const body = orgId ? { ...rest, org_id: orgId } : rest;
   const authHeaders = await getAuthHeaders();
   return sendRequest(apiUrl("/word-chat"), {
     method: "POST",
@@ -659,11 +707,12 @@ export async function readSSE(
 
 type WorkflowType = Workflow["metadata"]["type"];
 
-export async function listQuickActions(): Promise<
-  import("../types").QuickAction[]
-> {
+export async function listQuickActions(
+  workspace: RequestWorkspace = PERSONAL_WORKSPACE,
+): Promise<import("../types").QuickAction[]> {
+  const params = new URLSearchParams({ surface: "word", workspace });
   return apiRequest<import("../types").QuickAction[]>(
-    "quick_actions.run", "/quick-actions?surface=word&workspace=personal",
+    "quick_actions.run", `/quick-actions?${params}`,
   );
 }
 
@@ -758,13 +807,20 @@ export async function deleteWorkflowAsset(
   });
 }
 
-export async function listWorkflows(type: WorkflowType): Promise<Workflow[]> {
-  return apiRequest<Workflow[]>("workflows.run", `/workflows?type=${type}&workspace=personal`);
+export async function listWorkflows(
+  type: WorkflowType,
+  workspace: RequestWorkspace = PERSONAL_WORKSPACE,
+): Promise<Workflow[]> {
+  const params = new URLSearchParams({ type, workspace });
+  return apiRequest<Workflow[]>("workflows.run", `/workflows?${params}`);
 }
 
-/** Playbooks the user can run; Word chats are Personal, like its workflows. */
-export async function listPlaybooks(): Promise<Playbook[]> {
-  return apiRequest<Playbook[]>("playbooks.save", "/playbooks?workspace=personal");
+/** Playbooks the user can run in the pane's workspace, like its workflows. */
+export async function listPlaybooks(
+  workspace: RequestWorkspace = PERSONAL_WORKSPACE,
+): Promise<Playbook[]> {
+  const params = new URLSearchParams({ workspace });
+  return apiRequest<Playbook[]>("playbooks.save", `/playbooks?${params}`);
 }
 
 export async function createWorkflow(payload: {
@@ -777,6 +833,8 @@ export async function createWorkflow(payload: {
   };
   skill_md?: string;
   columns_config?: { index: number; name: string; prompt: string }[];
+  /** The organization a workflow made in its workspace belongs to. */
+  org_id?: string;
 }): Promise<Workflow> {
   return apiRequest<Workflow>("workflows.run", "/workflows", {
     method: "POST",

@@ -393,6 +393,15 @@ describe("deleteAllUserChats", () => {
                 { id: "wd1", user_id: "u1" },
                 { id: "wd2", user_id: "u2" },
             ],
+            word_chats: [
+                { id: "w-personal", user_id: "u1", word_document_id: "wd1", org_id: null },
+                { id: "w-firm", user_id: "u1", word_document_id: "wd1", org_id: "o1" },
+                { id: "w-colleague", user_id: "u2", word_document_id: "wd2", org_id: null },
+            ],
+            word_chat_messages: [
+                { id: "wm-personal", chat_id: "w-personal" },
+                { id: "wm-firm", chat_id: "w-firm" },
+            ],
         });
 
     it("deletes only the user's Personal assistant, Word, and tabular chats", async () => {
@@ -404,7 +413,10 @@ describe("deleteAllUserChats", () => {
             "tc-other-firm",
             "tc-colleague",
         ]);
-        expect(ids(tables.word_documents)).toEqual(["wd2"]);
+        expect(ids(tables.word_chats)).toEqual(["w-firm", "w-colleague"]);
+        expect(ids(tables.word_chat_messages)).toEqual(["wm-firm"]);
+        // One document can hold chats in several workspaces.
+        expect(ids(tables.word_documents)).toEqual(["wd1", "wd2"]);
     });
 
     it("deletes only the user's chats in the organization named", async () => {
@@ -420,7 +432,8 @@ describe("deleteAllUserChats", () => {
             "tc-other-firm",
             "tc-colleague",
         ]);
-        // The Word add-in works in Personal only.
+        expect(ids(tables.word_chats)).toEqual(["w-personal", "w-colleague"]);
+        expect(ids(tables.word_chat_messages)).toEqual(["wm-personal"]);
         expect(ids(tables.word_documents)).toEqual(["wd1", "wd2"]);
         // The reviews themselves stay.
         expect(tables.tabular_reviews).toHaveLength(3);

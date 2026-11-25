@@ -92,7 +92,7 @@ describe("word chat service failures", () => {
     const cause = pgError("08006", "connection lost");
     const result = await listWordChats(
       makeDb({ word_documents: { data: null, error: cause } }),
-      { userId: "u1", clientDocumentId: DOCUMENT_ID, limit: 20, offset: 0 },
+      { userId: "u1", clientDocumentId: DOCUMENT_ID, workspace: null, limit: 20, offset: 0 },
     );
 
     expect(result).toMatchObject({ ok: false, kind: "error" });

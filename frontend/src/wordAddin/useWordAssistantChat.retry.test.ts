@@ -17,7 +17,7 @@ import { useWordAssistantChat } from '../../../word-addin/src/taskpane/hooks/use
 import { WordChatStreamInterrupted, WordChatTerminalError } from '../../../word-addin/src/taskpane/api/stream';
 const submission = (content: string) => ({ content, model: 'gpt-5.4', reasoning: 'none' as const });
 function setup() {
-    return renderHook(({ sessionKey, documentId }) => useWordAssistantChat({ sessionKey, chatId: 'chat-1', initialMessages: [], onChatIdChange: vi.fn(), onChatStarted: vi.fn(), wordDocumentId: documentId, wordChatStorage: 'cloud', wordChatOwnerId: 'user-1', editApplyMode: 'direct', editController: { applyToolEdits: vi.fn().mockResolvedValue([]), processLiveRedlines: vi.fn(), markIncompleteRedlines: vi.fn(), waitForMessageEdits: vi.fn().mockResolvedValue(undefined) } }), { initialProps: { sessionKey: 1, documentId: "doc-1" } });
+    return renderHook(({ sessionKey, documentId }) => useWordAssistantChat({ sessionKey, chatId: 'chat-1', initialMessages: [], onChatIdChange: vi.fn(), onChatStarted: vi.fn(), wordDocumentId: documentId, wordChatStorage: 'cloud', wordChatOwnerId: 'user-1', workspace: 'personal', editApplyMode: 'direct', editController: { applyToolEdits: vi.fn().mockResolvedValue([]), processLiveRedlines: vi.fn(), markIncompleteRedlines: vi.fn(), waitForMessageEdits: vi.fn().mockResolvedValue(undefined) } }), { initialProps: { sessionKey: 1, documentId: "doc-1" } });
 }
 beforeEach(() => { vi.clearAllMocks(); mocks.stream.mockReset(); mocks.resume.mockReset(); });
 it('an old failure Retry refuses after a newer successful turn', async () => {

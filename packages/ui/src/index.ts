@@ -28,6 +28,8 @@ export * from "./dropdown";
 export * from "./ModelToggleUI";
 export * from "./WorkflowSlashCommandUI";
 export * from "./ChatHistoryDropdownUI";
+export * from "./WorkspaceMenuUI";
+export * from "./useWorkspaceSelection";
 
 // Surfaces and cards
 export * from "./GlassCardUI";

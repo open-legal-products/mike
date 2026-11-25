@@ -215,9 +215,34 @@ describe("exports enforce current read access", () => {
         const result = await buildUserChatsExport(db, userId, undefined, null);
         expect(ids(result.assistant_chats.messages)).toEqual(["personal-message"]);
         expect(ids(result.word_addin_chats.messages)).toEqual(["word-message"]);
-        // The add-in works in Personal only.
+        // Nothing of the Personal Word chat reaches an organization's export.
         const firm = await buildUserChatsExport(db, userId, undefined, "current-org");
         expect(firm.word_addin_chats).toEqual({ documents: [], chats: [], messages: [] });
+    });
+
+    it("exports each Word chat with its own workspace", async () => {
+        const { db } = makeExportDb({
+            word_documents: [resource("word-doc"), resource("word-doc-personal-only")],
+            word_chats: [
+                resource("word-personal", { word_document_id: "word-doc" }),
+                resource("word-firm", { word_document_id: "word-doc", org_id: "current-org" }),
+            ],
+            word_chat_messages: [
+                { id: "message-personal", chat_id: "word-personal" },
+                { id: "message-firm", chat_id: "word-firm" },
+            ],
+        });
+        const personal = await buildUserChatsExport(db, userId, email, null);
+        expect(ids(personal.word_addin_chats.chats)).toEqual(["word-personal"]);
+        expect(ids(personal.word_addin_chats.messages)).toEqual(["message-personal"]);
+        expect(ids(personal.word_addin_chats.documents)).toEqual([
+            "word-doc",
+            "word-doc-personal-only",
+        ]);
+        const firm = await buildUserChatsExport(db, userId, email, "current-org");
+        expect(ids(firm.word_addin_chats.chats)).toEqual(["word-firm"]);
+        expect(ids(firm.word_addin_chats.messages)).toEqual(["message-firm"]);
+        expect(ids(firm.word_addin_chats.documents)).toEqual(["word-doc"]);
     });
 
     it("exports the user's own readable playbooks, their runs and imports, and nobody else's", async () => {

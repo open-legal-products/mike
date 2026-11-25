@@ -8,6 +8,11 @@ import { useOpenWordChat } from "../../hooks/useOpenWordChat";
 import { usePaginatedChats } from "../../hooks/usePaginatedChats";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
 import type { WordChatOpenHandler } from "../../lib/wordChatTypes";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
+import {
+  historyEmptyLabel,
+  workspaceStorageNotice,
+} from "../../lib/workspaceState";
 
 const PAGE_SIZE = 10;
 
@@ -34,10 +39,18 @@ export function ChatHistoryDropdown({
 }: ChatHistoryDropdownProps): React.ReactElement {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const { workspaceId, organizations } = useAddinWorkspace();
   // The header is mounted with the Assistant page, so this preloads the first
   // ten rows before the user opens the dropdown.
   const { chats, loading, loadingMore, error, hasMore, loadMore, retry } =
-    usePaginatedChats(PAGE_SIZE, true, documentId, ownerId, storageMode);
+    usePaginatedChats(
+      PAGE_SIZE,
+      true,
+      documentId,
+      ownerId,
+      storageMode,
+      workspaceId,
+    );
   const { openChat, loadingChatId, openError, cancel } = useOpenWordChat(
     documentId,
     ownerId,
@@ -104,7 +117,9 @@ export function ChatHistoryDropdown({
       onRetry={retry}
       notice={openError}
       emptyLabel={
-        search ? "No matches found" : "No chats saved for this document"
+        (!search &&
+          workspaceStorageNotice(storageMode, workspaceId, organizations)) ||
+        historyEmptyLabel(search, workspaceId, organizations)
       }
       onReachEnd={loadMore}
       loadingMore={loadingMore}

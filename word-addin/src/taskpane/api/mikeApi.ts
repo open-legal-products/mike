@@ -103,6 +103,7 @@ export {
   getProjectDirectoryLevel,
   getUserProfile,
   getWorkflowAssetUrl,
+  listOrgs,
   listProjects,
   listQuickActions,
   listPlaybooks,
@@ -124,6 +125,8 @@ export {
 } from "./client";
 export type {
   ApiKeyStatus,
+  Org,
+  RequestWorkspace,
   UploadOutcome,
   UploadProgress,
   UploadRequestOptions,
@@ -237,9 +240,12 @@ export async function listCloudWordChats(
   limit: number,
   offset = 0,
   signal?: AbortSignal,
+  /** "personal" or an organization id: only that workspace's chats. */
+  workspace = "personal",
 ): Promise<Chat[]> {
   const params = new URLSearchParams({
     document_id: documentId,
+    workspace,
     limit: String(limit),
     offset: String(offset),
   });

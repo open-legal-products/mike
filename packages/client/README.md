@@ -12,6 +12,9 @@ Client behavior shared by the Mike web app (`frontend/`) and the Word add-in
 - `uploadSessionClient.ts` (with `settleWithConcurrency.ts`, `secureUuid.ts`):
   the upload-session protocol.
 - `messageExcerpts.ts`: the wire format for quoting a passage of a response.
+- `workspaceSelection.ts`: which workspace (Personal or an organization) the
+  lists show, how it is remembered over a sync or async storage, and how a
+  switch to a newly joined organization is checked.
 - `sentryEvent.ts`, `sentryPrivacy.ts`: Sentry event hygiene. `sentryPrivacy.ts`
   is byte-identical to `backend/src/lib/observability/sentryPrivacy.ts`; the
   sync test guards it.

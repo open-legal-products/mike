@@ -25,6 +25,7 @@ import {
 } from "../primitives/ModalForm";
 import { PageTitle } from "../primitives/PageTitle";
 import { reportFault, notifyError } from "../../lib/notify";
+import { useAddinWorkspace } from "../../lib/addinWorkspace";
 
 interface DocumentActionsProps {
   createOpen: boolean;
@@ -35,6 +36,7 @@ export function DocumentActions({
   createOpen,
   onCreateClose,
 }: DocumentActionsProps): React.ReactElement {
+  const { workspaceId } = useAddinWorkspace();
   const [search, setSearch] = useState("");
   const [selectedAction, setSelectedAction] = useState<QuickAction | null>(
     null,
@@ -55,7 +57,7 @@ export function DocumentActions({
 
   useEffect(() => {
     let cancelled = false;
-    void listWorkflows("assistant")
+    void listWorkflows("assistant", workspaceId)
       .then((rows) => {
         if (cancelled) return;
         setWorkflows(rows);
@@ -80,7 +82,7 @@ export function DocumentActions({
     return () => {
       cancelled = true;
     };
-  }, [workflowsAttempt]);
+  }, [workflowsAttempt, workspaceId]);
 
   useEffect(() => {
     if (!createOpen) return;

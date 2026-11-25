@@ -54,6 +54,8 @@ interface ChatViewProps
     onSelectedWorkflowChange: (workflow: WorkflowAttachment | null) => void;
     editApplyMode: WordEditApplyMode;
     onEditApplyModeChange: (mode: WordEditApplyMode) => void;
+    /** Why a chat cannot start in this workspace, shown on the empty chat. */
+    workspaceNotice?: string | null;
 }
 
 /**
@@ -165,6 +167,7 @@ export function ChatView({
     onSelectedWorkflowChange,
     editApplyMode,
     onEditApplyModeChange,
+    workspaceNotice = null,
 }: ChatViewProps): React.ReactElement {
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -729,6 +732,7 @@ export function ChatView({
                     style={{ paddingBottom: composerHeight + 16 }}
                 >
                     <InitialView
+                        notice={workspaceNotice}
                         onSelect={(action) => {
                             onSelectedWorkflowChange(action.workflow);
                             chatInputRef.current?.setDraft(action.prompt);
