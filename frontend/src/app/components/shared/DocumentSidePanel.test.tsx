@@ -7,7 +7,7 @@ import { getDocumentComparison, type DocumentVersion } from "@/app/lib/mikeApi";
 import { DocumentSidePanel } from "./DocumentSidePanel";
 
 vi.mock("@/app/lib/mikeApi", async (original) => ({
-    ...(await original()),
+    ...(await original<typeof import("@/app/lib/mikeApi")>()),
     getDocumentComparison: vi.fn(),
 }));
 

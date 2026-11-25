@@ -275,7 +275,6 @@ documentsRouter.get("/:documentId/versions", requireAuth, asyncRoute(async (req,
 // GET /single-documents/:documentId/versions/compare?base=<id>&target=<id>
 // A redline of two Word versions of one document: `target` with every
 // difference from `base` as a tracked change.
-const COMPARE_FAILURE_STATUS = { not_found: 404, invalid: 400, too_large: 413, unprocessable: 422, busy: 429 } as const;
 documentsRouter.get("/:documentId/versions/compare", requireAuth, asyncRoute(async (req, res) => {
     setOperation("documents.version");
     const text = (value: unknown) => (typeof value === "string" ? value : "");
@@ -287,15 +286,15 @@ documentsRouter.get("/:documentId/versions/compare", requireAuth, asyncRoute(asy
         targetVersionId: text(req.query.target),
         db: createServerSupabase(),
     });
-    if (!result.ok)
-        return void res.status(COMPARE_FAILURE_STATUS[result.kind]).json({ detail: result.detail });
+    if (!result.ok) return void sendServiceFailure(res, result);
+    const { redline, filename } = result.data;
 
     // Computed from the caller's own access to two specific versions.
     res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Content-Type", contentTypeForDocumentType("docx"));
-    res.setHeader("Content-Length", result.redline.byteLength);
-    res.setHeader("Content-Disposition", buildContentDisposition("inline", result.filename));
-    res.end(result.redline);
+    res.setHeader("Content-Length", redline.byteLength);
+    res.setHeader("Content-Disposition", buildContentDisposition("inline", filename));
+    res.end(redline);
 }));
 
 // POST /single-documents/:documentId/versions/from-document

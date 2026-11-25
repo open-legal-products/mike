@@ -29,10 +29,7 @@ vi.mock("../documents.access", async (importOriginal) => ({
 }));
 vi.mock("../../../lib/storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/storage")>()),
-  downloadFile: async (key: string) => {
-    const bytes = state.objects.get(key);
-    return bytes ? Uint8Array.from(bytes).buffer : null;
-  },
+  downloadFileWithinLimit: async (key: string) => state.objects.get(key) ?? null,
 }));
 import { documentsRouter } from "../documents.routes";
 

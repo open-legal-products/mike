@@ -256,6 +256,38 @@ describe("not-configured degradation (shared policy)", () => {
     log.mockRestore();
   });
 
+  it("accepts exactly the byte limit and stops an oversized stream early", async () => {
+    const adapter = fakeAdapter();
+    storage.setStorageAdapter(adapter);
+    expect(await storage.downloadFileWithinLimit("k", 3)).toEqual(Buffer.from([1, 2, 3]));
+    let reads = 0;
+    let signal: AbortSignal | undefined;
+    adapter.openReadStream = async (_key, options) => {
+      signal = options?.signal;
+      return (async function* () {
+        while (++reads <= 20) yield Buffer.alloc(64 * 1024);
+      })();
+    };
+    expect(await storage.downloadFileWithinLimit("k", 64 * 1024)).toBe("too_large");
+    expect(signal?.aborted).toBe(true);
+    expect(reads).toBeLessThan(20);
+    expect(adapter.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes absent objects from storage failures when buffering a limited read", async () => {
+    const openReadStream = vi.fn<StorageAdapter["openReadStream"]>();
+    storage.setStorageAdapter(fakeAdapter({ openReadStream }));
+    const denied = Object.assign(new Error("denied"), { name: "AccessDenied" });
+    openReadStream.mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(Object.assign(new Error(), { name: "NoSuchKey" }))
+      .mockResolvedValueOnce((async function* (): AsyncGenerator<Uint8Array> {
+        throw Object.assign(new Error(), { code: "ENOENT" });
+      })())
+      .mockRejectedValueOnce(denied);
+    for (let i = 0; i < 3; i++) expect(await storage.downloadFileWithinLimit("k", 3)).toBeNull();
+    await expect(storage.downloadFileWithinLimit("k", 3)).rejects.toMatchObject({ cause: denied });
+  });
+
   it("gives up on a streamed read that stalls, and releases the store", async () => {
     vi.stubEnv("STORAGE_DOWNLOAD_TIMEOUT_MS", "20");
     let storeSignal: AbortSignal | undefined;

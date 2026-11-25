@@ -6,7 +6,10 @@ import { downloadBlob, downloadDocumentFile } from "@/app/lib/downloadDocument";
 import type { PanelDocument } from "./types";
 import { DocumentContent } from "./DocumentContent";
 
-vi.mock("@/app/lib/authEvents", async (original) => ({ ...(await original()), authenticatedFetch: vi.fn() }));
+vi.mock("@/app/lib/authEvents", async (original) => ({
+    ...(await original<typeof import("@/app/lib/authEvents")>()),
+    authenticatedFetch: vi.fn(),
+}));
 vi.mock("@/app/lib/downloadDocument", () => ({ downloadBlob: vi.fn(), downloadDocumentFile: vi.fn() }));
 
 const { viewer, loadVersions } = vi.hoisted(() => ({ viewer: vi.fn(), loadVersions: vi.fn() }));

@@ -12,6 +12,9 @@
 //                       know it exists (the default for authorization gaps,
 //                       so a 403 never leaks a foreign id)
 //   conflict    → 409   the operation is valid but the current state rejects it
+//   too_large   → 413   an input exceeds the allowed size
+//   unprocessable → 422 the input cannot be processed
+//   busy        → 429   the caller can retry when capacity is available
 //   unavailable → 503   a dependency (storage, provider) is not configured
 //   error       → 500   an unexpected failure; the raw error is logged by
 //                       `sendInternalError` and never sent to the client
@@ -27,6 +30,9 @@ export type ServiceFailureKind =
   | "validation"
   | "forbidden"
   | "not_found"
+  | "too_large"
+  | "unprocessable"
+  | "busy"
   | "conflict"
   | "unavailable"
   | "error";
@@ -97,6 +103,9 @@ const STATUS_FOR_KIND: Record<Exclude<ServiceFailureKind, "error">, number> = {
   forbidden: 403,
   not_found: 404,
   conflict: 409,
+  too_large: 413,
+  unprocessable: 422,
+  busy: 429,
   unavailable: 503,
 };
 

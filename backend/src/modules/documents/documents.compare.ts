@@ -11,7 +11,8 @@ import {
     type DocxDiffEngine,
 } from "../../lib/docxDiff";
 import { loadActiveVersion, type ActiveVersion } from "../../lib/documentVersions";
-import { downloadFile } from "../../lib/storage";
+import { failure, ok, type ServiceResult } from "../../lib/serviceResult";
+import { downloadFileWithinLimit } from "../../lib/storage";
 import type { Db } from "./documents.shared";
 import { ensureDocumentAccess } from "./documents.access";
 
@@ -21,16 +22,6 @@ export const COMPARE_MAX_VERSION_BYTES = 20 * 1024 * 1024;
 let comparisonInProgress = false;
 
 export const COMPARE_AUTHOR = "Mike comparison";
-
-export type CompareVersionsFailure = {
-    ok: false;
-    kind: "not_found" | "invalid" | "too_large" | "unprocessable" | "busy";
-    detail: string;
-};
-
-export type CompareVersionsResult =
-    | { ok: true; redline: Buffer; filename: string }
-    | CompareVersionsFailure;
 
 function isDocx(version: ActiveVersion): boolean {
     // Older rows have no file_type; their filename still carries the suffix.
@@ -59,18 +50,18 @@ export async function compareVersions(params: {
     db: Db;
     engine?: DocxDiffEngine;
     now?: Date;
-}): Promise<CompareVersionsResult> {
+}): Promise<ServiceResult<{ redline: Buffer; filename: string }>> {
     const { documentId, userId, userEmail, baseVersionId, targetVersionId, db } = params;
     if (!baseVersionId || !targetVersionId)
-        return { ok: false, kind: "invalid", detail: "base and target versions are required." };
+        return failure("validation", "base and target versions are required.");
     if (baseVersionId === targetVersionId)
-        return { ok: false, kind: "invalid", detail: "Choose two different versions to compare." };
+        return failure("validation", "Choose two different versions to compare.");
 
     // One answer for a missing document and one the caller may not read, so
     // the endpoint cannot be used to probe for documents.
     const access = await ensureDocumentAccess(documentId, userId, userEmail, db);
     if (!access.ok && access.kind === "error") throw access.error;
-    if (!access.ok) return { ok: false, kind: "not_found", detail: "Document not found" };
+    if (!access.ok) return failure("not_found", "Document not found");
 
     // loadActiveVersion only returns a live version that belongs to this
     // document, so a version id from another document reads as not found.
@@ -79,36 +70,38 @@ export async function compareVersions(params: {
         loadActiveVersion(documentId, db, targetVersionId),
     ]);
     if (!base || !target || base.id !== baseVersionId || target.id !== targetVersionId)
-        return { ok: false, kind: "not_found", detail: "Version not found" };
+        return failure("not_found", "Version not found");
     if (!isDocx(base) || !isDocx(target))
-        return { ok: false, kind: "invalid", detail: "Only Word (.docx) versions can be compared." };
+        return failure("validation", "Only Word (.docx) versions can be compared.");
     const tooLarge = (bytes: number | null | undefined) => (bytes ?? 0) > COMPARE_MAX_VERSION_BYTES;
     if (tooLarge(base.size_bytes) || tooLarge(target.size_bytes))
-        return { ok: false, kind: "too_large", detail: "These versions are too large to compare." };
+        return failure("too_large", "These versions are too large to compare.");
 
     if (comparisonInProgress)
-        return { ok: false, kind: "busy", detail: "Another comparison is running. Please try again shortly." };
+        return failure("busy", "Another comparison is running. Please try again shortly.");
     comparisonInProgress = true;
     try {
-        const [baseBytes, targetBytes] = await Promise.all([
-            downloadFile(base.storage_path),
-            downloadFile(target.storage_path),
+        // Both reads own the slot, including when one of them fails.
+        const [original, revised] = await Promise.allSettled([
+            downloadFileWithinLimit(base.storage_path, COMPARE_MAX_VERSION_BYTES),
+            downloadFileWithinLimit(target.storage_path, COMPARE_MAX_VERSION_BYTES),
         ]);
-        if (!baseBytes || !targetBytes)
-            return { ok: false, kind: "not_found", detail: "Document bytes not available" };
-        // size_bytes is metadata; the stored object is what the engine will parse.
-        if (tooLarge(baseBytes.byteLength) || tooLarge(targetBytes.byteLength))
-            return { ok: false, kind: "too_large", detail: "These versions are too large to compare." };
+        if (original.status === "rejected") throw original.reason;
+        if (revised.status === "rejected") throw revised.reason;
+        if (original.value === null || revised.value === null)
+            return failure("not_found", "Document bytes not available");
+        if (original.value === "too_large" || revised.value === "too_large")
+            return failure("too_large", "These versions are too large to compare.");
 
         const engine = params.engine ?? getDocxDiffEngine();
-        const redline = await engine.compare(Buffer.from(baseBytes), Buffer.from(targetBytes), {
+        const redline = await engine.compare(original.value, revised.value, {
             author: COMPARE_AUTHOR,
             date: params.now ?? new Date(),
         });
-        return { ok: true, redline, filename: redlineFilename(base, target) };
+        return ok({ redline, filename: redlineFilename(base, target) });
     } catch (error) {
         if (error instanceof DocxDiffError)
-            return { ok: false, kind: "unprocessable", detail: "These versions could not be compared." };
+            return failure("unprocessable", "These versions could not be compared.");
         throw error;
     } finally {
         comparisonInProgress = false;

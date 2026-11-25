@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { tableDb } from "../../../__tests__/helpers/tableDb";
 import { DocxDiffError, type DocxDiffEngine } from "../../../lib/docxDiff";
 
-const mocks = vi.hoisted(() => ({ access: vi.fn(), downloadFile: vi.fn() }));
+const mocks = vi.hoisted(() => ({ access: vi.fn(), downloadFileWithinLimit: vi.fn() }));
 // Only the access verdict and object storage are stubbed. Version lookup
 // (loadActiveVersion) runs for real against the in-memory tables, so the
 // "belongs to this document" and "not deleted" rules under test are the
@@ -13,7 +13,7 @@ vi.mock("../documents.access", async (importOriginal) => ({
 }));
 vi.mock("../../../lib/storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/storage")>()),
-  downloadFile: mocks.downloadFile,
+  downloadFileWithinLimit: mocks.downloadFileWithinLimit,
 }));
 import { COMPARE_AUTHOR, COMPARE_MAX_VERSION_BYTES, compareVersions } from "../documents.compare";
 
@@ -38,7 +38,7 @@ function setup(versions = [version("v1", 1), version("v2", 2), version("v3", 3)]
 
 beforeEach(() => {
   mocks.access.mockReset().mockResolvedValue({ ok: true, doc: { id: "doc" }, isCreator: true, projectRole: "owner" });
-  mocks.downloadFile.mockReset().mockImplementation(async (key: string) => new TextEncoder().encode(key).buffer);
+  mocks.downloadFileWithinLimit.mockReset().mockImplementation(async (key: string) => Buffer.from(key));
 });
 
 describe("compareVersions", () => {
@@ -46,9 +46,12 @@ describe("compareVersions", () => {
     const { run, compare } = setup();
     const result = await run("v1", "v3");
     expect(result).toMatchObject({
-      ok: true, redline: Buffer.from("redline"),
-      filename: "MSA (V1 to V3 comparison).docx",
+      ok: true,
+      data: { redline: Buffer.from("redline"), filename: "MSA (V1 to V3 comparison).docx" },
     });
+    expect(mocks.downloadFileWithinLimit.mock.calls).toEqual([
+      ["doc/v1.docx", COMPARE_MAX_VERSION_BYTES], ["doc/v3.docx", COMPARE_MAX_VERSION_BYTES],
+    ]);
     const [original, revised, options] = compare.mock.calls[0];
     expect(original.toString()).toBe("doc/v1.docx");
     expect(revised.toString()).toBe("doc/v3.docx");
@@ -57,7 +60,7 @@ describe("compareVersions", () => {
 
   it("lets the caller compare newer-to-older without reordering them", async () => {
     const { run, compare } = setup();
-    expect(await run("v3", "v1")).toMatchObject({ ok: true, filename: "MSA (V3 to V1 comparison).docx" });
+    expect(await run("v3", "v1")).toMatchObject({ ok: true, data: { filename: "MSA (V3 to V1 comparison).docx" } });
     expect(compare.mock.calls[0][0].toString()).toBe("doc/v3.docx");
   });
 
@@ -66,14 +69,14 @@ describe("compareVersions", () => {
     mocks.access.mockResolvedValue({ ok: false, kind: "forbidden" });
     expect(await run("v1", "v2")).toEqual({ ok: false, kind: "not_found", detail: "Document not found" });
     expect(fake.calls).toEqual([]);
-    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(mocks.downloadFileWithinLimit).not.toHaveBeenCalled();
     expect(compare).not.toHaveBeenCalled();
   });
 
   it("refuses a version that belongs to a different document", async () => {
     const { run, compare } = setup();
     expect(await run("v1", "x1")).toEqual({ ok: false, kind: "not_found", detail: "Version not found" });
-    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(mocks.downloadFileWithinLimit).not.toHaveBeenCalled();
     expect(compare).not.toHaveBeenCalled();
   });
 
@@ -85,15 +88,15 @@ describe("compareVersions", () => {
 
   it.each([["v1", "v1"], ["", "v2"], ["v1", ""]])("rejects base=%j target=%j without loading anything", async (base, target) => {
     const { run, fake } = setup();
-    expect(await run(base, target)).toMatchObject({ ok: false, kind: "invalid" });
+    expect(await run(base, target)).toMatchObject({ ok: false, kind: "validation" });
     expect(mocks.access).not.toHaveBeenCalled();
     expect(fake.calls).toEqual([]);
   });
 
   it("only compares Word documents, recognising legacy rows by filename", async () => {
     const pdf = setup([version("v1", 1), version("v2", 2, { file_type: "pdf", filename: "MSA.pdf" })]);
-    expect(await pdf.run("v1", "v2")).toEqual({ ok: false, kind: "invalid", detail: "Only Word (.docx) versions can be compared." });
-    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(await pdf.run("v1", "v2")).toEqual({ ok: false, kind: "validation", detail: "Only Word (.docx) versions can be compared." });
+    expect(mocks.downloadFileWithinLimit).not.toHaveBeenCalled();
 
     const legacy = setup([version("v1", 1, { file_type: null }), version("v2", 2, { file_type: null, filename: "MSA final.DOCX" })]);
     expect(await legacy.run("v1", "v2")).toMatchObject({ ok: true });
@@ -102,20 +105,20 @@ describe("compareVersions", () => {
   it("refuses an oversized version from its metadata, without downloading it", async () => {
     const { run, compare } = setup([version("v1", 1), version("v2", 2, { size_bytes: COMPARE_MAX_VERSION_BYTES + 1 })]);
     expect(await run("v1", "v2")).toMatchObject({ ok: false, kind: "too_large" });
-    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(mocks.downloadFileWithinLimit).not.toHaveBeenCalled();
     expect(compare).not.toHaveBeenCalled();
   });
 
-  it("refuses an oversized object even when its metadata understates the size", async () => {
-    const { run, compare } = setup();
-    mocks.downloadFile.mockResolvedValue(new ArrayBuffer(COMPARE_MAX_VERSION_BYTES + 1));
+  it.each([null, 1000])("refuses an oversized object with stored size %s", async size => {
+    const { run, compare } = setup([version("v1", 1, { size_bytes: size }), version("v2", 2)]);
+    mocks.downloadFileWithinLimit.mockResolvedValue("too_large");
     expect(await run("v1", "v2")).toMatchObject({ ok: false, kind: "too_large" });
     expect(compare).not.toHaveBeenCalled();
   });
 
   it("reports missing stored bytes as not found", async () => {
     const { run, compare } = setup();
-    mocks.downloadFile.mockImplementation(async (key: string) => key.includes("v2") ? null : new ArrayBuffer(4));
+    mocks.downloadFileWithinLimit.mockImplementation(async (key: string) => key.includes("v2") ? null : Buffer.alloc(4));
     expect(await run("v1", "v2")).toEqual({ ok: false, kind: "not_found", detail: "Document bytes not available" });
     expect(compare).not.toHaveBeenCalled();
   });
@@ -134,11 +137,30 @@ describe("compareVersions", () => {
     await vi.waitFor(() => expect(compare).toHaveBeenCalledOnce());
     try {
       expect(await run("v2", "v3")).toMatchObject({ ok: false, kind: "busy" });
-      expect(mocks.downloadFile).toHaveBeenCalledTimes(2);
+      expect(mocks.downloadFileWithinLimit).toHaveBeenCalledTimes(2);
     } finally {
       finish(Buffer.from("redline"));
       await first;
     }
+    expect(await run("v2", "v3")).toMatchObject({ ok: true });
+  });
+
+  it("keeps the slot after one read rejects until the sibling read settles", async () => {
+    const { run, compare } = setup();
+    const storageError = new Error("storage unavailable");
+    let finish!: (bytes: Buffer) => void;
+    mocks.downloadFileWithinLimit.mockRejectedValueOnce(storageError)
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = expect(run("v1", "v2")).rejects.toBe(storageError);
+    await vi.waitFor(() => expect(mocks.downloadFileWithinLimit).toHaveBeenCalledTimes(2));
+    try {
+      expect(await run("v2", "v3")).toMatchObject({ ok: false, kind: "busy" });
+      expect(mocks.downloadFileWithinLimit).toHaveBeenCalledTimes(2);
+    } finally {
+      finish(Buffer.from("target"));
+      await first;
+    }
+    expect(compare).not.toHaveBeenCalled();
     expect(await run("v2", "v3")).toMatchObject({ ok: true });
   });
 
