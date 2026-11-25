@@ -679,6 +679,13 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
   // answer client_tool_call frames; older panes keep the streamed <EDITS>
   // protocol so they are never handed tool calls they would ignore.
   const clientToolsEnabled = body.client_tools === true;
+  // Which Office client the pane runs in. The same task pane serves Word and
+  // Outlook; Outlook's "active document" is the email being composed and it
+  // has no tracked-change edit channel.
+  if (body.host !== undefined && body.host !== "word" && body.host !== "outlook") {
+    return void res.status(400).json({ detail: "host must be word or outlook" });
+  }
+  const officeHost: "word" | "outlook" = body.host === "outlook" ? "outlook" : "word";
 
   const activeDocumentName = parsedDocumentName.value;
   const persistChat = parsedStorage.value === "cloud";
@@ -695,6 +702,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     documentContext: parsedDocumentContext.documentContext,
     persistChat,
     clientToolsEnabled,
+    officeHost,
     requestedModel: parsedModel.value,
     requestedReasoning: parsedReasoning.value,
     requestedTimeZone: req.body?.time_zone,
@@ -862,6 +870,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 });
               },
               userId,
+              host: officeHost,
               write: writeClientToolFrame,
               signal: stream.signal,
               nonce,

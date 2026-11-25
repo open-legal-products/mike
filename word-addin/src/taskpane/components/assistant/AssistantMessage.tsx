@@ -11,6 +11,8 @@ import type {
 } from "../../types";
 import { PillButtonUI as PillButton } from "@mike/ui";
 import { TextCardUI } from "@mike/ui";
+import { EmailDraftActions } from "./EmailDraftActions";
+import { isOutlookHost } from "../../lib/officeHost";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { EditCardsSection } from "./message/EditCardsSection";
@@ -403,6 +405,11 @@ function AssistantMessageImpl({
                 key={`card-${group.event.card_id}`}
                 title={group.event.title}
                 text={group.event.text}
+                footer={
+                  isOutlookHost() && !isStreaming ? (
+                    <EmailDraftActions text={group.event.text} />
+                  ) : undefined
+                }
               />
             );
           }

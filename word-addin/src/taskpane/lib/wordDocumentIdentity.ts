@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { createSecureUuid } from "./secureUuid";
 import { clearWordEditAnchorRegistry } from "./wordEditAnchors";
 import { reportFault } from "./notify";
+import { isOutlookHost } from "./officeHost";
+import { currentOutlookSubject, getOrCreateOutlookDocumentId } from "./outlookCompose";
 
 const WORD_DOCUMENT_ID_SETTING = "mike.word.documentId.v1";
 const WORD_DOCUMENT_URL_SETTING = "mike.word.documentUrl.v1";
@@ -38,6 +40,7 @@ function readCurrentDocumentUrl(): string {
 }
 
 export function readCurrentDocumentName(): string {
+  if (isOutlookHost()) return currentOutlookSubject();
   try {
     const rawUrl = Office.context.document.url;
     if (typeof rawUrl !== "string" || !rawUrl.trim()) return "Word document";
@@ -105,7 +108,8 @@ export function useWordDocumentIdentity(): {
 
   useEffect(() => {
     let cancelled = false;
-    void getOrCreateWordDocumentId()
+    const outlook = isOutlookHost();
+    void (outlook ? getOrCreateOutlookDocumentId() : getOrCreateWordDocumentId())
       .then((id) => {
         if (!cancelled) setDocumentId(id);
       })
@@ -113,7 +117,9 @@ export function useWordDocumentIdentity(): {
         if (!cancelled) {
           setError(
             reportFault(reason, {
-              fallback: "Could not identify this Word document.",
+              fallback: outlook
+                ? "Could not identify this email draft."
+                : "Could not identify this Word document.",
               operation: "word.document_read",
             }).message
           );

@@ -26,6 +26,7 @@ import type {
   WordChatOpenHandler,
 } from "./lib/wordChatTypes";
 import { setReportingUser } from "./lib/errorReporting";
+import { isOutlookHost } from "./lib/officeHost";
 
 export default function App(): React.ReactElement {
   const { user, loading, error, logout } = useAuth();
@@ -88,7 +89,7 @@ export default function App(): React.ReactElement {
   if (wordChatStorage.loading || wordDocument.loading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Spinner label="Opening document chats…" />
+        <Spinner label={isOutlookHost() ? "Opening email chats…" : "Opening document chats…"} />
       </div>
     );
   }
@@ -96,7 +97,10 @@ export default function App(): React.ReactElement {
   if (!wordDocument.documentId) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm text-red-600">
-        {wordDocument.error ?? "Could not identify this Word document."}
+        {wordDocument.error ??
+          (isOutlookHost()
+            ? "Could not identify this email draft."
+            : "Could not identify this Word document.")}
       </div>
     );
   }
