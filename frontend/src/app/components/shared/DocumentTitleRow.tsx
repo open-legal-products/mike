@@ -8,6 +8,7 @@ import { TextButtonUI, textButtonUIClassName } from "@mike/ui";
 import { WarningPopup } from "../popups/WarningPopup";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { DocumentVersionPicker } from "./DocumentVersionPicker";
+import { versionLabel, type VersionComparison } from "./versionComparison";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { VersionChip } from "./VersionChip";
 import type { PanelDocument } from "./types";
@@ -33,6 +34,9 @@ export function DocumentTitleRow({
     onVersionChange,
     toolbarVisible,
     onToggleToolbar,
+    comparison,
+    onCompare,
+    onCloseComparison,
 }: {
     document: PanelDocument;
     isReloading: boolean;
@@ -42,6 +46,10 @@ export function DocumentTitleRow({
     onVersionChange?: (version: DocumentVersion) => void;
     toolbarVisible?: boolean;
     onToggleToolbar?: () => void;
+    /** The redline being shown in place of the document, if any. */
+    comparison?: VersionComparison | null;
+    onCompare?: (comparison: VersionComparison) => void;
+    onCloseComparison?: () => void;
 }) {
     const { external, legalIcon } = documentCapabilities(document);
     // Versions and the file download belong to uploads only.
@@ -86,6 +94,7 @@ export function DocumentTitleRow({
                                 versionId={document.version_id}
                                 versionNumber={versionNumber}
                                 onSelect={onVersionChange}
+                                onCompare={onCompare}
                                 disabled={
                                     isReloading ||
                                     !!saveState?.dirty ||
@@ -94,6 +103,16 @@ export function DocumentTitleRow({
                             />
                         ) : (
                             <VersionChip n={versionNumber} />
+                        )}
+                        {comparison && (
+                            <>
+                                <span className="text-xs text-muted-foreground">
+                                    Changes since {versionLabel(comparison.base)}
+                                </span>
+                                <TextButtonUI size="xs" className="h-auto p-0.5" onClick={onCloseComparison}>
+                                    Close comparison
+                                </TextButtonUI>
+                            </>
                         )}
                     </div>
                 </div>

@@ -112,3 +112,38 @@ it("allows retry without exposing backend errors", async () => {
     );
     expect(screen.queryByText(/private storage/)).toBeNull();
 });
+
+it("offers a comparison with the previous version only when the host can show one", async () => {
+    vi.mocked(listDocumentVersions).mockResolvedValue({
+        current_version_id: "v2",
+        versions: versions.map((version) => ({ ...version, file_type: "docx" })),
+    });
+    const onCompare = vi.fn();
+    const onSelect = vi.fn();
+    const user = userEvent.setup();
+    const view = render(<DocumentVersionPicker documentId="doc" versionId="v2" versionNumber={2} onSelect={onSelect} />);
+    await user.click(await screen.findByRole("button", { name: "Choose document version, currently V2" }));
+    expect(screen.queryByRole("menuitem", { name: "Compare with V1" })).toBeNull();
+    await user.keyboard("{Escape}");
+    view.unmount();
+
+    render(<DocumentVersionPicker documentId="doc" versionId="v2" versionNumber={2} onSelect={onSelect} onCompare={onCompare} />);
+    await user.click(await screen.findByRole("button", { name: "Choose document version, currently V2" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Compare with V1" }));
+    expect(onCompare).toHaveBeenCalledTimes(1);
+    expect(onCompare.mock.calls[0][0]).toMatchObject({ base: { id: "v1" }, target: { id: "v2" } });
+    // Opening a comparison never changes which version is displayed.
+    expect(onSelect).not.toHaveBeenCalled();
+});
+
+it("has no comparison to offer while the first version is displayed", async () => {
+    vi.mocked(listDocumentVersions).mockResolvedValue({
+        current_version_id: "v2",
+        versions: versions.map((version) => ({ ...version, file_type: "docx" })),
+    });
+    const user = userEvent.setup();
+    render(<DocumentVersionPicker documentId="doc" versionId="v1" versionNumber={1} onSelect={vi.fn()} onCompare={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Choose document version, currently V1" }));
+    await waitFor(() => expect(screen.getByRole("menuitemradio", { name: /V2/ })).toBeInTheDocument());
+    expect(screen.queryByRole("menuitem", { name: /Compare with/ })).toBeNull();
+});

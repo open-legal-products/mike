@@ -2923,6 +2923,20 @@ function documentFilePath(
     return `/single-documents/${encodeURIComponent(documentId)}/file${qs}`;
 }
 
+/**
+ * A redline .docx of two Word versions of one document: `targetVersionId`
+ * with every difference from `baseVersionId` as a tracked change. Fetched and
+ * shown like any other document file.
+ */
+export function getDocumentComparisonUrl(
+    documentId: string,
+    baseVersionId: string,
+    targetVersionId: string,
+): string {
+    const query = new URLSearchParams({ base: baseVersionId, target: targetVersionId });
+    return `${API_BASE}/single-documents/${encodeURIComponent(documentId)}/versions/compare?${query}`;
+}
+
 export function getDocumentFileUrl(
     documentId: string,
     versionId?: string | null,

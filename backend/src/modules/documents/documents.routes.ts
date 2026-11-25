@@ -30,6 +30,7 @@ import {
     createVersionFromDocument,
     renameVersion,
     deleteVersion,
+    compareVersions,
     resolveEdit,
 } from "./documents.service";
 
@@ -269,6 +270,43 @@ documentsRouter.get("/:documentId/versions", requireAuth, asyncRoute(async (req,
         current_version_id: result.current_version_id,
         versions: result.versions,
     });
+}));
+
+// GET /single-documents/:documentId/versions/compare?base=<id>&target=<id>
+// A redline of two Word versions of one document: `target` with every
+// difference from `base` as a tracked change. The default response is the
+// .docx itself, so a viewer can open it like any other file; `format=json`
+// returns the change list and counts instead.
+const COMPARE_FAILURE_STATUS = { not_found: 404, invalid: 400, too_large: 413, unprocessable: 422 } as const;
+documentsRouter.get("/:documentId/versions/compare", requireAuth, asyncRoute(async (req, res) => {
+    setOperation("documents.version");
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const result = await compareVersions({
+        documentId: req.params.documentId,
+        userId: res.locals.userId as string,
+        userEmail: res.locals.userEmail as string | undefined,
+        baseVersionId: text(req.query.base),
+        targetVersionId: text(req.query.target),
+        db: createServerSupabase(),
+    });
+    if (!result.ok)
+        return void res.status(COMPARE_FAILURE_STATUS[result.kind]).json({ detail: result.detail });
+
+    // Computed from the caller's own access to two specific versions.
+    res.setHeader("Cache-Control", "private, no-store");
+    if (req.query.format === "json") {
+        return void res.json({
+            engine: result.engine,
+            base: result.base,
+            target: result.target,
+            summary: result.summary,
+            revisions: result.revisions,
+        });
+    }
+    res.setHeader("Content-Type", contentTypeForDocumentType("docx"));
+    res.setHeader("Content-Length", result.redline.byteLength);
+    res.setHeader("Content-Disposition", buildContentDisposition("inline", result.filename));
+    res.end(result.redline);
 }));
 
 // POST /single-documents/:documentId/versions/from-document

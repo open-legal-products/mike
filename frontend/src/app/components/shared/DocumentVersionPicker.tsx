@@ -6,12 +6,15 @@ import { listDocumentVersions, type DocumentVersion } from "@/app/lib/mikeApi";
 import {
     Dropdown,
     DropdownContent,
+    DropdownItem,
     DropdownRadioGroup,
     DropdownRadioItem,
+    DropdownSeparator,
     DropdownTrigger,
     TextButtonUI,
 } from "@mike/ui";
 import { VersionChip } from "./VersionChip";
+import { comparisonWithPrevious, versionLabel, type VersionComparison } from "./versionComparison";
 
 export function DocumentVersionPicker({
     documentId,
@@ -19,12 +22,15 @@ export function DocumentVersionPicker({
     versionNumber,
     disabled,
     onSelect,
+    onCompare,
 }: {
     documentId: string;
     versionId?: string | null;
     versionNumber?: number | null;
     disabled?: boolean;
     onSelect: (version: DocumentVersion) => void;
+    /** Offers "Compare with previous version" when the host can show a redline. */
+    onCompare?: (comparison: VersionComparison) => void;
 }) {
     const [open, setOpen] = useState(false);
     const [result, setResult] = useState<Awaited<
@@ -75,6 +81,7 @@ export function DocumentVersionPicker({
     // Avoid showing a nonfunctional chevron while the count is loading or
     // when there is only one available version (deleted versions do not count).
     if (!versions || versions.length <= 1) return label;
+    const comparison = onCompare ? comparisonWithPrevious(versions, selectedId) : null;
     return (
         <Dropdown
             open={open}
@@ -133,6 +140,17 @@ export function DocumentVersionPicker({
                         </DropdownRadioItem>
                     ))}
                 </DropdownRadioGroup>
+                {comparison && (
+                    <>
+                        <DropdownSeparator />
+                        <DropdownItem
+                            disabled={disabled}
+                            onSelect={() => onCompare?.(comparison)}
+                        >
+                            Compare with {versionLabel(comparison.base)}
+                        </DropdownItem>
+                    </>
+                )}
             </DropdownContent>
         </Dropdown>
     );
