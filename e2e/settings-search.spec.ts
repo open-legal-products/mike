@@ -42,7 +42,8 @@ test.describe("Settings search", () => {
         const profile = page.getByRole("heading", { name: "Profile" });
         await expect(profile).toBeVisible();
 
-        const searchBox = (await search.boundingBox())!;
+        // The box around the input: the input starts after its search icon.
+        const searchBox = (await search.locator("xpath=..").boundingBox())!;
         const profileBefore = (await profile.boundingBox())!;
         // In the header above the open section.
         // REGRESSION: fails if the box drops into the page.
@@ -52,7 +53,8 @@ test.describe("Settings search", () => {
         await expect(results(page)).toBeVisible();
         // The list overlays the page; the content does not shift.
         expect(await profile.boundingBox()).toEqual(profileBefore);
-        const list = (await results(page).boundingBox())!;
+        // The surface around the results, which pads them.
+        const list = (await results(page).locator("xpath=..").boundingBox())!;
         // Exactly as wide as the box, under it.
         expect(Math.abs(list.x - searchBox.x)).toBeLessThan(2);
         expect(Math.abs(list.width - searchBox.width)).toBeLessThan(2);
