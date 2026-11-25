@@ -42,11 +42,23 @@ export function InitialView({
   }, []);
 
   useLayoutEffect(() => {
-    if (!name || !textRef.current) return;
+    const text = textRef.current;
+    if (!name || !text) return;
     setLoaded(false);
-    const textWidth = textRef.current.offsetWidth;
-    setIconOffset((textWidth + GREETING_GAP) / 2);
-    setTextOffset((ICON_SIZE + GREETING_GAP) / 2);
+    // A greeting mounted while the Assistant view is hidden (a workspace
+    // switch made from Settings remounts the pane) has no width yet, so the
+    // offsets wait until it is laid out.
+    const measure = (): void => {
+      const textWidth = text.offsetWidth;
+      if (!textWidth) return;
+      setIconOffset((textWidth + GREETING_GAP) / 2);
+      setTextOffset((ICON_SIZE + GREETING_GAP) / 2);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(text);
+    return () => observer.disconnect();
   }, [name]);
 
   useEffect(() => {
