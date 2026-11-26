@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { installProviderWarningLogger } from "./warnings";
 import { normalizeReasoningLevelForModel } from "./models";
 import type { LanguageModel, LanguageModelMiddleware, ToolSet } from "ai" with {
@@ -565,6 +566,23 @@ export function withPrefixCacheHints(
   };
 }
 
+/**
+ * OpenCode Go rejects requests without `x-opencode-session` (400
+ * MissingSessionID) and asks clients to send a stable id per conversation and
+ * identify themselves with their own user agent. One-shot calls have no
+ * conversation, so they get a fresh id.
+ */
+export function openCodeGoHeaders(
+  provider: AiSdkAdapterConfig["provider"],
+  conversationId?: string | null,
+): Record<string, string> | undefined {
+  if (provider !== "opencode-go") return undefined;
+  return {
+    "x-opencode-session": conversationId || randomUUID(),
+    "User-Agent": `Mike/${process.env.MIKE_VERSION?.trim() || "dev"}`,
+  };
+}
+
 export async function streamAiSdk(
   params: StreamChatParams,
   config: AiSdkAdapterConfig,
@@ -657,6 +675,7 @@ export async function streamAiSdk(
       }),
       system: params.systemPrompt,
       messages: cacheHints.messages,
+      headers: openCodeGoHeaders(config.provider, params.conversationId),
       ...(Object.keys(providerOptions).length
         ? { providerOptions }
         : {}),
@@ -917,6 +936,7 @@ export async function completeAiSdkText(
       model: wrapLanguageModel({ model: config.model, middleware: quotaRefusalRetries() }),
       system: params.systemPrompt,
       prompt: params.user,
+      headers: openCodeGoHeaders(config.provider),
       abortSignal: params.abortSignal,
       // Some models cannot turn thinking off ("none" is normalized to the
       // lowest level they accept), and thinking is output too. Without
