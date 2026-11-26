@@ -251,6 +251,16 @@ v4-only bundle cannot. Keep a compatible add-in build for those devices.
 Do not clear browser/add-in storage to resolve a version error: device-only
 chats have no durable server copy.
 
+### Word workspace rollback
+
+Once the Word workspace migration `20261124_01_word_chat_workspaces.sql`
+adds `word_chats.org_id`, keep every backend replica on a version that
+understands Word workspaces. Earlier versions treat all Word chats as
+Personal and can return an organization transcript to an author whose
+membership has ended. Use a workspace-aware rollback target or deploy a
+forward fix. Apply this rule even if no organization chats are present at
+preflight, since a still-running replica can save one during rollout.
+
 ### Playbook review publication upgrade
 
 `20261107_01_playbook_review_publication.sql` adds atomic publication of a

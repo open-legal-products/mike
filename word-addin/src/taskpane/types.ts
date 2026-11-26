@@ -246,11 +246,10 @@ export type ApiKeyProvider =
   | "deepseek";
 
 /**
- * GET /user/api-keys: whether each provider has a usable key (false for a
- * key that is saved but switched off), where it came from, and whether a
- * saved key is switched on.
+ * Whether each provider has a usable key, where it came from, and whether
+ * a saved key is switched on.
  */
 export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
-  sources?: Partial<Record<ApiKeyProvider, "user" | "env" | null>>;
+  sources?: Partial<Record<ApiKeyProvider, "user" | "org" | "env" | null>>;
   enabled?: Partial<Record<ApiKeyProvider, boolean>>;
 };

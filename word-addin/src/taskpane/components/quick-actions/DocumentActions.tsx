@@ -8,8 +8,7 @@ import {
 } from "../../api/mikeApi";
 import type { QuickAction, Workflow } from "../../types";
 import {
-  addQuickAction,
-  replaceQuickAction,
+  useQuickActionStore,
   useQuickActions,
 } from "../../lib/quickActionStore";
 import {
@@ -54,6 +53,7 @@ export function DocumentActions({
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const actions = useQuickActions();
+  const actionStore = useQuickActionStore();
 
   useEffect(() => {
     let cancelled = false;
@@ -137,7 +137,7 @@ export function DocumentActions({
         prompt: action.prompt,
         enabled: action.enabled,
       });
-      replaceQuickAction(updated);
+      actionStore.save(updated);
       setSelectedAction(null);
     } catch (reason) {
       setSaveError(
@@ -165,7 +165,7 @@ export function DocumentActions({
         enabled: true,
         sort_order: actions.length,
       });
-      addQuickAction(created);
+      actionStore.save(created);
       onCreateClose();
     } catch (reason) {
       setCreateError(

@@ -155,6 +155,27 @@ export function routerSelections(
   ) as RouterSelections;
 }
 
+/**
+ * Each router's Model Selections from the server's per-router lists, keyed by
+ * slug: an organization's `effective_router_models`, for one. A missing or
+ * malformed list is empty, and so is any entry that is not a string.
+ */
+export function routerSelectionsFromLists(
+  lists: Partial<Record<string, unknown>> | null | undefined,
+): RouterSelections {
+  return Object.fromEntries(
+    ROUTER_SLUGS.map((slug) => {
+      const models = lists?.[slug];
+      return [
+        slug,
+        Array.isArray(models)
+          ? models.filter((model): model is string => typeof model === "string")
+          : [],
+      ];
+    }),
+  ) as RouterSelections;
+}
+
 /** The same lists, back under their profile field names. */
 export function routerProfileLists(
   profile: Partial<Record<RouterProfileField, unknown>>,
@@ -479,6 +500,10 @@ export function isProviderAvailable(
 ): boolean {
   if (provider === "ollama") return true; // local, no key needed
   return !!keys[provider]?.configured && keys[provider]?.enabled !== false;
+}
+
+export function hasConfiguredModelProvider(keys: ProviderKeyStates): boolean {
+  return MODEL_KEY_PROVIDERS.some((provider) => isProviderAvailable(provider, keys));
 }
 
 export function isModelAvailable(

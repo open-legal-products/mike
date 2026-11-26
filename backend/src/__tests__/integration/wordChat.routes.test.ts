@@ -145,6 +145,15 @@ function makeQuery(table: string) {
 function mockSupabase() {
   return {
     from: vi.fn((table: string) => makeQuery(table)),
+    rpc: vi.fn(async (name: string, args: { p_offset: number; p_limit: number }) => {
+      if (name !== "word_list_visible_chats") return { data: null, error: null };
+      return {
+        ...dbState.chatList,
+        data: ((dbState.chatList.data ?? []) as { org_id?: string | null }[])
+          .filter((chat) => !chat.org_id || dbState.orgMember.data !== null)
+          .slice(args.p_offset, args.p_offset + args.p_limit),
+      };
+    }),
     auth: {
       getUser: () =>
         Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
@@ -1155,6 +1164,55 @@ describe("server-owned Word turns", () => {
     await firstDone;
   });
 
+  it("refuses attach, resume and stop to an author removed from the turn's workspace", async () => {
+    const FIRM = "0b9e3c1e-6a43-4b5e-9a57-2f1f1d7f2c10";
+    const { getAssistantTurnRun } = await import("../../lib/assistantTurnRuns.js");
+    dbState.chatDetail = {
+      data: { id: CHAT_ID, title: null, user_id: "u1", word_document_id: "word-document-row-1", org_id: FIRM },
+      error: null,
+    };
+    dbState.orgMember = { data: { role: "member" }, error: null };
+    const held = heldGeneration();
+    // The pane asks for no workspace: the run takes the chat's own.
+    const first = send({ org_id: null });
+    const firstDone = first.then((res) => res);
+    await held.started;
+    const turnId = (await detail()).body.active_turn.id as string;
+    const stream = (from = 1) =>
+      request(app)
+        .get(`/word-chat/${CHAT_ID}/turn/${turnId}/stream?document_id=${DOCUMENT_ID}&from=${from}`)
+        .set(...AUTH);
+    const stop = () =>
+      request(app)
+        .post(`/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${DOCUMENT_ID}`)
+        .set(...AUTH);
+
+    // Removed from the organization while the turn is generating.
+    dbState.orgMember = { data: null, error: null };
+    const attached = await stream();
+    expect(attached.status).toBe(404);
+    expect(attached.body.code).toBe("turn_not_found");
+    const stopped = await stop();
+    expect(stopped.status).toBe(404);
+    expect(stopped.body.code).toBe("turn_not_found");
+    expect(getAssistantTurnRun(turnId, "word")!.stopped).toBe(false);
+
+    held.release();
+    expect((await firstDone).text).toContain("data: [DONE]");
+    // Finished and within the replay window: still refused.
+    expect(getAssistantTurnRun(turnId, "word")!.finished).toBe(true);
+    const replay = await stream();
+    expect(replay.status).toBe(404);
+    expect(replay.text).not.toContain("First second");
+    expect((await stop()).status).toBe(404);
+
+    // A member still gets the replay.
+    dbState.orgMember = { data: { role: "member" }, error: null };
+    const member = await stream();
+    expect(member.status).toBe(200);
+    expect(member.text).toContain("data: [DONE]");
+  });
+
   it("owns a LOCAL chat's turn too, authorising the resume from the run alone", async () => {
     const held = heldGeneration();
     // `storage: "local"` is the user asking that this conversation NOT be
@@ -1389,13 +1447,13 @@ describe("Word chat workspaces", () => {
     const resume = await send({ chat_id: CHAT_ID });
     dbState.chatList = {
       data: [
-        { id: "personal-chat", org_id: null },
         { id: CHAT_ID, org_id: FIRM },
+        { id: "personal-chat", org_id: null },
       ],
       error: null,
     };
     const list = await request(app)
-      .get(`/word-chat?document_id=${DOCUMENT_ID}`)
+      .get(`/word-chat?document_id=${DOCUMENT_ID}&limit=1`)
       .set(...AUTH);
 
     expect(detail.status).toBe(404);

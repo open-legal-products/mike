@@ -25,6 +25,7 @@ import { Router, type Response } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
+import { getOrgRole } from "../../lib/access";
 import {
   ACTIVE_WORD_DOCUMENT_ID,
   AssistantStreamError,
@@ -211,15 +212,11 @@ function parseProposedWordEdit(
 }
 
 /**
- * The run this caller may act on, or undefined.
- *
- * Everything a Word turn can be authorised by lives in the run: the user it
- * belongs to and the embedded document the pane was attached to when it
- * started. That is deliberate — a local chat has no server row, and a cloud
- * chat's row says nothing about which run is live — so ownership is checked
- * here rather than being inferred from the transcript.
+ * Authorize a Word turn using its owner, document, and server-resolved
+ * workspace. Organization membership is checked again on attach and stop.
+ * Personal turns, including device-only chats, need no membership read.
  */
-function wordTurnRunFor(
+async function wordTurnRunFor(
   chatId: string,
   turnId: string,
   caller: { userId: string; clientDocumentId: string },
@@ -228,6 +225,12 @@ function wordTurnRunFor(
   if (!run || run.chatId !== chatId) return undefined;
   if (run.userId !== caller.userId) return undefined;
   if (run.meta.clientDocumentId !== caller.clientDocumentId) return undefined;
+  if (
+    run.meta.orgId &&
+    !(await getOrgRole(caller.userId, run.meta.orgId, createServerSupabase()))
+  ) {
+    return undefined;
+  }
   return run;
 }
 
@@ -349,7 +352,7 @@ wordChatRouter.get(
     if (!parsedDocumentId.ok) {
       return void res.status(400).json({ detail: parsedDocumentId.detail });
     }
-    const run = wordTurnRunFor(req.params.chatId, req.params.turnId, {
+    const run = await wordTurnRunFor(req.params.chatId, req.params.turnId, {
       userId: res.locals.userId as string,
       clientDocumentId: parsedDocumentId.value,
     });
@@ -372,7 +375,7 @@ wordChatRouter.post(
     if (!parsedDocumentId.ok) {
       return void res.status(400).json({ detail: parsedDocumentId.detail });
     }
-    const run = wordTurnRunFor(req.params.chatId, req.params.turnId, {
+    const run = await wordTurnRunFor(req.params.chatId, req.params.turnId, {
       userId: res.locals.userId as string,
       clientDocumentId: parsedDocumentId.value,
     });
@@ -751,6 +754,8 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     // What the resume endpoints authorise against; a local chat has no row.
     clientDocumentId: parsedDocumentId.value,
     persistChat,
+    // Resolved by prepareWordChatStream, not taken from the request.
+    orgId,
   });
   if (!run) {
     return void res.status(409).json({

@@ -10,6 +10,7 @@ import {
     routerModelOptions,
     routerProfileLists,
     routerSelections,
+    routerSelectionsFromLists,
     type ProviderKeyState,
     type ProviderKeyStates,
 } from "./modelCatalog";
@@ -262,6 +263,18 @@ describe("router Model Selections", () => {
             xaiModels: ["grok-4.3"],
             customModels: [],
         });
+    });
+
+    it("reads the server's per-router lists keyed by slug, defaulting to empty", () => {
+        const selections = routerSelectionsFromLists({
+            openrouter: ["openai/gpt-5.4", 7],
+            bedrock: "not a list",
+            unknown: ["ignored"],
+        });
+        expect(Object.keys(selections)).toEqual([...ROUTER_SLUGS]);
+        expect(selections.openrouter).toEqual(["openai/gpt-5.4"]);
+        expect(selections.bedrock).toEqual([]);
+        expect(routerSelectionsFromLists(null).openrouter).toEqual([]);
     });
 
     it("accepts a router model only while it is saved for that router", () => {

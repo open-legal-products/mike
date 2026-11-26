@@ -57,6 +57,11 @@ type TurnMeta = {
     clientDocumentId?: string;
     /** Word only: false for a local (never-persisted) chat. */
     persistChat?: boolean;
+    /**
+     * Word only: the workspace the server resolved for the turn (null for
+     * Personal). The resume endpoints re-check membership of it.
+     */
+    orgId?: string | null;
 };
 
 export type AssistantTurnRun = StreamRun<TurnMeta> & {
@@ -104,6 +109,8 @@ export function startAssistantTurnRun(args: {
     clientDocumentId?: string;
     /** Word only: false for a local (never-persisted) chat. */
     persistChat?: boolean;
+    /** Word only: the server-resolved workspace, never the client's. */
+    orgId?: string | null;
 }): AssistantTurnRun | null {
     const run = startStreamRun<TurnMeta>({
         id: args.id,
@@ -118,6 +125,7 @@ export function startAssistantTurnRun(args: {
             ...(args.persistChat !== undefined
                 ? { persistChat: args.persistChat }
                 : {}),
+            ...(args.orgId !== undefined ? { orgId: args.orgId } : {}),
         },
         forcedStopFrames: [
             `data: ${JSON.stringify({ type: "cancelled" })}\n\n`,
