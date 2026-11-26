@@ -750,6 +750,14 @@ export async function streamAiSdk(
             params.callbacks?.onReasoningBlockEnd?.();
           }
           break;
+        case "tool-input-start":
+          if (!part.providerExecuted) {
+            params.callbacks?.onToolInputStart?.({
+              id: part.id,
+              name: part.toolName,
+            });
+          }
+          break;
         case "tool-call": {
           if (part.providerExecuted) {
             if (part.toolName === PROVIDER_WEB_SEARCH_TOOL) {

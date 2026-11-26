@@ -827,6 +827,7 @@ export async function streamWithProvider(
       ...callbacks,
       onContentDelta: marking(callbacks.onContentDelta),
       onReasoningDelta: marking(callbacks.onReasoningDelta),
+      onToolInputStart: marking(callbacks.onToolInputStart),
       onToolCallStart: marking(callbacks.onToolCallStart),
       onWebSearch: marking(callbacks.onWebSearch),
     },

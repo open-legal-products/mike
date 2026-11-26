@@ -72,6 +72,12 @@ export type StreamCallbacks = {
     onContentDelta?: (text: string) => void;
     /** Server-authored terminal warning, outside any hidden model citation block. */
     onStopNotice?: (text: string) => void;
+    /**
+     * The model began writing a tool call: its name is known, its arguments
+     * are still streaming. Not every provider reports this; `onToolCallStart`
+     * always follows with the same id once the call is complete.
+     */
+    onToolInputStart?: (call: { id: string; name: string }) => void;
     onToolCallStart?: (call: NormalizedToolCall) => void;
     onWebSearch?: (event: ProviderWebSearchEvent) => void;
     /** Skipped when the provider reports no usage. */
