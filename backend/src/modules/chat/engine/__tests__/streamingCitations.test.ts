@@ -106,6 +106,43 @@ describe("runLLMStream citation streaming", () => {
     expect(result.events.map((e) => e.type)).not.toContain("citations_recorded_start");
   });
 
+  it("announces cite_sources when the model starts writing it, once", async () => {
+    vi.mocked(runToolCalls).mockResolvedValue(emptyToolCallBatchResult());
+    const frames: string[] = [];
+    const starts = () => frames.filter((f) => f.includes('"type":"tool_call_start"'));
+    let announcedAtInputStart: string[] = [];
+    streamChatWithTools.mockImplementation(async (params: StreamChatParams) => {
+      const call = { id: "cite", name: "cite_sources", input: { citations: [] } };
+      params.callbacks?.onContentDelta?.("Checking the lease.");
+      // The arguments are still streaming: only the id and name are known.
+      params.callbacks?.onToolInputStart?.({ id: call.id, name: call.name });
+      announcedAtInputStart = starts();
+      params.callbacks?.onToolCallStart?.(call);
+      await params.runTools?.([call]);
+      return { fullText: "" };
+    });
+    const result = await runLLMStream({
+      model: "gemini-3.8-flash",
+      apiMessages: [{ role: "user", content: "When can the lease end?" }],
+      docStore: new Map(),
+      docIndex: {},
+      userId: "u1",
+      db: {} as never,
+      write: (line: string) => void frames.push(line),
+      nonce: "turnnonce",
+    } as Parameters<typeof runLLMStream>[0]);
+
+    const frame = `data: ${JSON.stringify({ type: "tool_call_start", name: "cite_sources" })}\n\n`;
+    expect(announcedAtInputStart).toEqual([frame]);
+    // The completed call does not announce it a second time.
+    expect(starts()).toEqual([frame]);
+    // Text written before the call is a finished part of the turn by then.
+    expect(result.events[0]).toEqual({ type: "content", text: "Checking the lease." });
+    expect(frames.indexOf(frame)).toBeLessThan(
+      frames.findIndex((f) => f.includes('"type":"citations_recorded_start"')),
+    );
+  });
+
   it("checks same-batch citations after an edit updates the source", async () => {
     const before = "Only the landlord may extend the term.";
     const after = "Either party can request a mediation.";

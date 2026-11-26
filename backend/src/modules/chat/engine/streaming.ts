@@ -659,6 +659,19 @@ export async function runLLMStream(params: {
     iterText = "";
   };
 
+  // One tool_call_start frame per call, whichever of the input start and the
+  // completed call reports it first.
+  const announcedToolCalls = new Set<string>();
+  const announceToolCall = (call: { id: string; name: string }) => {
+    if (announcedToolCalls.has(call.id)) return;
+    announcedToolCalls.add(call.id);
+    flushText();
+    subagentRun?.onToolStart(call.name);
+    write(
+      `data: ${JSON.stringify({ type: "tool_call_start", name: call.name })}\n\n`,
+    );
+  };
+
   const flushPartialTurn = () => {
     flushText();
     if (iterReasoning) {
@@ -959,19 +972,17 @@ export async function runLLMStream(params: {
           write(`data: ${JSON.stringify({ type: "reasoning_block_end" })}\n\n`);
           iterReasoning = "";
         },
-        // Fires as soon as the model has written a tool call, while the step's
-        // tools run only once the whole step ends. Flushes any buffered text
-        // so it's emitted in order, then lets the client show "Working…"
-        // until the tool's first event arrives.
+        // Announced when the model starts writing a tool call, not when it
+        // finishes: a long input (cite_sources with every quote) otherwise
+        // streams behind a stale "Thinking…" line. Flushes any buffered text
+        // so it's emitted in order, then lets the client show the tool's
+        // label until its first event arrives.
+        onToolInputStart: (call) => announceToolCall(call),
+        // Fires once the model has written the whole call, while the step's
+        // tools run only once the whole step ends. Announces a call whose
+        // provider reported no input start.
         onToolCallStart: (call) => {
-          flushText();
-          subagentRun?.onToolStart(call.name);
-          write(
-            `data: ${JSON.stringify({
-              type: "tool_call_start",
-              name: call.name,
-            })}\n\n`,
-          );
+          announceToolCall(call);
           if (
             delegateContext &&
             call.name === DELEGATE_TOOL_NAME &&
