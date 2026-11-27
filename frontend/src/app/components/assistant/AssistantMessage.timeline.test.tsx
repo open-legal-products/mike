@@ -700,7 +700,7 @@ describe("AssistantMessage citations", () => {
         );
         // Like every step, it folds away once the answer starts.
         fireEvent.click(screen.getByRole("button", { name: /1 step/ }));
-        expect(screen.getByText("Recorded 2 citations")).toBeVisible();
+        expect(screen.getByText("Recorded 2 citations from")).toBeVisible();
         expect(screen.getByText("Lease.pdf")).toBeVisible();
         expect(screen.getByText("Companies Act 2006")).toBeVisible();
         expect(screen.getByText("1 quote not found in the source")).toBeVisible();

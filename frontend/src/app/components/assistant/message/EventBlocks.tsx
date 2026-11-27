@@ -632,6 +632,7 @@ export function CitationsRecordedBlock({
         recorded && `${removedRefs.length ? "recorded" : "Recorded"} ${plural(refs.length, "citation", "citations")}`,
     ].filter(Boolean).join(" and ");
     const failed = !isStreaming && !interrupted && !changes;
+    const showsSources = recorded && !isStreaming && sources.length > 0;
     const label = isStreaming
         ? "Recording citations"
         : interrupted
@@ -658,10 +659,10 @@ export function CitationsRecordedBlock({
                 <EventLabel className="shrink-0">
                     {label}
                     {isStreaming ? "..." : null}
+                    {showsSources ? " from" : null}
                 </EventLabel>
-                {recorded && !isStreaming && sources.length > 0 ? (
+                {showsSources ? (
                     <>
-                        <span className="shrink-0">from</span>
                         {sources.map((source, index) => (
                             <span
                                 key={source.ref}

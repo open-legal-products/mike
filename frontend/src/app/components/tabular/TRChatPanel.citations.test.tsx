@@ -130,7 +130,7 @@ describe("TRChatPanel citations", () => {
 
         // Like every step, it folds away once the answer is written.
         await user.click(screen.getByRole("button", { name: /1 step/ }));
-        expect(screen.getByText("Recorded 1 citation")).toBeVisible();
+        expect(screen.getByText("Recorded 1 citation from")).toBeVisible();
         await user.click(screen.getByRole("button", { name: "Lease A.pdf" }));
         expect(onCitationClick).toHaveBeenCalledExactlyOnceWith(0, 2);
     });
