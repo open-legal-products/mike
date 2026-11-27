@@ -381,6 +381,60 @@ describe("null-content assistant reservations", () => {
             rows.find((row) => row.id === "assistant-reservation")?.content,
         ).toBeNull();
     });
+
+  describe("documents picked in answer", () => {
+    const askForDocuments = () => [
+      realAssistantRow([
+        {
+          type: "ask_inputs",
+          event_id: "ask-docs",
+          items: [{ id: "document", kind: "documents", document_types: ["The agreement"] }],
+        },
+      ]),
+    ];
+    const storedResponse = (rpcCalls: { args: unknown }[]) =>
+      (rpcCalls[0].args as { p_response: Record<string, unknown> }).p_response;
+
+    it("are kept with the answer, since no later request carries them", async () => {
+      const { db, rpcCalls } = makeFakeMessagesDb(askForDocuments());
+
+      await appendAskInputsResponseToAssistantMessage(
+        db,
+        "chat-1",
+        {
+          assistant_message_id: "assistant-real",
+          ask_event_id: "ask-docs",
+          responses: [{ id: "document", kind: "documents", filenames: ["NDA.docx", "Side letter.docx"] }],
+        },
+        "user-1",
+        [
+          { filename: "NDA.docx", document_id: "doc-nda" },
+          { filename: "Side letter.docx", document_id: "doc-side" },
+          { filename: "NDA.docx", document_id: "doc-nda" },
+        ],
+      );
+
+      expect(storedResponse(rpcCalls).document_ids).toEqual(["doc-nda", "doc-side"]);
+    });
+
+    it("are not recorded for an answer that skipped them", async () => {
+      const { db, rpcCalls } = makeFakeMessagesDb(askForDocuments());
+
+      await appendAskInputsResponseToAssistantMessage(
+        db,
+        "chat-1",
+        {
+          assistant_message_id: "assistant-real",
+          ask_event_id: "ask-docs",
+          responses: [{ id: "document", kind: "documents", filenames: [], skipped: true }],
+        },
+        "user-1",
+        [{ filename: "Earlier.docx", document_id: "doc-earlier" }],
+      );
+
+      expect(storedResponse(rpcCalls)).not.toHaveProperty("document_ids");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

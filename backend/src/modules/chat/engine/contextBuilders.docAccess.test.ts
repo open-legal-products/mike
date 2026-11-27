@@ -335,3 +335,59 @@ describe("buildDocContext access scoping", () => {
     ).toEqual(["opened-a", "opened-b"]);
   });
 });
+
+describe("buildDocContext documents picked in answer to ask_inputs", () => {
+  beforeEach(() => {
+    ensureDocAccess.mockReset().mockResolvedValue({ ok: true });
+  });
+
+  // An earlier turn's answer, as appendAskInputsResponseToAssistantMessage stores it.
+  const history = (documentIds: string[]) => async () => ({
+    data: [{
+      content: [
+        { type: "ask_inputs", event_id: "ask-1", items: [{ id: "document", kind: "documents" }] },
+        {
+          type: "ask_inputs_response",
+          assistant_message_id: "a1",
+          ask_event_id: "ask-1",
+          responses: [{ id: "document", kind: "documents", filenames: ["NDA.docx"] }],
+          document_ids: documentIds,
+        },
+      ],
+    }],
+    error: null,
+  });
+
+  it("keeps them readable in later turns, which send no files", async () => {
+    const db = makeDb([{ id: "d-picked", user_id: "u1", project_id: null, status: "ready" }]);
+
+    const { docIndex } = await buildDocContext(
+      message([]),
+      "u1",
+      db,
+      "chat-1",
+      "chat_messages",
+      "u1@test.local",
+      history(["d-picked"]) as never,
+    );
+
+    expect(Object.values(docIndex).map((entry) => entry.document_id)).toEqual(["d-picked"]);
+  });
+
+  it("still checks access to each of them", async () => {
+    ensureDocAccess.mockResolvedValue({ ok: false });
+    const db = makeDb([{ id: "d-picked", user_id: "u2", project_id: "p-walled", status: "ready" }]);
+
+    const { docIndex } = await buildDocContext(
+      message([]),
+      "u1",
+      db,
+      "chat-1",
+      "chat_messages",
+      "u1@test.local",
+      history(["d-picked"]) as never,
+    );
+
+    expect(docIndex).toEqual({});
+  });
+});

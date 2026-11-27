@@ -1341,6 +1341,8 @@ export async function appendAskInputsResponseToAssistantMessage(
   chatId: string,
   response: AskInputsResponseRequest,
   authorUserId: string,
+  /** The documents the continuation sent with the answer. */
+  files?: ChatMessage["files"],
 ): Promise<AppendAskInputsResponseResult> {
   const row = await loadAssistantMessage(
     db,
@@ -1372,6 +1374,14 @@ export async function appendAskInputsResponseToAssistantMessage(
   }
   const canonical = canonicalAskInputsResponses(askEvent.items, response);
   if (!canonical) return "invalid";
+  // The continuation is the only request that carries the picked documents,
+  // so they are kept with the answer for buildDocContext to find later.
+  const answeredDocuments = canonical.some(
+    (item) => item.kind === "documents" && !item.skipped && item.filenames.length,
+  );
+  const documentIds = answeredDocuments
+    ? [...new Set((files ?? []).flatMap((file) => file.document_id ?? []))]
+    : [];
 
   const storedResponse = {
     type: "ask_inputs_response" as const,
@@ -1380,6 +1390,7 @@ export async function appendAskInputsResponseToAssistantMessage(
     responses: canonical,
     author_user_id: authorUserId,
     recorded_at: new Date().toISOString(),
+    ...(documentIds.length ? { document_ids: documentIds } : {}),
   };
   const { data, error } = await db.rpc("append_chat_ask_inputs_response", {
     p_chat_id: chatId,
@@ -1471,7 +1482,9 @@ export async function buildDocContext(
   // aren't attached to user messages as files, so they only live in the
   // assistant's `doc_created` / `doc_edited` events. Without this sweep
   // the model loses access to generated docs after the turn that created
-  // them, and can't call edit_document / read_document on them.
+  // them, and can't call edit_document / read_document on them. Documents
+  // picked in answer to ask_inputs are kept on its `ask_inputs_response`
+  // the same way: the continuation request that sent them is not stored.
   if (chatId) {
     const { data: rows } = await (history ? history() : db
       .from(messageTable)
@@ -1487,6 +1500,13 @@ export async function buildDocContext(
           typeof ev.document_id === "string"
         ) {
           documentIds.add(ev.document_id);
+        } else if (
+          ev?.type === "ask_inputs_response" &&
+          Array.isArray(ev.document_ids)
+        ) {
+          for (const id of ev.document_ids) {
+            if (typeof id === "string") documentIds.add(id);
+          }
         } else if (ev?.type === "doc_replicated" && Array.isArray(ev.copies)) {
           for (const copy of ev.copies) {
             if (

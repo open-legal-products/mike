@@ -388,6 +388,7 @@ export async function prepareProjectChatStream(
             chatId,
             args.askInputsResponse,
             userId,
+            lastUser?.files,
         );
         if (appendResult === "forbidden") {
             return {
