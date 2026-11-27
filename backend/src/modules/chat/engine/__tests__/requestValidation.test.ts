@@ -51,7 +51,7 @@ describe("chat request validation", () => {
                     files: [
                         {
                             filename: " contract.pdf ",
-                            document_id: " document-1 ",
+                            document_id: " 4b1f6c2e-9a3d-4e57-8c21-0d5a7e9b3f14 ",
                             version_id: " version-3 ",
                             version_number: 3,
                         },
@@ -71,7 +71,7 @@ describe("chat request validation", () => {
                     files: [
                         {
                             filename: "contract.pdf",
-                            document_id: "document-1",
+                            document_id: "4b1f6c2e-9a3d-4e57-8c21-0d5a7e9b3f14",
                             version_id: "version-3",
                             version_number: 3,
                         },
@@ -109,7 +109,17 @@ describe("chat request validation", () => {
                     files: [{ filename: "contract.pdf", document_id: " " }],
                 },
             ],
-            "messages[0].files[0].document_id must be a non-empty string",
+            "messages[0].files[0].document_id must be a UUID",
+        ],
+        [
+            [
+                {
+                    role: "user",
+                    content: "hello",
+                    files: [{ filename: "contract.pdf", document_id: "doc-1" }],
+                },
+            ],
+            "messages[0].files[0].document_id must be a UUID",
         ],
         [
             [
