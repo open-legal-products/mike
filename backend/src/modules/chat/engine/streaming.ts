@@ -659,8 +659,11 @@ export async function runLLMStream(params: {
     iterText = "";
   };
 
-  // One tool_call_start frame per call, whichever of the input start and the
-  // completed call reports it first.
+  // One start frame per call, whichever of the input start and the completed
+  // call reports it first. cite_sources opens its "Recording citations" step
+  // there, so the step covers the model writing every quote as well as the
+  // server checking them; its citations_recorded result completes it. Any
+  // other tool gets a tool_call_start placeholder until its own events arrive.
   const announcedToolCalls = new Set<string>();
   const announceToolCall = (call: { id: string; name: string }) => {
     if (announcedToolCalls.has(call.id)) return;
@@ -668,7 +671,11 @@ export async function runLLMStream(params: {
     flushText();
     subagentRun?.onToolStart(call.name);
     write(
-      `data: ${JSON.stringify({ type: "tool_call_start", name: call.name })}\n\n`,
+      `data: ${JSON.stringify(
+        call.name === CITE_SOURCES_TOOL_NAME
+          ? { type: "citations_recorded_start" }
+          : { type: "tool_call_start", name: call.name },
+      )}\n\n`,
     );
   };
 
@@ -1184,8 +1191,9 @@ export async function runLLMStream(params: {
         // change the version or evidence available to the citation recorder.
         // In call order: a later call replaces the refs an earlier one set.
         for (const call of citeCalls) {
-          // The step shows as in progress while the quotes are checked.
-          write(`data: ${JSON.stringify({ type: "citations_recorded_start" })}\n\n`);
+          // Normally opened when the model began writing the call; a call
+          // that reached here unannounced opens its step now.
+          announceToolCall(call);
           const { content, event } = await citationRecorder.record(call.input);
           clientResultByCallId.set(call.id, content);
           events.push(event);

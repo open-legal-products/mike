@@ -92,6 +92,22 @@ describe("consumeAssistantTurnStream", () => {
     turn.finish();
   });
 
+  it("shows a citations step the answer ended without completing as stopped", async () => {
+    // The step opens when the model starts writing cite_sources; a call cut
+    // off before it was complete never reports a result.
+    const turn = begin();
+    await consumeAssistantTurnStream(sseResponse([
+      frame(1, { type: "citations_recorded_start" }),
+      frame(2, { type: "content_delta", text: "The answer ran out." }),
+      frame(3, { type: "citations", status: "final", citations: [] }),
+      "data: [DONE]\n\n",
+    ]), { turn, sink: createTurnEventSink(turn, []), cursor: createTurnCursor("chat-a") });
+    expect(turn.turn.assistant.events?.[0]).toEqual({
+      type: "citations_recorded", refs: [], sources: [], quotes_not_found: 0, rejected: 0, isStreaming: false, interrupted: true,
+    });
+    turn.finish();
+  });
+
   it("keeps the citations step before the answer and drops malformed fields", async () => {
     const turn = begin();
     const step = {

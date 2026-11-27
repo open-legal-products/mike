@@ -1495,6 +1495,13 @@ export async function consumeAssistantTurnStream(
           // against a streaming block.
           finalizeStreamingContent();
           clearStreamingPlaceholders();
+          // A citations step opens when the model starts writing the call;
+          // one cut off before the call was complete never gets its result.
+          updateMatchingEvent(isRecordingCitations, (event) => ({
+            ...event,
+            isStreaming: false,
+            interrupted: true,
+          }));
           updateLatestAssistantMessage((message) => ({
             ...message,
             citations: incoming,
