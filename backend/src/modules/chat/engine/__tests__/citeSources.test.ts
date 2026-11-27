@@ -4,7 +4,7 @@ import {
   CITE_DOCUMENTS_TOOL,
   createCitationRecorder,
   documentCitations,
-  missingCitationsInstruction,
+  unrecordedMarkersNotice,
   tabularCitations,
   unrecordedMarkerRefs,
 } from "../citeSources";
@@ -356,10 +356,15 @@ describe("unrecordedMarkerRefs", () => {
   });
 });
 
-describe("missingCitationsInstruction", () => {
-  it("names the markers and asks only for the tool call", () => {
-    expect(missingCitationsInstruction([2])).toContain("uses [2], but no citation was recorded for that marker. Call cite_sources now");
-    expect(missingCitationsInstruction([2, 3])).toContain("uses [2], [3], but no citation was recorded for those markers.");
-    expect(missingCitationsInstruction([2])).toContain("do not write anything else");
+describe("unrecordedMarkersNotice", () => {
+  it("names the markers and leaves it to the model whether they are citations", () => {
+    const one = unrecordedMarkersNotice([2]);
+    expect(one).toContain("your answer contains [2], which looks like a citation marker, but no citation was recorded for it.");
+    expect(one).toContain("If it is a citation, record it with cite_sources under the same ref");
+    expect(one).toContain("such as a quote, a paragraph reference or a footnote, no action is needed");
+    expect(one).toContain("do not write anything further");
+    expect(unrecordedMarkersNotice([2, 3])).toContain(
+      "contains [2], [3], which look like citation markers, but no citation was recorded for them. If any of them are citations, record those",
+    );
   });
 });

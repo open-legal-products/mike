@@ -320,7 +320,7 @@ describe("runLLMStream unrecorded citation markers", () => {
 
     expect(followUp).toEqual({
       tool: "cite_sources",
-      instruction: expect.stringContaining("Your answer uses [1], but no citation was recorded"),
+      instruction: expect.stringContaining("your answer contains [1], which looks like a citation marker"),
     });
     const final = frames
       .filter((f) => f.includes('"type":"citations"'))

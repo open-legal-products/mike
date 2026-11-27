@@ -101,7 +101,7 @@ import {
   CITE_TABLE_CELLS_TOOL,
   createCitationRecorder,
   documentCitations,
-  missingCitationsInstruction,
+  unrecordedMarkersNotice,
   tabularCitations,
   unrecordedMarkerRefs,
 } from "./citeSources";
@@ -959,7 +959,7 @@ export async function runLLMStream(params: {
             return refs.length
               ? {
                   tool: CITE_SOURCES_TOOL_NAME,
-                  instruction: missingCitationsInstruction(refs),
+                  instruction: unrecordedMarkersNotice(refs),
                 }
               : null;
           }
