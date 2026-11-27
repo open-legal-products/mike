@@ -537,3 +537,34 @@ export function createCitationRecorder(kind: CitationKind) {
 }
 
 export type CitationRecorder = ReturnType<typeof createCitationRecorder>;
+
+/**
+ * The answer's citation markers, [1] or [1, 2]: the same pattern the web app
+ * turns into citation links (preprocessCitations in
+ * frontend/src/app/components/assistant/message/citationUtils.ts).
+ */
+const CITATION_MARKER = /\[(\d+(?:,\s*\d+)*)\]/g;
+
+/**
+ * The refs the answer's markers use that no recorded citation backs, in
+ * ascending order. A number past the citation cap ([2024]) is not a ref.
+ */
+export function unrecordedMarkerRefs(
+  answer: string,
+  recorded: Iterable<number>,
+): number[] {
+  const known = new Set(recorded);
+  const missing = new Set<number>();
+  for (const [, refs] of answer.matchAll(CITATION_MARKER)) {
+    for (const ref of refs.split(",").map(Number)) {
+      if (ref >= 1 && ref <= MAX_CITATIONS && !known.has(ref)) missing.add(ref);
+    }
+  }
+  return [...missing].sort((a, b) => a - b);
+}
+
+/** What the model is told when its finished answer has unrecorded markers. */
+export function missingCitationsInstruction(refs: number[]): string {
+  const markers = refs.map((ref) => `[${ref}]`).join(", ");
+  return `Your answer uses ${markers}, but no citation was recorded for ${refs.length === 1 ? "that marker" : "those markers"}. Call ${CITE_SOURCES_TOOL_NAME} now with one entry for each, under the same ref, quoting the passage that supports the claim where the marker appears. The answer has already been sent, so do not write anything else. If a marker is not a citation, or nothing you read supports it, do not record it.`;
+}

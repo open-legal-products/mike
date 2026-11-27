@@ -213,7 +213,17 @@ export type StreamChatParams = {
      * limit ends with an answer instead of an unanswered tool call.
      */
     finishWithoutToolsOnLastStep?: boolean;
+    /**
+     * Checked once, with the answer's text, when the model finishes on its
+     * own. A follow-up it returns runs one more step in the same
+     * conversation: `instruction` is sent as a user message and only `tool`
+     * runs. That step's text and reasoning are not shown or kept, since the
+     * answer has already been written.
+     */
+    followUp?: (answer: string) => StreamFollowUp | null;
 };
+
+export type StreamFollowUp = { instruction: string; tool: string };
 
 export type StreamChatResult = {
     fullText: string;

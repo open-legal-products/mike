@@ -4,7 +4,9 @@ import {
   CITE_DOCUMENTS_TOOL,
   createCitationRecorder,
   documentCitations,
+  missingCitationsInstruction,
   tabularCitations,
+  unrecordedMarkerRefs,
 } from "../citeSources";
 import { loadToolInputChecker } from "../../../../lib/llm/toolInputValidation";
 import { citationReminder } from "../tools/documentOps";
@@ -334,5 +336,30 @@ describe("cite_sources in a tabular review", () => {
       { ref: 3, error: "COL:1 ROW:1 is empty." },
       { ref: 4, error: expect.stringContaining("col_index and row_index") },
     ]);
+  });
+});
+
+describe("unrecordedMarkerRefs", () => {
+  it("lists each marker ref without a recorded citation once, in order", () => {
+    expect(
+      unrecordedMarkerRefs("A [3]. B [1, 2]. C [3] and [2,4].", [1]),
+    ).toEqual([2, 3, 4]);
+  });
+
+  it("finds nothing when every marker is recorded, or there are none", () => {
+    expect(unrecordedMarkerRefs("A [1]. B [2].", [1, 2])).toEqual([]);
+    expect(unrecordedMarkerRefs("No markers here.", [])).toEqual([]);
+  });
+
+  it("does not read a number past the citation cap, or a non-number, as a ref", () => {
+    expect(unrecordedMarkerRefs("Decided in [2024]; see [0] and [a].", [])).toEqual([]);
+  });
+});
+
+describe("missingCitationsInstruction", () => {
+  it("names the markers and asks only for the tool call", () => {
+    expect(missingCitationsInstruction([2])).toContain("uses [2], but no citation was recorded for that marker. Call cite_sources now");
+    expect(missingCitationsInstruction([2, 3])).toContain("uses [2], [3], but no citation was recorded for those markers.");
+    expect(missingCitationsInstruction([2])).toContain("do not write anything else");
   });
 });

@@ -280,3 +280,99 @@ describe("runLLMStream citation streaming", () => {
     expect(replayed.map((f) => JSON.parse(f.line.slice(6)).status)).toEqual(["final"]);
   });
 });
+
+describe("runLLMStream unrecorded citation markers", () => {
+  const source = "Either party may terminate on 30 days' written notice.";
+  const citeCall = {
+    id: "late-cite",
+    name: "cite_sources",
+    input: { citations: [{ ref: 1, doc_id: "doc-0", quotes: [{ quote: "Either party may terminate on 30 days' written notice" }] }] },
+  };
+  const run = (frames: string[] = []) =>
+    runLLMStream({
+      model: "gemini-3.8-flash",
+      apiMessages: [{ role: "user", content: "When can the lease end?" }],
+      docStore: new Map([
+        ["doc-0", { storage_path: "", file_type: "txt", filename: "Lease.txt", inline_text: source }],
+      ]),
+      docIndex: {},
+      userId: "u1",
+      db: {} as never,
+      write: (line: string) => void frames.push(line),
+    } as Parameters<typeof runLLMStream>[0]);
+
+  it("asks the model to record markers the finished answer left without a citation", async () => {
+    vi.mocked(runToolCalls).mockResolvedValue(emptyToolCallBatchResult());
+    const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+    let followUp: ReturnType<NonNullable<StreamChatParams["followUp"]>> = null;
+    streamChatWithTools.mockImplementationOnce(async (params: StreamChatParams) => {
+      const text = "Either party may terminate [1].";
+      params.callbacks?.onContentDelta?.(text);
+      // What the adapter does when the model finishes: check, then run the
+      // follow-up step's cite_sources call.
+      followUp = params.followUp!(text);
+      await params.runTools!([citeCall]);
+      return { fullText: text };
+    });
+    const frames: string[] = [];
+
+    const result = await run(frames);
+
+    expect(followUp).toEqual({
+      tool: "cite_sources",
+      instruction: expect.stringContaining("Your answer uses [1], but no citation was recorded"),
+    });
+    const final = frames
+      .filter((f) => f.includes('"type":"citations"'))
+      .map((f) => JSON.parse(f.slice(6)))
+      .at(-1);
+    expect(final).toMatchObject({ status: "final", citations: [{ ref: 1, verified: true }] });
+    expect(result.citations).toMatchObject([{ ref: 1, verified: true }]);
+    expect(logged).toHaveBeenCalledWith(
+      "[chat/citations] answer used markers without recorded citations",
+      { unrecorded: 1, still_unrecorded: 0, sources: "documents" },
+    );
+    logged.mockRestore();
+  });
+
+  it("logs the markers a follow-up could not record", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+    streamChatWithTools.mockImplementationOnce(async (params: StreamChatParams) => {
+      const text = "Either party may terminate [1], with notice [2].";
+      params.callbacks?.onContentDelta?.(text);
+      params.followUp!(text);
+      await params.runTools!([citeCall]);
+      return { fullText: text };
+    });
+
+    await run();
+
+    expect(logged).toHaveBeenCalledWith(
+      "[chat/citations] answer used markers without recorded citations",
+      { unrecorded: 2, still_unrecorded: 1, sources: "documents" },
+    );
+    logged.mockRestore();
+  });
+
+  it("asks for nothing when every marker has a recorded citation", async () => {
+    vi.mocked(runToolCalls).mockResolvedValue(emptyToolCallBatchResult());
+    const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+    let followUp: unknown = "unchecked";
+    streamChatWithTools.mockImplementationOnce(async (params: StreamChatParams) => {
+      await params.runTools!([citeCall]);
+      const text = "Either party may terminate [1].";
+      params.callbacks?.onContentDelta?.(text);
+      followUp = params.followUp!(text);
+      return { fullText: text };
+    });
+
+    await run();
+
+    expect(followUp).toBeNull();
+    expect(logged).not.toHaveBeenCalledWith(
+      "[chat/citations] answer used markers without recorded citations",
+      expect.anything(),
+    );
+    logged.mockRestore();
+  });
+});
