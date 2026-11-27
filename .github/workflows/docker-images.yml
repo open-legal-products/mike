@@ -73,7 +73,9 @@ jobs:
             GIT_SHA=${{ github.sha }}
             ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          # A cache write that fails (the repository's Actions cache budget
+          # is spent and the cache turns read-only) must not fail the build.
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }},ignore-error=true
 
       - name: Serve a page and assets from the standalone frontend
         if: matrix.image == 'frontend'

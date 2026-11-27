@@ -241,7 +241,9 @@ jobs:
           no-cache-filters: ${{ matrix.no_cache_filters }}
           # Own cache scope: never share layers with the token-less PR builds.
           cache-from: type=gha,scope=publish-${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=publish-${{ matrix.image }}
+          # A failed cache write (spent Actions cache budget) must not fail
+          # the publish.
+          cache-to: type=gha,mode=max,scope=publish-${{ matrix.image }},ignore-error=true
 
       - name: Check the source maps reached Sentry
         if: matrix.image == 'frontend' && needs.identity.outputs.upload_maps == 'true'
