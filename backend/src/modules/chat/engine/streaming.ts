@@ -101,13 +101,15 @@ import {
   CITE_TABLE_CELLS_TOOL,
   createCitationRecorder,
   documentCitations,
+  missingCitationsInstruction,
   tabularCitations,
+  unrecordedMarkerRefs,
 } from "./citeSources";
 import { buildMemoryTurn } from "../../../lib/memory/prompt";
 
 export type { AssistantEvent } from "@mike/contracts";
 import type { AssistantEvent, AssistantErrorCode } from "@mike/contracts";
-import { log } from "../../../lib/log";
+import { log, logEvent } from "../../../lib/log";
 
 /**
  * Tools the model can call that execute outside this process — in the Word
@@ -632,6 +634,14 @@ export async function runLLMStream(params: {
   );
   const recordedCitations = () =>
     limitCitationPayload(citationRecorder.citations());
+  const unrecordedRefs = (answer: string) =>
+    unrecordedMarkerRefs(
+      answer,
+      citationRecorder.citations().map((citation) => citation.ref),
+    );
+  // Markers the finished answer used without a recorded citation. The
+  // model is asked once to record them (the `followUp` below).
+  let unrecordedAtFinish = 0;
 
   const emitCitations = (status: "partial" | "final") => {
     const snapshot = ++citationSnapshotSeq;
@@ -942,6 +952,18 @@ export async function runLLMStream(params: {
       providerWebSearch:
         providerSearches > 0 ? { maxSearches: providerSearches } : null,
       finishWithoutToolsOnLastStep: isSubagent,
+      followUp: turnTools.some((tool) => toolName(tool) === CITE_SOURCES_TOOL_NAME)
+        ? (answer) => {
+            const refs = unrecordedRefs(answer);
+            unrecordedAtFinish = refs.length;
+            return refs.length
+              ? {
+                  tool: CITE_SOURCES_TOOL_NAME,
+                  instruction: missingCitationsInstruction(refs),
+                }
+              : null;
+          }
+        : undefined,
       callbacks: {
         onActivity: params.onActivity,
         onUsage: (usage, finishReason) => {
@@ -1309,6 +1331,14 @@ export async function runLLMStream(params: {
   }
 
   flushText();
+
+  if (unrecordedAtFinish) {
+    logEvent("info", "chat/citations", "answer used markers without recorded citations", {
+      unrecorded: unrecordedAtFinish,
+      still_unrecorded: unrecordedRefs(fullText).length,
+      sources: citesTableCells ? "tabular_cells" : "documents",
+    });
+  }
 
   // The citations recorded with cite_sources, each checked when recorded.
   const citations = recordedCitations();
