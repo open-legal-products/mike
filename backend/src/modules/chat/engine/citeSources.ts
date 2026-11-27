@@ -563,8 +563,13 @@ export function unrecordedMarkerRefs(
   return [...missing].sort((a, b) => a - b);
 }
 
-/** What the model is told when its finished answer has unrecorded markers. */
-export function missingCitationsInstruction(refs: number[]): string {
+/**
+ * What the model is told when its finished answer has unrecorded markers.
+ * A notice, not an order: a bracketed number can be part of a quote, a
+ * paragraph reference or a footnote rather than a citation marker.
+ */
+export function unrecordedMarkersNotice(refs: number[]): string {
   const markers = refs.map((ref) => `[${ref}]`).join(", ");
-  return `Your answer uses ${markers}, but no citation was recorded for ${refs.length === 1 ? "that marker" : "those markers"}. Call ${CITE_SOURCES_TOOL_NAME} now with one entry for each, under the same ref, quoting the passage that supports the claim where the marker appears. The answer has already been sent, so do not write anything else. If a marker is not a citation, or nothing you read supports it, do not record it.`;
+  const one = refs.length === 1;
+  return `Note: your answer contains ${markers}, which ${one ? "looks like a citation marker" : "look like citation markers"}, but no citation was recorded for ${one ? "it" : "them"}. If ${one ? "it is a citation" : "any of them are citations"}, record ${one ? "it" : "those"} with ${CITE_SOURCES_TOOL_NAME} under the same ref, quoting the passage that supports the claim. If ${one ? "it is" : "they are"} part of the text for another reason, such as a quote, a paragraph reference or a footnote, no action is needed. Your answer has already been sent, so do not write anything further.`;
 }
