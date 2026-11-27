@@ -863,7 +863,7 @@ describe("POST /projects/:projectId/chat", () => {
                         files: [
                             {
                                 filename: " message-file.pdf ",
-                                document_id: " message-document ",
+                                document_id: " 4b1f6c2e-9a3d-4e57-8c21-0d5a7e9b3f14 ",
                             },
                         ],
                         workflow: {
@@ -901,7 +901,7 @@ describe("POST /projects/:projectId/chat", () => {
             files: [
                 {
                     filename: "message-file.pdf",
-                    document_id: "message-document",
+                    document_id: "4b1f6c2e-9a3d-4e57-8c21-0d5a7e9b3f14",
                 },
             ],
             workflow: { id: "workflow-1", title: "Review workflow" },

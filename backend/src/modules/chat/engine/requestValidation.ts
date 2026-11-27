@@ -6,6 +6,7 @@ import {
   type ChatMessage,
 } from "./types";
 import { REASONING_LEVELS, type ReasoningLevel } from "../../../lib/llm/types";
+import { isUuid } from "../../../lib/uuid";
 
 type ValidationResult<T> =
   | { ok: true; value: T }
@@ -106,11 +107,18 @@ function parseMessageFiles(
 
     let documentId: string | undefined;
     if (file.document_id !== undefined) {
+      // documents.id is a uuid column. An id that is not one makes the
+      // document lookup fail for its whole batch, and a continuation stores
+      // these ids on the chat, so it would fail on every later turn too.
+      const documentIdDetail = `messages[${messageIndex}].files[${fileIndex}].document_id must be a UUID`;
       const parsedDocumentId = parseNonEmptyString(
         file.document_id,
-        `messages[${messageIndex}].files[${fileIndex}].document_id must be a non-empty string`,
+        documentIdDetail,
       );
       if (!parsedDocumentId.ok) return parsedDocumentId;
+      if (!isUuid(parsedDocumentId.value)) {
+        return { ok: false, detail: documentIdDetail };
+      }
       documentId = parsedDocumentId.value;
     }
 
