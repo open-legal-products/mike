@@ -419,6 +419,29 @@ export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
   return apiRequest<ApiKeyStatus>("settings.keys", "/user/api-keys");
 }
 
+/**
+ * An organization's effective model provider status, as its members see it
+ * in the web picker.
+ */
+export interface OrgApiKeySettings {
+  /** What the caller can run in the organization. The composer reads this. */
+  effective: ApiKeyStatus;
+  /**
+   * The router lists that govern the caller's work there, keyed by router
+   * slug: the organization's for each provider whose key it holds.
+   */
+  effective_router_models: Record<string, string[]>;
+  /** Whether the caller may change the organization's keys. */
+  can_manage: boolean;
+}
+
+export async function getOrgApiKeys(orgId: string): Promise<OrgApiKeySettings> {
+  return apiRequest<OrgApiKeySettings>(
+    "settings.keys",
+    `/orgs/${encodeURIComponent(orgId)}/api-keys`,
+  );
+}
+
 export async function uploadStandaloneDocuments(
   files: File[],
   options?: UploadRequestOptions<Document> & { workspace?: RequestWorkspace },

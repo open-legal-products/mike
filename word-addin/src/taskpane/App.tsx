@@ -26,6 +26,8 @@ import type {
   WordChatOpenHandler,
 } from "./lib/wordChatTypes";
 import { setReportingUser } from "./lib/errorReporting";
+import { workspaceIdentityKey } from "@mike/client";
+import { QuickActionsProvider } from "./lib/quickActionStore";
 import {
   AddinWorkspaceProvider,
   useAddinWorkspace,
@@ -124,7 +126,14 @@ function WorkspaceGate(props: TaskPaneProps): React.ReactElement {
       </div>
     );
   }
-  return <TaskPane key={workspaceId} {...props} />;
+  return (
+    <QuickActionsProvider
+      key={workspaceIdentityKey(props.wordChatOwnerId, workspaceId)}
+      workspaceId={workspaceId}
+    >
+      <TaskPane {...props} />
+    </QuickActionsProvider>
+  );
 }
 
 function TaskPane({

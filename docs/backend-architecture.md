@@ -149,11 +149,12 @@ ones included.
 - A second `POST /word-chat` into the same chat answers
   `409 turn_in_progress`.
 
-Both endpoints authorise **from the run**: `run.userId` must be the caller and
-the run's `clientDocumentId` must be the `document_id` presented, otherwise
-`404 turn_not_found`. A local chat is never persisted, so there is no row to
-authorise against — and a cloud chat's row says nothing about which run is
-live either.
+Both endpoints authorise using the run's user and document IDs. For an
+organization turn they also check that the caller is still a member of the
+workspace recorded when the turn started. A failed check returns
+`404 turn_not_found`. Personal turns, including device-only chats, require
+only the user and document checks. Membership changes take effect on the
+next request. An SSE connection already attached at removal can finish its turn.
 
 Client tool calls need two things of the registry, both in `streamRuns.ts`:
 the adapter's `: tool-wait` keep-alives are comments, so they fan out live and

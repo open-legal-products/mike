@@ -268,6 +268,21 @@ export async function listWordChats(
   // No stored document row yet means this pane has never persisted a chat.
   if (!wordDocumentRowId) return { ok: true, chats: [] };
 
+  if (!args.workspace) {
+    // Legacy panes list all reachable workspaces. Filter before taking a page.
+    const { data, error } = await db.rpc("word_list_visible_chats", {
+      p_user_id: args.userId,
+      p_document_id: wordDocumentRowId,
+      p_limit: args.limit,
+      p_offset: args.offset,
+    });
+    if (error) return serviceFailure("word.chat_lookup_failed", "Word chat list failed", error);
+    return {
+      ok: true,
+      chats: (data ?? []).map((chat: Record<string, unknown>) => ({ ...chat, project_id: null })),
+    };
+  }
+
   let query = db
     .from("word_chats")
     .select(
@@ -279,31 +294,19 @@ export async function listWordChats(
   // never stores a person's own), so these are workspaceMatches in SQL. The
   // organization's membership was checked by resolveWorkspaceFilter.
   if (args.workspace === PERSONAL_WORKSPACE) query = query.is("org_id", null);
-  else if (args.workspace) query = query.eq("org_id", args.workspace);
-  query = query.order("updated_at", { ascending: false });
+  else query = query.eq("org_id", args.workspace);
+  query = query.order("updated_at", { ascending: false })
+    .order("id", { ascending: false });
   query =
     args.offset > 0
       ? query.range(args.offset, args.offset + args.limit - 1)
       : query.limit(args.limit);
   const { data, error } = await query;
   if (error) return serviceFailure("word.chat_lookup_failed", "Word chat list failed", error);
-  // Unnarrowed (a pane from before workspaces), the list still leaves out
-  // chats in an organization the caller has left, as the detail route does.
-  const reachable = new Map<string | null, Promise<boolean>>();
-  const reach = (orgId: string | null) => {
-    if (!reachable.has(orgId)) {
-      reachable.set(orgId, creatorCanReachWorkspace(db, args.userId, orgId));
-    }
-    return reachable.get(orgId) as Promise<boolean>;
+  return {
+    ok: true,
+    chats: (data ?? []).map((chat: Record<string, unknown>) => ({ ...chat, project_id: null })),
   };
-  const chats = [];
-  for (const chat of (data ?? []) as Record<string, unknown>[]) {
-    const orgId = (chat.org_id as string | null | undefined) ?? null;
-    if (args.workspace || (await reach(orgId))) {
-      chats.push({ ...chat, project_id: null });
-    }
-  }
-  return { ok: true, chats };
 }
 
 // GET /word-chat/:chatId

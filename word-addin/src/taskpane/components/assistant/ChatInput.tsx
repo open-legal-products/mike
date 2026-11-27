@@ -20,12 +20,12 @@ import {
   NO_MODELS_MESSAGES,
   routerSelections as routerSelectionsFromProfile,
   type RouterSelections,
+  workspaceOrgId,
 } from "@mike/client";
 import { WorkflowModal } from "../workflows/WorkflowModal";
 import { PlaybookModal, playbookTitle } from "../playbooks/PlaybookModal";
 import { ChatInput as ChatInputShell } from "../../../shared/chat/ChatInput";
 import {
-  getApiKeyStatus,
   failedUploadMessage,
   getUserProfile,
   listWorkflows,
@@ -66,6 +66,7 @@ import {
   WorkflowSlashMenu,
 } from "./WorkflowSlashMenu";
 import { useAddinWorkspace } from "../../lib/addinWorkspace";
+import { loadWorkspaceModelAccess } from "../../lib/workspaceModels";
 
 export interface ChatInputHandle {
   setDraft: (prompt: string) => void;
@@ -123,6 +124,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     ref,
   ): React.ReactElement {
     const { workspaceId } = useAddinWorkspace();
+    const inOrganization = Boolean(workspaceOrgId(workspaceId));
     const [input, setInput] = useState("");
     const [attachedDocuments, setAttachedDocuments] = useState<Document[]>([]);
     const [excerpts, setExcerpts] = useState<MessageExcerpt[]>([]);
@@ -145,7 +147,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     >(null);
     const [keyStatus, setKeyStatus] = useState<ApiKeyStatus | null>(null);
     const [keyStatusLoading, setKeyStatusLoading] = useState(true);
-    // Null until the profile loads: stored router selections cannot be
+    // Null until the workspace's lists load (the profile's in Personal, the
+    // organization's in an organization): stored router selections cannot be
     // checked against saved Model Selections before then.
     const [routerSelections, setRouterSelections] =
       useState<RouterSelections | null>(null);
@@ -153,12 +156,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const [profileLastSelectedModel, setProfileLastSelectedModel] = useState<
       string | null
     >(null);
-    const [profileLoaded, setProfileLoaded] = useState(false);
     const [model, setModel, modelSettingsResolved] = useSelectedModel({
       sessionKey,
       chatModel,
       lastSelectedModel: lastSelectedModel ?? profileLastSelectedModel,
-      routerSelections: profileLoaded ? routerSelections : null,
+      routerSelections,
       apiKeyStatus: keyStatus,
     });
     const [modelError, setModelError] = useState<string | null>(null);
@@ -271,12 +273,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
     useEffect(() => {
       let cancelled = false;
+      // A workspace's answer never stands in for another's: the toggle goes
+      // back to neutral until this workspace's keys and lists arrive.
+      setKeyStatus(null);
+      setRouterSelections(null);
+      setKeyStatusLoading(true);
       // Three-state preflight: while it runs the model toggle stays neutral
       // (no premature "No Models"); each request retries once with backoff; after a
       // final failure keyStatus stays null and availability FAILS OPEN (the
       // backend still authoritatively rejects models it cannot serve).
+      //
+      // The keys and router lists are the workspace's: the caller's own in
+      // Personal, the organization's effective ones in an organization, where
+      // the server runs the chat on the organization's keys.
       void Promise.all([
-        loadWithRetry(getApiKeyStatus, {
+        loadWithRetry(() => loadWorkspaceModelAccess(workspaceId), {
           onFinalFailure: (error) => {
             if (cancelled) return;
             // Availability fails open (the backend still rejects models it
@@ -301,23 +312,26 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               error,
             ),
         }),
-      ]).then(([status, profile]) => {
+      ]).then(([access, profile]) => {
         if (cancelled) return;
-        setKeyStatus(status);
-        if (profile) {
+        setKeyStatus(access?.keyStatus ?? null);
+        if (access?.routerSelections) {
+          setRouterSelections(access.routerSelections);
+        } else if (profile && !inOrganization) {
           setRouterSelections(routerSelectionsFromProfile(profile));
+        }
+        if (profile) {
           setProfileLastSelectedModel(profile.lastSelectedChatModel ?? null);
           setProfileLastSelectedReasoningLevel(
             profile.lastSelectedReasoningLevel ?? "high",
           );
-          setProfileLoaded(true);
         }
         setKeyStatusLoading(false);
       });
       return () => {
         cancelled = true;
       };
-    }, [preflightAttempt]);
+    }, [inOrganization, preflightAttempt, workspaceId]);
 
     useEffect(() => {
       uploadGenerationRef.current += 1;
@@ -731,7 +745,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                     onNoModelsClick={() => {
                       setModelError(
                         NO_MODELS_MESSAGES[
-                          noModelsReason(keyStatus, routerSelections ?? {})
+                          noModelsReason(keyStatus, routerSelections ?? {}, inOrganization)
                         ],
                       );
                     }}

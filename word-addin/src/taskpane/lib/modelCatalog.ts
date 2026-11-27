@@ -2,7 +2,7 @@
 // (@mike/client, packages/client/src/modelCatalog.ts). The
 // catalog, router Model Selections, picker rows and availability rules all
 // live there; only what is specific to the add-in is here: its key status is
-// GET /user/api-keys as a flat boolean map, and an unknown status (null, the
+// a flat boolean map, and an unknown status (null, the
 // preflight failed even after a retry) fails open.
 //
 // Imported from the pure types module (not the API client, whose runtime
@@ -10,6 +10,7 @@
 // of Office globals and add-in-only packages: tests in frontend/src/wordAddin
 // import this file across packages.
 import {
+  hasConfiguredModelProvider as hasConfiguredModelProviderForKeys,
   isModelAvailable as isModelAvailableForKeys,
   noModelsReason as noModelsReasonForKeys,
   unavailableModelMessage as unavailableModelMessageForKeys,
@@ -19,9 +20,9 @@ import {
 } from "@mike/client";
 import type { ApiKeyStatus } from "../types";
 
-/** GET /user/api-keys' flat map in the shape the shared rules read. */
+/** The flat key status in the shape the shared rules read. */
 function providerKeyStates(status: ApiKeyStatus): ProviderKeyStates {
-  const { sources: _sources, enabled = {}, ...configured } = status;
+  const { sources = {}, enabled = {}, ...configured } = status;
   const providers = new Set([
     ...Object.keys(configured),
     ...Object.keys(enabled),
@@ -32,9 +33,14 @@ function providerKeyStates(status: ApiKeyStatus): ProviderKeyStates {
       {
         configured: configured[provider as keyof typeof configured] === true,
         enabled: enabled[provider],
+        source: sources[provider],
       },
     ]),
   );
+}
+
+export function hasConfiguredModelProvider(status: ApiKeyStatus): boolean {
+  return hasConfiguredModelProviderForKeys(providerKeyStates(status));
 }
 
 export function isModelAvailable(
@@ -62,9 +68,11 @@ export function unavailableModelMessage(
 export function noModelsReason(
   status: ApiKeyStatus | null,
   selections: Partial<RouterSelections>,
+  inOrganization = false,
 ): NoModelsReason {
   return noModelsReasonForKeys(
     status ? providerKeyStates(status) : null,
     selections,
+    inOrganization,
   );
 }

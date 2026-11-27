@@ -5,29 +5,12 @@ import {
     useWorkspace,
 } from "@/app/contexts/WorkspaceContext";
 import {
-    ROUTER_SLUGS,
     routerSelections,
+    routerSelectionsFromLists,
     type RouterSelections,
 } from "@mike/client";
 
-/** The server's per-router lists as the pickers' `RouterSelections`. */
-export function routerSelectionsFromLists(
-    lists: Partial<Record<string, unknown>> | null | undefined,
-): RouterSelections {
-    return Object.fromEntries(
-        ROUTER_SLUGS.map((slug) => {
-            const models = lists?.[slug];
-            return [
-                slug,
-                Array.isArray(models)
-                    ? models.filter(
-                          (model): model is string => typeof model === "string",
-                      )
-                    : [],
-            ];
-        }),
-    ) as RouterSelections;
-}
+export { routerSelectionsFromLists } from "@mike/client";
 
 /**
  * The saved Model Selections the pickers offer for the "model list"

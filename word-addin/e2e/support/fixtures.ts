@@ -415,6 +415,28 @@ export const test = base.extend<{ addin: Addin }>({
       });
     });
 
+    // In an organization's workspace the composer and the key banner read
+    // the organization's effective keys instead of the caller's own. Default
+    // them to configured, as the personal probe above is.
+    await page.route("**/orgs/*/api-keys", (route, request) => {
+      if (request.method() !== "GET") return route.fallback();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          effective: {
+            claude: true,
+            gemini: true,
+            openai: true,
+            openrouter: false,
+            courtlistener: false,
+          },
+          effective_router_models: {},
+          can_manage: false,
+        }),
+      });
+    });
+
     // Chat history preloads on every authenticated Assistant mount. Keep that
     // eager GET hermetic so unrelated specs never leak to a developer's live
     // backend (where a 401 can clear the seeded test session). History specs
