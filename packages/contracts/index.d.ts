@@ -475,6 +475,11 @@ export type AssistantEvent =
       author_user_id?: string;
       /** Immutable evidence time used by memory wipe/enable cutoffs. */
       recorded_at?: string;
+      /**
+       * The documents picked in answer, kept so later turns in the chat can
+       * still read them. Each is checked for access when a turn loads it.
+       */
+      document_ids?: string[];
     }
   | {
       type: "doc_read";

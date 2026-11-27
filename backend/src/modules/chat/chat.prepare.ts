@@ -409,6 +409,7 @@ export async function prepareChatStream(
             chatId,
             args.askInputsResponse,
             userId,
+            lastUser?.files,
         );
         if (appendResult === "forbidden") {
             return {
