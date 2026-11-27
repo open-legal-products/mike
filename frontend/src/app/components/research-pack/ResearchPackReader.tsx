@@ -1,11 +1,29 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useAuth } from "@/app/contexts/AuthContext";
 import {
     type OpenResearchPack,
     type ResearchPackRevision,
     verifyResearchPackFile,
 } from "@/app/lib/researchPackClient";
+import {
+    appendMikeEditRevision,
+    deleteMikeEditPackage,
+    editableFields,
+    exportMikeEditPackage,
+    listMikeEditPackages,
+    MAX_MIKE_EDIT_PACKAGE_BYTES,
+    mikeEditBaseFile,
+    type EditableResearchRevision,
+    type MikeEditPackage,
+    type StoredMikeEditPackage,
+    storeMikeEditPackage,
+    verifyMikeEditPackage,
+    verifyMikeEditPackageSource,
+    verifyMikeEditPackageFile,
+    withEditableFields,
+} from "@/app/lib/researchPackEdits";
 
 const text = (value: unknown) =>
     typeof value === "string" ? value : value == null ? "—" : String(value);
@@ -164,23 +182,90 @@ function Revision({ revision }: { revision: ResearchPackRevision }) {
 }
 
 export function ResearchPackReader() {
+    const { user } = useAuth();
+    return <ResearchPackReaderAccount key={user?.id ?? "signed-out"} accountId={user?.id ?? null} />;
+}
+
+function ResearchPackReaderAccount({ accountId }: { accountId: string | null }) {
     const inputRef = useRef<HTMLInputElement>(null);
     const sequence = useRef(0);
     const [opened, setOpened] = useState<OpenResearchPack | null>(null);
+    const [editPackage, setEditPackage] = useState<MikeEditPackage | null>(null);
+    const [draftEdits, setDraftEdits] = useState<EditableResearchRevision | null>(null);
+    const [draftDirty, setDraftDirty] = useState(false);
+    const [savedPackages, setSavedPackages] = useState<StoredMikeEditPackage[]>([]);
     const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
     const [selected, setSelected] = useState(1);
     const [busy, setBusy] = useState(false);
+    useEffect(() => {
+        if (!accountId) return;
+        let active = true;
+        void listMikeEditPackages(accountId).then((packages) => {
+            if (active) setSavedPackages(packages);
+        }).catch(() => {
+            if (active) setError("Saved local edits could not be listed in this browser.");
+        });
+        return () => { active = false; };
+    }, [accountId]);
+
     async function open(file: File) {
+        if (draftDirty && !window.confirm("Discard unsaved Mike edits before opening another file?")) return;
         const ticket = ++sequence.current;
         setBusy(true);
         setError(null);
+        setNotice(null);
         setOpened(null);
+        setEditPackage(null);
+        setDraftEdits(null);
+        setDraftDirty(false);
         setSelected(1);
         try {
+            if (file.size <= MAX_MIKE_EDIT_PACKAGE_BYTES) {
+                let candidate: unknown = null;
+                try {
+                    candidate = JSON.parse(await file.text()) as unknown;
+                } catch {
+                    // The Counterpedia verifier supplies the specific malformed-pack refusal.
+                }
+                if (object(candidate).schema === "mike.research_pack_edit.v0.1") {
+                    const saved = await verifyMikeEditPackageFile(file);
+                    const next = await verifyResearchPackFile(mikeEditBaseFile(saved));
+                    await verifyMikeEditPackageSource(saved, next);
+                    if (ticket !== sequence.current) return;
+                    const sourceRevision = next.pack.revisions.find(
+                        (item) => item.revision === saved.base_pack.selected_revision,
+                    );
+                    const localRevision = saved.local_revisions.find(
+                        (item) => item.revision === saved.selected_edit_revision,
+                    );
+                    if (!sourceRevision || !localRevision) {
+                        throw new Error("Saved Mike edit refused: its selected revision is missing.");
+                    }
+                    let refreshed: StoredMikeEditPackage[] | null = null;
+                    if (accountId) {
+                        await storeMikeEditPackage(accountId, saved);
+                        refreshed = await listMikeEditPackages(accountId);
+                    }
+                    if (ticket !== sequence.current) return;
+                    setOpened(next);
+                    setSelected(saved.base_pack.selected_revision);
+                    setEditPackage(saved);
+                    setDraftEdits(localRevision.edits);
+                    if (refreshed) setSavedPackages(refreshed);
+                    setNotice(`Imported and reopened Mike edit revision ${localRevision.revision}. The original Counterpedia pack was verified unchanged.`);
+                    return;
+                }
+            }
             const next = await verifyResearchPackFile(file);
             if (ticket !== sequence.current) return;
             setOpened(next);
             setSelected(next.pack.selected_revision);
+            const sourceRevision = next.pack.revisions.find(
+                (item) => item.revision === next.pack.selected_revision,
+            );
+            if (sourceRevision) setDraftEdits(editableFields(sourceRevision));
+            setDraftDirty(false);
         } catch (cause) {
             if (ticket === sequence.current) {
                 setOpened(null);
@@ -194,6 +279,97 @@ export function ResearchPackReader() {
             if (ticket === sequence.current) setBusy(false);
         }
     }
+
+    async function reopenSaved(stored: StoredMikeEditPackage) {
+        if (!accountId || stored.account_id !== accountId) return;
+        if (draftDirty && !window.confirm("Discard unsaved Mike edits before reopening a saved edit?")) return;
+        const ticket = ++sequence.current;
+        setBusy(true);
+        setError(null);
+        setNotice(null);
+        try {
+            const saved = await verifyMikeEditPackage(stored.value);
+            const next = await verifyResearchPackFile(mikeEditBaseFile(saved));
+            await verifyMikeEditPackageSource(saved, next);
+            if (ticket !== sequence.current) return;
+            const sourceRevision = next.pack.revisions.find(
+                (item) => item.revision === saved.base_pack.selected_revision,
+            );
+            const localRevision = saved.local_revisions.find(
+                (item) => item.revision === saved.selected_edit_revision,
+            );
+            if (!sourceRevision || !localRevision) {
+                throw new Error("Saved Mike edit refused: its selected revision is missing.");
+            }
+            setOpened(next);
+            setSelected(saved.base_pack.selected_revision);
+            setEditPackage(saved);
+            setDraftEdits(localRevision.edits);
+            setDraftDirty(false);
+            setNotice(`Reopened saved Mike edit revision ${localRevision.revision}.`);
+        } catch (cause) {
+            if (ticket === sequence.current) {
+                setError(cause instanceof Error ? cause.message : "Saved local edit could not be reopened.");
+            }
+        } finally {
+            if (ticket === sequence.current) setBusy(false);
+        }
+    }
+
+    async function saveEdit() {
+        if (!accountId || !opened || !draftEdits || busy) return;
+        setBusy(true);
+        setError(null);
+        setNotice(null);
+        try {
+            const next = await appendMikeEditRevision(opened, selected, draftEdits, editPackage);
+            await verifyMikeEditPackage(next);
+            await storeMikeEditPackage(accountId, next);
+            const refreshed = await listMikeEditPackages(accountId);
+            setEditPackage(next);
+            setSavedPackages(refreshed);
+            setDraftDirty(false);
+            setNotice(`Saved Mike edit revision ${next.selected_edit_revision} in this browser for the signed-in account.`);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "The local edit could not be saved.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function deleteSaved(stored: StoredMikeEditPackage) {
+        if (!accountId || stored.account_id !== accountId || busy) return;
+        if (!window.confirm("Delete this Mike edit and its saved history from this browser profile?")) return;
+        setBusy(true);
+        setError(null);
+        setNotice(null);
+        try {
+            await deleteMikeEditPackage(accountId, stored.value.package_id);
+            setSavedPackages(await listMikeEditPackages(accountId));
+            if (editPackage?.package_id === stored.value.package_id) setEditPackage(null);
+            setNotice("Deleted the saved Mike edit from this browser profile.");
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "The local edit could not be deleted.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    function exportEdit() {
+        if (!editPackage || busy) return;
+        const blob = new Blob([exportMikeEditPackage(editPackage)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${editPackage.package_id}.mike-research-edit.json`;
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    function updateDraft(next: EditableResearchRevision) {
+        setDraftEdits(next);
+        setDraftDirty(true);
+    }
     function download() {
         if (!opened || busy) return;
         const url = URL.createObjectURL(opened.file);
@@ -203,7 +379,10 @@ export function ResearchPackReader() {
         anchor.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 0);
     }
-    const revision = opened?.pack.revisions.find((item) => item.revision === selected);
+    const sourceRevision = opened?.pack.revisions.find((item) => item.revision === selected);
+    const revision = sourceRevision && draftEdits
+        ? withEditableFields(sourceRevision, draftEdits)
+        : sourceRevision;
     const reportAuthenticity = text(opened?.report.authenticity ?? opened?.pack.authenticity);
     return (
         <section
@@ -216,8 +395,8 @@ export function ResearchPackReader() {
                     <p className="text-sm text-gray-500">Counterpedia interoperability</p>
                     <h1 className="text-3xl font-serif text-gray-900">Open Research Pack</h1>
                     <p className="mt-2 max-w-2xl text-sm text-gray-600">
-                        Inspect a verified v0.2 research history. Imported text is read-only and
-                        recorded addresses are never fetched.
+                        Inspect a verified v0.2 research history, then create separate Mike-local
+                        edits. Recorded addresses are never fetched.
                     </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -225,9 +404,9 @@ export function ResearchPackReader() {
                         type="button"
                         disabled={busy}
                         onClick={() => inputRef.current?.click()}
-                        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
                     >
-                        Open Research Pack
+                        Open pack or Mike edit package
                     </button>
                     <input
                         ref={inputRef}
@@ -244,12 +423,49 @@ export function ResearchPackReader() {
                         type="button"
                         disabled={!opened || busy}
                         onClick={download}
-                        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800 disabled:opacity-50"
+                        className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
                     >
                         Download original pack
                     </button>
                 </div>
             </div>
+            <section aria-label="Saved Mike edits" className="mb-6 rounded-xl border border-gray-200 bg-white p-5">
+                <h2 className="text-sm font-semibold text-gray-800">Saved edits on this browser</h2>
+                <p className="mt-1 text-sm text-gray-600">
+                    Mike edits are stored unencrypted in this browser profile under the signed-in account ID. They do not sync to another browser or device. Export creates a Mike edit package; it does not create a Counterpedia Research Pack or update export-time source availability.
+                </p>
+                {savedPackages.length > 0 ? (
+                    <ul className="mt-3 space-y-2">
+                        {savedPackages.map((stored) => (
+                            <li key={stored.key} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-gray-50 p-3">
+                                <span className="min-w-0 break-words text-sm text-gray-700">
+                                    {stored.value.base_pack.filename} · source revision {stored.value.base_pack.selected_revision} · {stored.value.local_revisions.length} saved edit {stored.value.local_revisions.length === 1 ? "revision" : "revisions"}
+                                </span>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        disabled={busy || stored.account_id !== accountId}
+                                        onClick={() => void reopenSaved(stored)}
+                                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
+                                    >
+                                        Reopen saved edit
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={busy || stored.account_id !== accountId}
+                                        onClick={() => void deleteSaved(stored)}
+                                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
+                                    >
+                                        Delete local edit
+                                    </button>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="mt-3 text-sm text-gray-500">No local edits have been saved for this account.</p>
+                )}
+            </section>
             {busy && (
                 <p role="status" className="mb-6 text-sm text-gray-600">
                     Verifying selected file…
@@ -263,6 +479,7 @@ export function ResearchPackReader() {
                     {error}
                 </div>
             )}
+            {notice && <p role="status" className="mb-6 rounded-lg bg-green-50 p-3 text-sm text-green-800">{notice}</p>}
             {!opened && !error && !busy && (
                 <div className="rounded-xl border border-dashed border-gray-300 p-12 text-center text-sm text-gray-500">
                     Choose a Counterpedia v0.2 JSON file to begin.
@@ -287,8 +504,16 @@ export function ResearchPackReader() {
                             <select
                                 aria-label="Revision"
                                 value={selected}
-                                onChange={(event) => setSelected(Number(event.target.value))}
-                                className="ml-1 rounded border px-2 py-1"
+                                onChange={(event) => {
+                                    if (draftDirty && !window.confirm("Discard unsaved Mike edits before changing the source revision?")) return;
+                                    const nextSelected = Number(event.target.value);
+                                    const nextRevision = opened.pack.revisions.find((item) => item.revision === nextSelected);
+                                    setSelected(nextSelected);
+                                    setEditPackage(null);
+                                    setDraftEdits(nextRevision ? editableFields(nextRevision) : null);
+                                    setDraftDirty(false);
+                                }}
+                                className="ml-1 rounded border px-2 py-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                             >
                                 {opened.pack.revisions.map((item) => (
                                     <option key={item.revision} value={item.revision}>
@@ -299,6 +524,48 @@ export function ResearchPackReader() {
                         </label>
                     </section>
                     {revision && <Revision revision={revision} />}
+                    {sourceRevision && draftEdits && (
+                        <section aria-label="Edit research revision" className="rounded-xl border border-gray-200 bg-white p-6">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <h2 className="text-lg font-medium text-gray-900">Annotate and edit</h2>
+                                    <p className="mt-1 text-sm text-gray-600">The imported Counterpedia record remains unchanged. These edits are a separate Mike-local history.</p>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <button type="button" disabled={!accountId || busy} onClick={() => void saveEdit()} className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50">Save local edit</button>
+                                    <button type="button" disabled={!editPackage || busy} onClick={exportEdit} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50">Export Mike edit package</button>
+                                </div>
+                            </div>
+                            {!accountId && <p className="mt-3 text-sm text-amber-800">Sign in to save edits locally for your account.</p>}
+                            {draftDirty && <p className="mt-3 text-sm text-gray-600">Unsaved local edits</p>}
+                            <label className="mt-5 block text-sm font-medium text-gray-800">
+                                Finding text
+                                <textarea value={draftEdits.findingText} onChange={(event) => updateDraft({ ...draftEdits, findingText: event.target.value })} rows={4} className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" />
+                            </label>
+                            <h3 className="mt-5 text-sm font-semibold text-gray-800">Assessment annotations</h3>
+                            <div className="mt-2 space-y-3">
+                                {draftEdits.assessments.map((assessment, index) => (
+                                    <fieldset key={`${assessment.propositionId}:${assessment.observationId}`} className="grid gap-3 rounded-lg bg-gray-50 p-4 sm:grid-cols-2">
+                                        <legend className="sr-only">Assessment {index + 1}</legend>
+                                        <p className="break-words text-sm text-gray-700 sm:col-span-2">{assessment.propositionId} · {assessment.observationId}</p>
+                                        <label className="text-sm text-gray-700">Stance<input value={assessment.stance} onChange={(event) => updateDraft({ ...draftEdits, assessments: draftEdits.assessments.map((item, itemIndex) => itemIndex === index ? { ...item, stance: event.target.value } : item) })} className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" /></label>
+                                        <label className="text-sm text-gray-700">Note<textarea value={assessment.note} onChange={(event) => updateDraft({ ...draftEdits, assessments: draftEdits.assessments.map((item, itemIndex) => itemIndex === index ? { ...item, note: event.target.value } : item) })} rows={2} className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" /></label>
+                                    </fieldset>
+                                ))}
+                            </div>
+                            <h3 className="mt-5 text-sm font-semibold text-gray-800">Research-context reviews</h3>
+                            <div className="mt-2 space-y-3">
+                                {draftEdits.contextReviews.map((review, index) => (
+                                    <fieldset key={review.contextId || `context-${index}`} className="grid gap-3 rounded-lg bg-gray-50 p-4 sm:grid-cols-2">
+                                        <legend className="sr-only">Context review {index + 1}</legend>
+                                        <p className="break-words text-sm text-gray-700 sm:col-span-2">Context {review.contextId || "(none)"}</p>
+                                        <label className="text-sm text-gray-700">Decision<input value={review.decision} onChange={(event) => updateDraft({ ...draftEdits, contextReviews: draftEdits.contextReviews.map((item, itemIndex) => itemIndex === index ? { ...item, decision: event.target.value } : item) })} className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" /></label>
+                                        <label className="text-sm text-gray-700">Review note<textarea value={review.note} onChange={(event) => updateDraft({ ...draftEdits, contextReviews: draftEdits.contextReviews.map((item, itemIndex) => itemIndex === index ? { ...item, note: event.target.value } : item) })} rows={2} className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2" /></label>
+                                    </fieldset>
+                                ))}
+                            </div>
+                        </section>
+                    )}
                     <section className="rounded-xl border border-gray-200 bg-white p-6">
                         <h2 className="text-sm font-semibold text-gray-700">
                             Export-time readback availability
