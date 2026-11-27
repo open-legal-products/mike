@@ -106,17 +106,18 @@ describe("runLLMStream citation streaming", () => {
     expect(result.events.map((e) => e.type)).not.toContain("citations_recorded_start");
   });
 
-  it("announces cite_sources when the model starts writing it, once", async () => {
+  it("opens the citations step when the model starts writing cite_sources, once", async () => {
     vi.mocked(runToolCalls).mockResolvedValue(emptyToolCallBatchResult());
     const frames: string[] = [];
-    const starts = () => frames.filter((f) => f.includes('"type":"tool_call_start"'));
-    let announcedAtInputStart: string[] = [];
+    const startFrame = `data: ${JSON.stringify({ type: "citations_recorded_start" })}\n\n`;
+    const starts = () => frames.filter((f) => f === startFrame);
+    let openedAtInputStart: string[] = [];
     streamChatWithTools.mockImplementation(async (params: StreamChatParams) => {
       const call = { id: "cite", name: "cite_sources", input: { citations: [] } };
       params.callbacks?.onContentDelta?.("Checking the lease.");
       // The arguments are still streaming: only the id and name are known.
       params.callbacks?.onToolInputStart?.({ id: call.id, name: call.name });
-      announcedAtInputStart = starts();
+      openedAtInputStart = starts();
       params.callbacks?.onToolCallStart?.(call);
       await params.runTools?.([call]);
       return { fullText: "" };
@@ -132,15 +133,45 @@ describe("runLLMStream citation streaming", () => {
       nonce: "turnnonce",
     } as Parameters<typeof runLLMStream>[0]);
 
-    const frame = `data: ${JSON.stringify({ type: "tool_call_start", name: "cite_sources" })}\n\n`;
-    expect(announcedAtInputStart).toEqual([frame]);
-    // The completed call does not announce it a second time.
-    expect(starts()).toEqual([frame]);
+    // The step itself opens while the quotes are written, not a placeholder.
+    expect(openedAtInputStart).toEqual([startFrame]);
+    expect(frames.some((f) => f.includes('"type":"tool_call_start"'))).toBe(false);
+    // Neither the completed call nor running it opens the step a second time.
+    expect(starts()).toEqual([startFrame]);
     // Text written before the call is a finished part of the turn by then.
     expect(result.events[0]).toEqual({ type: "content", text: "Checking the lease." });
-    expect(frames.indexOf(frame)).toBeLessThan(
-      frames.findIndex((f) => f.includes('"type":"citations_recorded_start"')),
+    // The call's result completes the step it opened.
+    expect(frames.indexOf(startFrame)).toBeLessThan(
+      frames.findIndex((f) => f.includes('"type":"citations_recorded"')
+        && !f.includes("citations_recorded_start")),
     );
+  });
+
+  it("announces any other tool with a placeholder when the model starts writing it", async () => {
+    vi.mocked(runToolCalls).mockResolvedValue(emptyToolCallBatchResult());
+    const frames: string[] = [];
+    streamChatWithTools.mockImplementation(async (params: StreamChatParams) => {
+      const call = { id: "read", name: "read_document", input: { doc_id: "doc-0" } };
+      params.callbacks?.onToolInputStart?.({ id: call.id, name: call.name });
+      params.callbacks?.onToolCallStart?.(call);
+      await params.runTools?.([call]);
+      return { fullText: "" };
+    });
+    await runLLMStream({
+      model: "gemini-3.8-flash",
+      apiMessages: [{ role: "user", content: "Read the lease." }],
+      docStore: new Map(),
+      docIndex: {},
+      userId: "u1",
+      db: {} as never,
+      write: (line: string) => void frames.push(line),
+      nonce: "turnnonce",
+    } as Parameters<typeof runLLMStream>[0]);
+
+    expect(frames.filter((f) => f.includes('"type":"tool_call_start"'))).toEqual([
+      `data: ${JSON.stringify({ type: "tool_call_start", name: "read_document" })}\n\n`,
+    ]);
+    expect(frames.some((f) => f.includes("citations_recorded_start"))).toBe(false);
   });
 
   it("checks same-batch citations after an edit updates the source", async () => {
