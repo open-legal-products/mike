@@ -927,12 +927,13 @@ export async function completeAiSdkText(
       prompt: params.user,
       abortSignal: params.abortSignal,
       // Some models cannot turn thinking off ("none" is normalized to the
-      // lowest level they accept), and thinking is output too. Without
+      // lowest level they accept), and Ollama cannot be asked to at all, so
+      // its reasoning tags think regardless. Thinking is output too. Without
       // headroom a short call — a 64-token title — can spend its whole
       // allowance thinking and return no text. The cap is only a ceiling, so
       // the headroom costs nothing unless the model actually uses it.
       maxOutputTokens:
-        reasoning && reasoning !== "none"
+        (reasoning && reasoning !== "none") || config.provider === "ollama"
           ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
           : requested,
       reasoning: reasoning as
