@@ -99,6 +99,18 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # Next.js build cache (https://nextjs.org/docs/pages/guides/ci-build-caching).
+      # Placed before the installs so hashFiles never walks node_modules.
+      - name: Cache Next.js build
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/frontend/.next/cache
+          # Generate a new cache whenever packages or source files change.
+          key: ${{ runner.os }}-nextjs-ci-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx') }}
+          # If source files changed but packages didn't, rebuild from a prior cache.
+          restore-keys: |
+            ${{ runner.os }}-nextjs-ci-${{ hashFiles('**/package-lock.json') }}-
+
       # Same silent-merge-corruption guard as the backend job.
       - name: Validate package.json and lockfile parse
         run: node -e "for (const f of ['package.json','package-lock.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"

@@ -85,6 +85,18 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             frontend/package-lock.json
+      # Next.js build cache (https://nextjs.org/docs/pages/guides/ci-build-caching).
+      # Placed before the installs so hashFiles never walks node_modules.
+      - name: Cache Next.js build
+        if: matrix.renderer == 'production'
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/frontend/.next/cache
+          # Generate a new cache whenever packages or source files change.
+          key: ${{ runner.os }}-nextjs-e2e-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx') }}
+          # If source files changed but packages didn't, rebuild from a prior cache.
+          restore-keys: |
+            ${{ runner.os }}-nextjs-e2e-${{ hashFiles('**/package-lock.json') }}-
       - run: npm ci
       - run: npm ci --prefix frontend
       - name: Ensure lightningcss native binary
@@ -165,6 +177,19 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      # Next.js build cache (https://nextjs.org/docs/pages/guides/ci-build-caching).
+      # Placed before the installs so hashFiles never walks node_modules.
+      - name: Cache Next.js build
+        if: matrix.renderer == 'production'
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/frontend/.next/cache
+          # Generate a new cache whenever packages or source files change.
+          key: ${{ runner.os }}-nextjs-e2e-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.js', '**/*.jsx', '**/*.ts', '**/*.tsx') }}
+          # If source files changed but packages didn't, rebuild from a prior cache.
+          restore-keys: |
+            ${{ runner.os }}-nextjs-e2e-${{ hashFiles('**/package-lock.json') }}-
 
       # Three installs: the root package (Playwright + the e2e tooling), the
       # backend API, and the Next.js web app. Each carries its own lockfile in
