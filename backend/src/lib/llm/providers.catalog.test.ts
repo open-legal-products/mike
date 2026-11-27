@@ -81,4 +81,34 @@ describe("current provider model compatibility", () => {
     if (mode === "between_tools") expect(body.thinking.type).toBe(mode);
     else expect(body.output_config.effort).toBe(mode);
   });
+
+  // #948: Ollama cannot be asked to stop thinking, so a 64-token title cap
+  // was spent on reasoning and every chat fell back to "Misc. Query".
+  it("leaves room for thinking on short Ollama completions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        id: "chatcmpl_test",
+        created: 1,
+        model: "qwen3-vl:8b",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "Title" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      completeWithProvider({
+        model: "ollama/qwen3-vl:8b",
+        user: "Title",
+        maxTokens: 64,
+      }),
+    ).resolves.toBe("Title");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body).max_tokens).toBe(64 + 4096);
+  });
 });
