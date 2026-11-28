@@ -113,6 +113,9 @@ export function SidebarChatItem({
 
     return (
         <div
+            // A stable handle for browser tests, which should not depend on
+            // the row's size or styling.
+            data-slot="sidebar-chat-row"
             className={cn(
                 "group relative flex h-7 w-full items-center rounded-md transition-colors",
                 isActive
