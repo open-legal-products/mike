@@ -1,3 +1,12 @@
+import { EDITOR_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
+
+/**
+ * A playbook pane's surface: a flat glass card on a small screen, and from md
+ * up, on the page's sheet, no card at all (globals.css clears it), so the
+ * panes sit flat on the sheet with a line between them.
+ */
+export const PLAYBOOK_PANE_SURFACE_CLASS = `playbook-pane ${EDITOR_SURFACE_CLASS}`;
+
 /** Overview defines the shared pane spacing for every playbook tab. */
 export const PLAYBOOK_PANE_INSET_CLASS = "px-4 md:px-5";
 

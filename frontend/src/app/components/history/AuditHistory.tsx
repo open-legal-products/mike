@@ -49,6 +49,7 @@ import {
   PopoverTrigger,
 } from "@/app/components/ui/popover";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import {
   SkeletonLine,
   SkeletonCheckbox,
@@ -494,7 +495,7 @@ export function AuditHistory({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+    <PageSheet>
       <PageHeader
         shrink
         breadcrumbs={[
@@ -873,7 +874,7 @@ export function AuditHistory({
           onExport={(range) => void handleExport(range)}
         />
       )}
-    </div>
+    </PageSheet>
   );
 }
 

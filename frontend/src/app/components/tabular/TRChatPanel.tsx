@@ -64,7 +64,10 @@ import {
     isUncertainDelivery,
     uncertainDeliveryError,
 } from "@/app/lib/chatTurnFailure";
-import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
+import {
+    LIQUID_GLASS_FLAT_CLASS,
+    LIQUID_GLASS_FLOAT_CLASS,
+} from "@/app/components/ui/liquid-surface";
 import { ChatPanelHeader } from "../shared/ChatPanelHeader";
 import { HeaderActionsMenu } from "../shared/HeaderActionsMenu";
 import { cn } from "@/app/lib/utils";
@@ -152,6 +155,12 @@ function parseCourtlistenerCaseSearches(value: unknown) {
 
 interface Props {
     reviewId: string;
+    /**
+     * "sheet" (md up): a sheet of its own beside the review's, in the
+     * sidebar's material. "inline" (small screens): a card inside the page,
+     * in place of the table.
+     */
+    placement?: "inline" | "sheet";
     reviewTitle?: string | null;
     projectName?: string | null;
     onCitationClick: (colIdx: number, rowIdx: number) => void;
@@ -465,6 +474,7 @@ const COMPOSER_GAP = 16;
 
 export function TRChatPanel({
     reviewId,
+    placement = "inline",
     reviewTitle,
     projectName,
     onCitationClick,
@@ -2225,14 +2235,16 @@ export function TRChatPanel({
             }
             className={cn(
                 "flex flex-col relative",
-                // Mobile: replaces the table, filling the row minus margins.
-                // md+: fixed width beside the table, top-aligned with it
-                // (below the toolbar).
-                // The table's 24px right margin minus this 18px overlap
-                // leaves the same 6px gap as the IDE panel dividers.
-                "flex-1 min-w-0 mx-3 mb-3 md:flex-none md:w-[var(--tr-chat-panel-width)] md:mt-12 md:-ml-4.5 md:mr-6",
+                placement === "sheet"
+                    ? // Its own sheet beside the review's: the window's 12px
+                      // above, below and to the right, the sidebar's material.
+                      cn(
+                          "my-3 mr-3 w-[var(--tr-chat-panel-width)] flex-none",
+                          LIQUID_GLASS_FLOAT_CLASS,
+                      )
+                    : // In place of the table, filling the row minus margins.
+                      cn("mx-3 mb-3 min-w-0 flex-1", LIQUID_GLASS_FLAT_CLASS),
                 "rounded-2xl",
-                LIQUID_GLASS_FLAT_CLASS,
                 "overflow-hidden",
             )}
         >

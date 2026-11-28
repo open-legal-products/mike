@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { Plus } from "lucide-react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TabPillButtonUI } from "@mike/ui";
+import { PageSheet } from "./PageSheet";
 import { TableToolbar } from "./TableToolbar";
 
 describe("TableToolbar", () => {
@@ -83,5 +84,20 @@ describe("TableToolbar", () => {
         );
         // The title's own margins: 16px, and 24px from md up.
         expect(container.firstElementChild).toHaveClass("mx-4", "md:mx-6");
+    });
+
+    it("lines its first pill up with the sheet header's title on a page sheet", () => {
+        const { container } = render(
+            <PageSheet>
+                <TableToolbar items={[{ id: "all", label: "All" }]} active="all" />
+            </PageSheet>,
+        );
+        const toolbar = container.querySelector('[data-slot="page-sheet"]')!
+            .firstElementChild;
+        // From md up, where the sheet is: in line with its title, with more
+        // room above than below. Below md, its usual 16px and spacing.
+        expect(toolbar).toHaveClass("md:mx-3", "md:mt-2", "md:mb-0");
+        expect(toolbar).toHaveClass("mx-4", "mb-2");
+        expect(toolbar).not.toHaveClass("md:mx-6");
     });
 });

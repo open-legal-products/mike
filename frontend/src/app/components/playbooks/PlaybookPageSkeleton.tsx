@@ -1,14 +1,15 @@
 "use client";
 
+import { useOnPageSheet } from "@/app/components/shared/PageSheet";
 import { SkeletonLine } from "@/app/components/shared/TablePrimitive";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
-import { EDITOR_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import {
   PLAYBOOK_PANE_BODY_CLASS,
   PLAYBOOK_PANE_HEADER_CLASS,
   PLAYBOOK_PANE_INSET_CLASS,
   PLAYBOOK_SIDE_HEADER_CLASS,
   PLAYBOOK_SIDE_LIST_CLASS,
+  PLAYBOOK_PANE_SURFACE_CLASS,
 } from "./playbookPaneStyles";
 
 function PillSkeleton({ className }: { className: string }) {
@@ -25,6 +26,7 @@ function PillSkeleton({ className }: { className: string }) {
  * the toolbar, the rule list, and the rule editor.
  */
 export function PlaybookPageSkeleton() {
+  const onSheet = useOnPageSheet();
   return (
     <div
       role="status"
@@ -48,9 +50,11 @@ export function PlaybookPageSkeleton() {
         />
       </div>
       <div className="@container flex min-h-0 flex-1 flex-col">
-        <div className="mx-3.5 mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 p-0.5 md:mx-[22px] @[48rem]:grid-cols-[360px_minmax(0,1fr)]">
+        <div
+          className={`${onSheet ? "mx-3.5 md:-mx-2 md:mb-0 md:p-0" : "mx-3.5 md:mx-[22px]"} mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 p-0.5 @[48rem]:grid-cols-[360px_minmax(0,1fr)]`}
+        >
           <section
-            className={`flex min-h-0 min-w-0 flex-col ${EDITOR_SURFACE_CLASS}`}
+            className={`flex min-h-0 min-w-0 flex-col ${PLAYBOOK_PANE_SURFACE_CLASS}`}
           >
             <div className={`flex items-center ${PLAYBOOK_SIDE_HEADER_CLASS}`}>
               <div className="flex h-5 items-center">
@@ -66,7 +70,7 @@ export function PlaybookPageSkeleton() {
             </div>
           </section>
           <section
-            className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden @[48rem]:min-h-0 ${EDITOR_SURFACE_CLASS}`}
+            className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden @[48rem]:min-h-0 ${PLAYBOOK_PANE_SURFACE_CLASS}`}
           >
             <div className={PLAYBOOK_PANE_HEADER_CLASS}>
               <div className="flex h-5 items-center">

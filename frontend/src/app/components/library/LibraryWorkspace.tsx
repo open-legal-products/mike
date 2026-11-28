@@ -25,6 +25,7 @@ import type {
 } from "@/app/components/documents/DocTable";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { DocumentUploadMenu } from "@/app/components/shared/DocumentUploadMenu";
@@ -1005,7 +1006,7 @@ export function LibraryCollectionPage({
     );
 
     return (
-        <div className="flex h-full min-h-0 flex-col">
+        <PageSheet>
             <PageHeader
                 breadcrumbs={[
                     {
@@ -1144,6 +1145,6 @@ export function LibraryCollectionPage({
                     canDo={NO_ROLE_MODEL}
                 />
             </div>
-        </div>
+        </PageSheet>
     );
 }

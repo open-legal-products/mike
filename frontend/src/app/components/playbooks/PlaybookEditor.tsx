@@ -30,6 +30,7 @@ import {
   PLAYBOOK_SIDE_HEADER_CLASS,
   PLAYBOOK_SIDE_LIST_CLASS,
   PLAYBOOK_SIDE_TITLE_CLASS,
+  PLAYBOOK_PANE_SURFACE_CLASS,
 } from "./playbookPaneStyles";
 import {
   PlaybookRuleForm,
@@ -38,7 +39,6 @@ import {
   type UndoableRuleChange,
 } from "./PlaybookRuleForm";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { EDITOR_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import { dismissToast, showToast } from "@/app/components/ui/toast";
 import {
   HeaderActionsMenu,
@@ -486,7 +486,7 @@ export function PlaybookEditor({
             )
               setDropTarget(null);
           }}
-          className={`flex min-h-0 min-w-0 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${EDITOR_SURFACE_CLASS} ${dropTarget?.topicId === null && !dropTarget.ruleId ? "ring-2 ring-inset ring-blue-500/40" : ""}`}
+          className={`flex min-h-0 min-w-0 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${PLAYBOOK_PANE_SURFACE_CLASS} ${dropTarget?.topicId === null && !dropTarget.ruleId ? "ring-2 ring-inset ring-blue-500/40" : ""}`}
         >
           <div
             className={`flex items-center justify-between gap-2 ${PLAYBOOK_SIDE_HEADER_CLASS}`}
@@ -639,7 +639,7 @@ export function PlaybookEditor({
     >
       <section
         aria-label="Rule editor"
-        className={`@container flex min-h-0 min-w-0 flex-col overflow-hidden ${EDITOR_SURFACE_CLASS}`}
+        className={`@container flex min-h-0 min-w-0 flex-col overflow-hidden ${PLAYBOOK_PANE_SURFACE_CLASS}`}
       >
         {selectedRule && (
           <fieldset
@@ -693,7 +693,8 @@ export function PlaybookEditor({
             {RULE_FORM_TABS.map((tab) => (
               <TabPillButtonUI
                 key={tab.id}
-                surface="flat"
+                // Styled like the page toolbar's tabs.
+                surface="plain"
                 active={ruleTab === tab.id}
                 onClick={() => {
                   setRuleTab(tab.id);

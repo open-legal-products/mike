@@ -15,15 +15,19 @@ import {
 /**
  * A group of header buttons. The fill is translucent, so a caller that floats
  * the group over scrolling content adds its own `backdrop-blur-*`; in-flow
- * groups on the solid page background do not need one.
+ * groups on the solid page background do not need one. A group already on a
+ * glass surface (a page sheet) is `plain`: no pill of its own, only the
+ * buttons' hover fills, at the same size.
  */
 export function HeaderButtonsUI({
     className = "",
+    surface = "subtle",
     ...props
-}: ComponentProps<"div">) {
+}: ComponentProps<"div"> & { surface?: "subtle" | "plain" }) {
     return (
         <div
-            className={`flex shrink-0 items-center gap-2 rounded-full px-1 py-1 ${LIQUID_GLASS_SUBTLE_CLASS} ${className}`}
+            data-surface={surface}
+            className={`flex shrink-0 items-center gap-2 rounded-full px-1 py-1 ${surface === "subtle" ? LIQUID_GLASS_SUBTLE_CLASS : ""} ${className}`}
             {...props}
         />
     );

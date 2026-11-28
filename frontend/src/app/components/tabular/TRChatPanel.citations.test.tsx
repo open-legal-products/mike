@@ -58,6 +58,20 @@ function sseResponse(frames: string[]): Response {
 }
 
 describe("TRChatPanel citations", () => {
+    it.each([
+        ["sheet", ["liquid-glass-float", "my-3", "mr-3", "flex-none"], ["liquid-glass-flat", "flex-1"]],
+        ["inline", ["liquid-glass-flat", "flex-1", "mx-3"], ["liquid-glass-float", "md:mt-12"]],
+    ] as const)("draws its %s placement", (placement, has, hasNot) => {
+        const { container } = render(
+            <TRChatPanel reviewId="review-1" placement={placement} onCitationClick={vi.fn()} />,
+        );
+        // A sheet of its own beside the review's (md up), or a card in the
+        // table's place (small screens).
+        const panel = container.firstElementChild!;
+        expect(panel).toHaveClass("rounded-2xl", ...has);
+        expect(panel).not.toHaveClass(...hasNot);
+    });
+
     beforeEach(() => {
         vi.clearAllMocks();
         vi.stubGlobal(

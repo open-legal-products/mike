@@ -11,6 +11,17 @@
 export const PAGE_HEADER_TITLE_CLASS = "font-serif text-lg font-medium";
 
 /**
+ * The row on a page sheet, the mirror of the sidebar's header beside it. Both
+ * panels start 12px down plus a 1px border; this 40px row and the sidebar's
+ * 28px header inside its 6px padding both have their middle 20px further
+ * down, so the title sits on the logo text's line. The title is 12px in, as
+ * the logo is; the 28px buttons sit 6px from the sheet's top and right edges,
+ * as the sidebar's toggle does from its own (2px of margin plus the group's
+ * 4px padding).
+ */
+export const PAGE_HEADER_SHEET_ROW_CLASS = "h-10 shrink-0 ml-3 mr-0.5";
+
+/**
  * The height and padding of the row a page's title sits in, which is what
  * puts the title on the same line as the sidebar's logo text. Beside the
  * sidebar (md and up) that row is 40px tall and starts 12px down plus the

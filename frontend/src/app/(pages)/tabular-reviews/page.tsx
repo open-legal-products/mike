@@ -28,6 +28,7 @@ import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useWorkspaceOrgId, useWorkspaceParam } from "@/app/contexts/WorkspaceContext";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { PAGE_HEADER_TITLE_CLASS } from "@/app/components/shared/pageHeaderStyles";
 import type { TableSortDirection } from "@/app/components/shared/TablePrimitive";
 import {
@@ -401,7 +402,7 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
     }
 
     return (
-        <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+        <PageSheet>
             {/* Page header */}
             <PageHeader
                 loading={loading}
@@ -531,6 +532,6 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
                 onCancel={() => setConfirmDeleteAllOpen(false)}
                 onConfirm={() => void handleDeleteSelected()}
             />
-        </div>
+        </PageSheet>
     );
 }

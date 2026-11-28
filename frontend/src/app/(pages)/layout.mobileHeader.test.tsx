@@ -103,6 +103,27 @@ describe("mobile page header", () => {
         expect(header).toHaveClass("relative", "shrink-0");
         expect(header).not.toHaveClass("fixed");
     });
+
+    it("has a slot for a sheet page's title after the left buttons, before the actions", () => {
+        navigation.pathname = "/projects";
+        render(
+            <MikeLayout>
+                <div>Projects</div>
+            </MikeLayout>,
+        );
+
+        const header = document.querySelector('[data-slot="mobile-header"]')!;
+        const title = header.querySelector('[data-slot="mobile-title"]')!;
+        expect(title.previousElementSibling).toHaveAttribute(
+            "data-slot",
+            "mobile-back",
+        );
+        expect(title).toHaveClass("min-w-0", "flex-1", "empty:hidden");
+        // Beside a title the actions take only their own width.
+        expect(title.nextElementSibling).toHaveClass(
+            "[[data-slot=mobile-title]:not(:empty)~&]:flex-initial",
+        );
+    });
 });
 
 /**

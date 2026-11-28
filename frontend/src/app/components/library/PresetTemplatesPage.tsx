@@ -11,6 +11,7 @@ import type {
   DocTableSelectionActions,
 } from "@/app/components/documents/DocTable";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import type { RowAddStatus } from "@/app/components/shared/RowActions";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
@@ -175,7 +176,7 @@ export function PresetTemplatesPage({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <PageSheet>
       <PageHeader
         breadcrumbs={[
           { label: "Library", onClick: () => router.push("/library") },
@@ -240,6 +241,6 @@ export function PresetTemplatesPage({
         message={error}
         onClose={() => setError(null)}
       />
-    </div>
+    </PageSheet>
   );
 }

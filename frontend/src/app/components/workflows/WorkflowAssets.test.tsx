@@ -8,10 +8,12 @@ import { WorkflowAssets, type WorkflowAssetsHandle } from "./WorkflowAssets";
 
 const {
     copyDocumentsToWorkflowAssets,
+    deleteWorkflowAsset,
     listWorkflowAssets,
     uploadWorkflowAssets,
 } = vi.hoisted(() => ({
     copyDocumentsToWorkflowAssets: vi.fn(),
+    deleteWorkflowAsset: vi.fn(),
     listWorkflowAssets: vi.fn(),
     uploadWorkflowAssets: vi.fn(),
 }));
@@ -21,6 +23,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => {
     return {
         ...actual,
         copyDocumentsToWorkflowAssets,
+        deleteWorkflowAsset,
         listWorkflowAssets,
         uploadWorkflowAssets,
     };
@@ -77,6 +80,78 @@ describe("WorkflowAssets", () => {
         expect(screen.getByTestId("document-side-panel")).toHaveTextContent(
             "Precedent.docx",
         );
+    });
+
+    it("selects assets with checkboxes and deletes the selection from the toolbar", async () => {
+        const user = userEvent.setup();
+        listWorkflowAssets.mockResolvedValue([
+            {
+                id: "asset-a",
+                workflow_id: "workflow-1",
+                filename: "Alpha.docx",
+                file_type: "docx",
+                size_bytes: 42,
+                created_at: "2026-08-28T00:00:00.000Z",
+                updated_at: "2026-08-28T00:00:00.000Z",
+            },
+            {
+                id: "asset-b",
+                workflow_id: "workflow-1",
+                filename: "Beta.pdf",
+                file_type: "pdf",
+                size_bytes: 84,
+                created_at: "2026-08-28T00:00:00.000Z",
+                updated_at: "2026-08-28T00:00:00.000Z",
+            },
+        ]);
+        deleteWorkflowAsset.mockResolvedValue(undefined);
+        render(
+            <WorkflowAssets
+                workflowId="workflow-1"
+                readOnly={false}
+                renderToolbar={(actions) => (
+                    <div data-testid="toolbar">{actions}</div>
+                )}
+            />,
+        );
+        await screen.findByText("Alpha.docx");
+
+        // No "Actions" until something is selected.
+        expect(
+            screen.queryByRole("button", { name: /Actions/ }),
+        ).not.toBeInTheDocument();
+        await user.click(
+            screen.getByRole("checkbox", { name: "Select Alpha.docx" }),
+        );
+        // Ticking a row selects it without opening it.
+        expect(screen.queryByTestId("document-side-panel")).toBeNull();
+        expect(
+            screen.getByRole("checkbox", { name: "Select all assets" }),
+        ).toBePartiallyChecked();
+
+        await user.click(
+            screen.getByRole("checkbox", { name: "Select all assets" }),
+        );
+        expect(
+            screen.getByRole("checkbox", { name: "Select Beta.pdf" }),
+        ).toBeChecked();
+
+        await user.click(screen.getByRole("button", { name: /Actions/ }));
+        await user.click(
+            await screen.findByRole("menuitem", { name: /Delete 2 assets/ }),
+        );
+        expect(await screen.findByText("Delete 2 assets?")).toBeVisible();
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+
+        await waitFor(() =>
+            expect(screen.queryByText("Alpha.docx")).not.toBeInTheDocument(),
+        );
+        expect(deleteWorkflowAsset).toHaveBeenCalledWith("workflow-1", "asset-a");
+        expect(deleteWorkflowAsset).toHaveBeenCalledWith("workflow-1", "asset-b");
+        expect(screen.queryByText("Beta.pdf")).not.toBeInTheDocument();
+        expect(
+            screen.queryByRole("button", { name: /Actions/ }),
+        ).not.toBeInTheDocument();
     });
 
     it("copies selected saved documents into the workflow assets", async () => {

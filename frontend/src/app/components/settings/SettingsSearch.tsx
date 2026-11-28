@@ -50,19 +50,25 @@ function focusSection(hash: string): (() => void) | null {
 }
 
 /**
- * A search over a person's settings, as a page-header search button: it
- * opens into a box, and typing lists the sections and controls that match by
- * name first and by meaning after; choosing one opens its page and scrolls to
- * it. Left empty, the box folds back into the button.
+ * A search over a person's settings. Typing lists the sections and controls
+ * that match by name first and by meaning after; choosing one opens its page
+ * and scrolls to it.
+ *
+ * As a page-header `button` it opens into a box, and left empty the box folds
+ * back into the button. As a `field` (the settings overview) the box is
+ * always there, as wide as its container.
  */
 export function SettingsSearch({
     entries,
     label = "Search settings",
+    variant = "button",
 }: {
     entries: readonly SettingsSearchEntry[];
     /** The button's and box's name, and the box's placeholder. */
     label?: string;
+    variant?: "button" | "field";
 }) {
+    const isField = variant === "field";
     const router = useRouter();
     const pathname = usePathname();
     const [query, setQuery] = useState("");
@@ -134,7 +140,7 @@ export function SettingsSearch({
         }))
         .filter((group) => group.results.length > 0);
 
-    if (!expanded && !query)
+    if (!isField && !expanded && !query)
         return (
             <HeaderButtonUI
                 ref={button}
@@ -149,7 +155,7 @@ export function SettingsSearch({
 
     return (
         <div
-            className="relative flex items-center"
+            className={cn("relative flex items-center", isField && "w-full")}
             onFocus={() => setOpen(true)}
             onBlur={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
@@ -164,7 +170,8 @@ export function SettingsSearch({
                         className:
                             "cursor-text justify-start gap-2 px-3 text-gray-700 hover:text-gray-700",
                     }),
-                    `w-56 sm:w-72 ${LIQUID_GLASS_SELECTED_CLASS}`,
+                    isField ? "h-9 w-full" : "w-56 sm:w-72",
+                    LIQUID_GLASS_SELECTED_CLASS,
                 )}
             >
                 <Search
@@ -173,8 +180,9 @@ export function SettingsSearch({
                 />
                 <input
                     ref={input}
-                    // Opened from the button: the box takes its focus.
-                    autoFocus
+                    // Opened from the button: the box takes its focus. A field
+                    // is already there, and waits to be chosen.
+                    autoFocus={!isField}
                     type="search"
                     aria-label={label}
                     placeholder={label}
@@ -190,7 +198,7 @@ export function SettingsSearch({
                         if (event.key === "Escape") {
                             event.preventDefault();
                             if (query) setQuery("");
-                            else {
+                            else if (!isField) {
                                 refocusButton.current = true;
                                 setExpanded(false);
                             }

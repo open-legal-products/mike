@@ -17,7 +17,6 @@ import { SkeletonLine } from "@/app/components/shared/TablePrimitive";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { EDITOR_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import { showToast } from "@/app/components/ui/toast";
 import {
   addPlaybookSourceFromDocument,
@@ -44,6 +43,7 @@ import {
   PLAYBOOK_SIDE_HEADER_CLASS,
   PLAYBOOK_SIDE_LIST_CLASS,
   PLAYBOOK_SIDE_TITLE_CLASS,
+  PLAYBOOK_PANE_SURFACE_CLASS,
 } from "./playbookPaneStyles";
 
 const IMPORTED_ID = "imported";
@@ -229,7 +229,7 @@ export function PlaybookSources({
       sidebar={
         <section
           aria-label="Reference documents"
-          className={`flex min-h-0 min-w-0 flex-col ${EDITOR_SURFACE_CLASS}`}
+          className={`flex min-h-0 min-w-0 flex-col ${PLAYBOOK_PANE_SURFACE_CLASS}`}
         >
           <div className={`flex items-center justify-between gap-2 ${PLAYBOOK_SIDE_HEADER_CLASS}`}>
             <h2 className={PLAYBOOK_SIDE_TITLE_CLASS}>References</h2>
@@ -329,7 +329,7 @@ export function PlaybookSources({
     >
       <section
         aria-label="Reference document"
-        className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden @[48rem]:min-h-0 ${EDITOR_SURFACE_CLASS}`}
+        className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden @[48rem]:min-h-0 ${PLAYBOOK_PANE_SURFACE_CLASS}`}
       >
         {selected && (
           <div className={`flex items-center gap-2 ${PLAYBOOK_PANE_HEADER_CLASS}`}>

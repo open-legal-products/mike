@@ -22,6 +22,48 @@
     background-color: var(--table-cell-background);
 }
 
+/* A page sheet is a sheet only beside the sidebar (md up). On a small screen
+   the page is the window's own, so the sheet's material is cleared. */
+@media (width < 48rem) {
+    [data-slot="page-sheet"] {
+        border-color: transparent;
+        background-color: transparent;
+        box-shadow: none;
+    }
+}
+
+/* On a page sheet the table sits on the sheet's fill, not the page's, so its
+   sticky layers back onto that instead. A table with drawn grid lines runs to
+   the sheet's edges there too, so it needs no lines of its own at its sides
+   or foot. Playbook panes and a workflow's prompt editor lose their cards and
+   sit flat on the sheet, the editor's toolbar on the sheet's fill too. */
+@media (width >= 48rem) {
+    [data-slot="page-sheet"] .table-surface {
+        --table-cell-background: var(--liquid-glass-background-float);
+    }
+
+    [data-slot="page-sheet"] .table-surface.tabular-review-table-surface {
+        border-right-width: 0;
+        border-bottom-width: 0;
+        border-left-width: 0;
+        border-radius: 0;
+    }
+
+    [data-slot="page-sheet"] .playbook-pane,
+    [data-slot="page-sheet"] .workflow-prompt-pane {
+        border-color: transparent;
+        border-radius: 0;
+        background-color: transparent;
+        box-shadow: none;
+    }
+
+    [data-slot="page-sheet"]
+        .workflow-prompt-pane
+        > [data-slot="markdown-editor-bar"] {
+        background-color: transparent;
+    }
+}
+
 .table-surface .table-sticky-cell.liquid-glass-selected {
     background-color: var(--liquid-glass-selected-background);
 }

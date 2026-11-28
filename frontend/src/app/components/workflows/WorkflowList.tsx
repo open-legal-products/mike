@@ -30,6 +30,7 @@ import { NewWorkflowModal } from "./NewWorkflowModal";
 import { TableToolbar } from "../shared/TableToolbar";
 import { RowActionMenuItems, RowActions } from "../shared/RowActions";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { PAGE_HEADER_TITLE_CLASS } from "@/app/components/shared/pageHeaderStyles";
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { EmptyState } from "@/app/components/ui/empty-state";
@@ -491,7 +492,7 @@ export function WorkflowList({
         : "The selected workflows will be permanently deleted.";
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+    <PageSheet>
       <PageHeader
         shrink
         loading={loading}
@@ -668,7 +669,7 @@ export function WorkflowList({
           setDeleteStatus("idle");
         }}
       />
-    </div>
+    </PageSheet>
   );
 }
 

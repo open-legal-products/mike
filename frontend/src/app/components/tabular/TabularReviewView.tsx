@@ -1,4 +1,6 @@
 "use client";
+import { PageSheet } from "@/app/components/shared/PageSheet";
+import { useIsDesktop } from "@/app/hooks/useIsDesktop";
 import { BACKEND_REPORTING_OWNER } from "@mike/client";
 
 import { RowActionMenuItems } from "@/app/components/shared/RowActions";
@@ -124,6 +126,8 @@ interface Props {
 
 /** Display a review grid and resume its active generation through the latest stream handler. */
 export function TRView({ reviewId, projectId }: Props) {
+    // Where the chat goes: its own sheet from md up, the table's place below.
+    const isDesktop = useIsDesktop();
     const configuredModels = useConfiguredModels();
     const configuredModelIds = useMemo(
         () => configuredModels.map((model) => model.id),
@@ -1694,9 +1698,25 @@ export function TRView({ reviewId, projectId }: Props) {
         ? rows.filter((row) => row.label.toLowerCase().includes(q))
         : rows;
 
+    // Beside the table on its own sheet from md up; in the table's place on
+    // a small screen. One placement or the other, so one chat.
+    const renderChat = (placement: "inline" | "sheet") => (
+        <TRChatPanel
+            reviewId={reviewId}
+            placement={placement}
+            reviewTitle={review?.title ?? null}
+            projectName={project?.name ?? null}
+            onCitationClick={handleTabularCitationClick}
+            initialChatId={selectedChatId}
+            onChatIdChange={setSelectedChatId}
+            canSend={roleKnown ? canEditContent : null}
+        />
+    );
+
     return (
         <div className="flex h-full overflow-hidden">
-            <div className="flex flex-1 flex-col overflow-hidden">
+            {/* Beside the chat's sheet, the same 8px gap as from the sidebar. */}
+            <PageSheet className={chatOpen && isDesktop ? "md:mr-2" : undefined}>
                 <input
                     ref={reviewFileUploadInputRef}
                     type="file"
@@ -2112,19 +2132,10 @@ export function TRView({ reviewId, projectId }: Props) {
                             </DocumentWorkspaceScope>
                         </div>
                     </div>
-                    {chatOpen && (
-                        <TRChatPanel
-                            reviewId={reviewId}
-                            reviewTitle={review?.title ?? null}
-                            projectName={project?.name ?? null}
-                            onCitationClick={handleTabularCitationClick}
-                            initialChatId={selectedChatId}
-                            onChatIdChange={setSelectedChatId}
-                            canSend={roleKnown ? canEditContent : null}
-                        />
-                    )}
+                    {chatOpen && !isDesktop && renderChat("inline")}
                 </div>
-            </div>
+            </PageSheet>
+            {chatOpen && isDesktop && renderChat("sheet")}
 
             {/* Cell detail side panel */}
             {expandedCell &&

@@ -1,5 +1,6 @@
 "use client";
 
+import { useOnPageSheet } from "@/app/components/shared/PageSheet";
 import {
   useEffect,
   useId,
@@ -29,6 +30,7 @@ export function PlaybookPanels({
   resizeLabel?: string;
 }) {
   const isTrailing = variant === "trailing";
+  const onSheet = useOnPageSheet();
   const hasPane = sidebar != null;
   const minWidth = isTrailing ? 320 : 160;
   const defaultWidth = isTrailing ? 448 : 360;
@@ -97,13 +99,17 @@ export function PlaybookPanels({
         ref={layoutRef}
         style={{ "--panel-width": `${width}px` } as CSSProperties}
         // Outside the 2px that keeps the cards' shadows, the cards' edges line
-        // up with the page title: 16px in, and 24px from md up.
+        // up with the page title: 16px in, and 24px from md up. On a page sheet
+        // (md up) the panes have no cards: the grid runs to the sheet's foot
+        // and sits 8px past its edges, so the panes' 20px inset puts their
+        // text 12px in, in line with the title. A line runs across the top
+        // of both panes there, under the toolbar.
         className={
           isTrailing
             ? hasPane
               ? "grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto @[41rem]/run-layout:grid-cols-[minmax(0,1fr)_6px_var(--panel-width)] @[41rem]/run-layout:gap-0 @[41rem]/run-layout:overflow-hidden"
               : "grid min-h-0 flex-1 grid-cols-1"
-            : "mx-3.5 mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto p-0.5 md:mx-[22px] @[48rem]:grid-cols-[var(--panel-width)_6px_minmax(0,1fr)] @[48rem]:gap-0 @[48rem]:overflow-hidden"
+            : `${onSheet ? "mx-3.5 md:-mx-2 md:mb-0 md:border-t md:border-border md:p-0" : "mx-3.5 md:mx-[22px]"} mb-3 grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-y-auto p-0.5 @[48rem]:grid-cols-[var(--panel-width)_6px_minmax(0,1fr)] @[48rem]:gap-0 @[48rem]:overflow-hidden`
         }
       >
         {isTrailing ? children : adjustablePane}
@@ -163,7 +169,12 @@ export function PlaybookPanels({
           >
             <div className="absolute inset-y-0 -left-1 -right-1" />
             <div
-              className={`pointer-events-none absolute inset-y-2 left-0.5 w-0.5 rounded-full transition-colors group-focus-visible:bg-blue-600 ${dragging ? "bg-blue-600" : "group-hover:bg-blue-600/60"}`}
+              className={`pointer-events-none absolute left-0.5 rounded-full transition-colors group-focus-visible:bg-blue-600 ${
+                // Flat panes on a sheet have no edges, so the line between
+                // them always shows there, full height, 1px like the line
+                // across their top.
+                onSheet ? "inset-y-0 w-0.5 md:w-px md:bg-border" : "inset-y-2 w-0.5"
+              } ${dragging ? "bg-blue-600 md:bg-blue-600" : "group-hover:bg-blue-600/60 md:group-hover:bg-blue-600/60"}`}
             />
           </div>
         )}

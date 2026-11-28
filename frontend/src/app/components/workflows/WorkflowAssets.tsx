@@ -6,6 +6,7 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type { Document } from "../shared/types";
 import {
@@ -37,18 +38,26 @@ import { reportFault,
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { ConfirmPopup } from "../popups/ConfirmPopup";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
-import { RowActions } from "../shared/RowActions";
+import { RowActionMenuItems, RowActions } from "../shared/RowActions";
+import { SelectionActionsMenu } from "../shared/SelectionActionsMenu";
+import { settleBulkRequests } from "@/app/lib/bulkRequests";
 import { DocumentSidePanel } from "../shared/DocumentSidePanel";
 import {
+  SkeletonCheckbox,
   SkeletonLine,
+  TABLE_CHECKBOX_CLASS,
   TableBody,
   TableCell,
   TableEmptyState,
   TableHeaderCell,
   TableHeaderRow,
+  TablePrimaryCell,
   TableRow,
   TableScrollArea,
   TableStickyCell,
+  rowActionSelectionIds,
+  selectedIdsAfterRangeClick,
+  selectedIdsAfterShiftClick,
 } from "../shared/TablePrimitive";
 
 /** Every failure on this screen belongs to the workflow it serves. */
@@ -85,8 +94,16 @@ export const WorkflowAssets = forwardRef<
     workflowId: string;
     readOnly: boolean;
     onUploadingChange?: (uploading: boolean) => void;
+    /**
+     * Draws the page's toolbar above the table, with the selection's
+     * "Actions" menu while assets are selected.
+     */
+    renderToolbar?: (actions: ReactNode) => ReactNode;
   }
->(function WorkflowAssets({ workflowId, readOnly, onUploadingChange }, ref) {
+>(function WorkflowAssets(
+  { workflowId, readOnly, onUploadingChange, renderToolbar },
+  ref,
+) {
   const [files, setFiles] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -102,9 +119,12 @@ export const WorkflowAssets = forwardRef<
     Set<string>
   >(() => new Set());
   const [error, setError] = useState("");
-  const [pendingDeleteFile, setPendingDeleteFile] = useState<Document | null>(
-    null,
+  const [pendingDeleteFiles, setPendingDeleteFiles] = useState<Document[]>(
+    [],
   );
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Where a shift-click range starts: the last row selected on its own.
+  const selectionAnchorIdRef = useRef<string | null>(null);
   const [deleteStatus, setDeleteStatus] = useState<"idle" | "loading">("idle");
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const versionUploadInputRef = useRef<HTMLInputElement>(null);
@@ -326,6 +346,7 @@ export const WorkflowAssets = forwardRef<
   async function deleteAsset(file: Document) {
     await deleteWorkflowAsset(workflowId, file.id);
     setFiles((current) => current.filter((item) => item.id !== file.id));
+    setSelectedIds((current) => current.filter((id) => id !== file.id));
     setViewingFileId((current) => (current === file.id ? null : current));
     setVersionsByAssetId((current) => {
       const next = new Map(current);
@@ -335,20 +356,76 @@ export const WorkflowAssets = forwardRef<
   }
 
   async function confirmRemove() {
-    const file = pendingDeleteFile;
-    if (!file) return;
+    const targets = pendingDeleteFiles;
+    if (targets.length === 0) return;
     setDeleteStatus("loading");
-    setBusyId(file.id);
+    setBusyId(targets.length === 1 ? targets[0].id : "delete");
     try {
-      await deleteAsset(file);
-    } catch (caught) {
-      reportFault(caught, ASSET_FLOW);
-      setError(userFacingApiError(caught, "Delete failed."));
+      const outcome = await settleBulkRequests(targets, deleteAsset);
+      if (outcome.failed.length > 0) {
+        reportFault(outcome.firstError, ASSET_FLOW);
+        setError(
+          targets.length === 1
+            ? userFacingApiError(outcome.firstError, "Delete failed.")
+            : `${outcome.failed.length} of ${targets.length} assets could not be deleted.`,
+        );
+      }
     } finally {
       setBusyId(null);
-      setPendingDeleteFile(null);
+      setPendingDeleteFiles([]);
       setDeleteStatus("idle");
     }
+  }
+
+  async function downloadAll(targets: Document[]) {
+    for (const file of targets) await download(file);
+  }
+
+  const selectedIdSet = new Set(selectedIds);
+  const allSelected =
+    files.length > 0 && files.every((file) => selectedIdSet.has(file.id));
+  const someSelected = files.some((file) => selectedIdSet.has(file.id));
+
+  // A selected row's menu acts on the whole selection, like the toolbar's.
+  function renderAssetActions(file: Document | undefined, onClose: () => void) {
+    const ids = file ? rowActionSelectionIds(file.id, selectedIds) : selectedIds;
+    const targets = files.filter((item) => ids.includes(item.id));
+    const only = targets.length === 1 ? targets[0] : undefined;
+    const inSelection = !file || selectedIdSet.has(file.id);
+    return (
+      <RowActionMenuItems
+        onClose={onClose}
+        onDeselect={
+          inSelection && selectedIds.length > 0
+            ? () => setSelectedIds([])
+            : undefined
+        }
+        onView={only ? () => view(only) : undefined}
+        onDownload={
+          targets.length > 0 ? () => void downloadAll(targets) : undefined
+        }
+        onUploadNewVersion={
+          only && !readOnly
+            ? () => {
+                versionUploadTargetRef.current = only;
+                versionUploadInputRef.current?.click();
+              }
+            : undefined
+        }
+        uploadNewVersionLabel="Upload new version"
+        onDelete={
+          !readOnly && targets.length > 0
+            ? () => setPendingDeleteFiles(targets)
+            : undefined
+        }
+        deleteLabel={
+          targets.length > 1 ? `Delete ${targets.length} assets` : undefined
+        }
+        deleteDisabled={
+          busyId === "delete" || targets.some((item) => item.id === busyId)
+        }
+      />
+    );
   }
 
   const viewingFile = files.find((file) => file.id === viewingFileId) ?? null;
@@ -358,6 +435,13 @@ export const WorkflowAssets = forwardRef<
 
   return (
     <>
+      {renderToolbar?.(
+        selectedIds.length > 0 ? (
+          <SelectionActionsMenu
+            renderItems={(close) => renderAssetActions(undefined, close)}
+          />
+        ) : undefined,
+      )}
       <input
         ref={uploadInputRef}
         type="file"
@@ -384,7 +468,7 @@ export const WorkflowAssets = forwardRef<
       {error && (
         <p
           role="alert"
-          className="mx-4 mb-2 -mt-1 text-xs text-red-600 md:mx-8"
+          className="mx-4 mb-2 -mt-1 text-xs text-red-600 md:mx-3"
         >
           {error}
         </p>
@@ -393,6 +477,22 @@ export const WorkflowAssets = forwardRef<
         header={
           <TableHeaderRow>
             <TableStickyCell header widthClassName={ASSET_NAME_COL_W}>
+              <input
+                type="checkbox"
+                aria-label="Select all assets"
+                className={TABLE_CHECKBOX_CLASS}
+                disabled={loading || files.length === 0}
+                checked={allSelected}
+                ref={(node) => {
+                  if (node) node.indeterminate = someSelected && !allSelected;
+                }}
+                onChange={(event) => {
+                  selectionAnchorIdRef.current = null;
+                  setSelectedIds(
+                    event.target.checked ? files.map((file) => file.id) : [],
+                  );
+                }}
+              />
               Name
             </TableStickyCell>
             <TableHeaderCell className="ml-auto w-20">Type</TableHeaderCell>
@@ -410,6 +510,7 @@ export const WorkflowAssets = forwardRef<
                   hover={false}
                   widthClassName={ASSET_NAME_COL_W}
                 >
+                  <SkeletonCheckbox />
                   <SkeletonLine className="mr-2 h-4 w-4" />
                   <SkeletonLine className="w-48" />
                 </TableStickyCell>
@@ -441,14 +542,52 @@ export const WorkflowAssets = forwardRef<
                 data-document-row
                 role="button"
                 tabIndex={0}
-                onClick={() => view(file)}
+                selected={selectedIdSet.has(file.id)}
+                rightClickDropdown={(close) => renderAssetActions(file, close)}
+                onClick={(event) => {
+                  if (event.shiftKey) {
+                    event.preventDefault();
+                    const anchorId = selectionAnchorIdRef.current;
+                    setSelectedIds((current) =>
+                      selectedIdsAfterRangeClick(
+                        file.id,
+                        files.map((item) => item.id),
+                        current,
+                        anchorId,
+                      ),
+                    );
+                    selectionAnchorIdRef.current = file.id;
+                    return;
+                  }
+                  if (event.ctrlKey || event.metaKey) {
+                    event.preventDefault();
+                    setSelectedIds((current) =>
+                      selectedIdsAfterShiftClick(file.id, current),
+                    );
+                    selectionAnchorIdRef.current = file.id;
+                    return;
+                  }
+                  view(file);
+                }}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
                   view(file);
                 }}
               >
-                <TableStickyCell widthClassName={ASSET_NAME_COL_W}>
+                <TablePrimaryCell
+                  widthClassName={ASSET_NAME_COL_W}
+                  selected={selectedIdSet.has(file.id)}
+                  checkboxTitle={`Select ${file.filename}`}
+                  onSelectionChange={() => {
+                    selectionAnchorIdRef.current = file.id;
+                    setSelectedIds((current) =>
+                      current.includes(file.id)
+                        ? current.filter((id) => id !== file.id)
+                        : [...current, file.id],
+                    );
+                  }}
+                >
                   <FileTypeIcon
                     fileType={file.file_type || file.filename}
                     className="mr-2 h-4 w-4"
@@ -456,7 +595,7 @@ export const WorkflowAssets = forwardRef<
                   <span className="min-w-0 flex-1 truncate text-xs text-gray-800">
                     {file.filename}
                   </span>
-                </TableStickyCell>
+                </TablePrimaryCell>
                 <TableCell className="ml-auto w-20 text-xs uppercase text-gray-500">
                   {file.file_type || "—"}
                 </TableCell>
@@ -471,21 +610,7 @@ export const WorkflowAssets = forwardRef<
                   onClick={(event) => event.stopPropagation()}
                 >
                   <RowActions
-                    onView={() => view(file)}
-                    onDownload={() => void download(file)}
-                    onUploadNewVersion={
-                      readOnly
-                        ? undefined
-                        : () => {
-                            versionUploadTargetRef.current = file;
-                            versionUploadInputRef.current?.click();
-                          }
-                    }
-                    uploadNewVersionLabel="Upload new version"
-                    onDelete={
-                      readOnly ? undefined : () => setPendingDeleteFile(file)
-                    }
-                    deleteDisabled={busyId === file.id}
+                    renderItems={(close) => renderAssetActions(file, close)}
                   />
                 </div>
               </TableRow>
@@ -534,15 +659,24 @@ export const WorkflowAssets = forwardRef<
         }}
       />
       <ConfirmPopup
-        open={pendingDeleteFile !== null}
-        title="Delete asset?"
+        open={pendingDeleteFiles.length > 0}
+        title={
+          pendingDeleteFiles.length > 1
+            ? `Delete ${pendingDeleteFiles.length} assets?`
+            : "Delete asset?"
+        }
         message={
-          pendingDeleteFile ? (
+          pendingDeleteFiles.length === 1 ? (
             <p>
               <span className="font-medium text-gray-950">
-                {pendingDeleteFile.filename}
+                {pendingDeleteFiles[0].filename}
               </span>{" "}
               will be permanently deleted.
+            </p>
+          ) : pendingDeleteFiles.length > 1 ? (
+            <p>
+              These {pendingDeleteFiles.length} assets will be permanently
+              deleted.
             </p>
           ) : undefined
         }
@@ -552,7 +686,7 @@ export const WorkflowAssets = forwardRef<
         onConfirm={() => void confirmRemove()}
         onCancel={() => {
           if (deleteStatus === "loading") return;
-          setPendingDeleteFile(null);
+          setPendingDeleteFiles([]);
         }}
       />
     </>

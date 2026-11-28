@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type ReactNode,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -59,6 +60,7 @@ import { AccessModal } from "@/app/components/modals/AccessModal";
 import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { OpenSourceWorkflowModal } from "@/app/components/workflows/OpenSourceWorkflowModal";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI, TabPillButtonUI } from "@mike/ui";
 import {
@@ -124,6 +126,14 @@ const PROMPT_HEADER_WITH_ACTIONS_W = "min-w-[272px] max-w-[392px] flex-1 pr-8";
 const WORKFLOW_CONTRIBUTIONS_ENABLED =
   process.env.NEXT_PUBLIC_WORKFLOW_CONTRIBUTIONS_ENABLED === "true";
 const ASSISTANT_TABS: readonly AssistantTab[] = ["prompt", "assets"];
+
+// The prompt editor's place on the page's sheet. From md up it has no card
+// (globals.css clears it): it sits flat on the sheet, edge to edge, with a
+// line across its top, like the playbook panes. Below md there is no sheet
+// and it keeps its card.
+const PROMPT_EDITOR_WRAPPER_CLASS =
+  "mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-0 md:mb-0 md:border-t md:border-border";
+const PROMPT_EDITOR_CLASS = "workflow-prompt-pane";
 
 // ---------------------------------------------------------------------------
 // Page
@@ -523,7 +533,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   // ---------------------------------------------------------------------------
   if (loading) {
     return (
-      <div className="flex h-full flex-col">
+      <PageSheet>
         <PageHeader
           shrink
           breadcrumbs={[
@@ -542,7 +552,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
             <AssistantWorkflowEditorSkeleton />
           )}
         </div>
-      </div>
+      </PageSheet>
     );
   }
 
@@ -614,9 +624,24 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
     });
   }
 
+  // The assistant workflow's tabs. The assets tab adds the "Actions" menu
+  // for its selected rows.
+  function renderAssistantToolbar(actions?: ReactNode) {
+    return (
+      <TableToolbar<AssistantTab>
+        items={[
+          { id: "prompt", label: "Prompt" },
+          { id: "assets", label: "Assets" },
+        ]}
+        active={assistantTab}
+        onChange={setAssistantTab}
+        actions={actions}
+      />
+    );
+  }
+
   return (
-    <div
-      className="flex flex-col h-full"
+    <PageSheet
       onDragOver={handleAssetDragOver}
       onDragLeave={handleAssetDragLeave}
       onDrop={handleAssetDrop}
@@ -852,33 +877,29 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       <div className="flex-1 min-h-0 flex flex-col">
         {workflow.metadata.type === "assistant" ? (
           /* ── Assistant: WYSIWYG editor ── */
-          <>
-            <TableToolbar<AssistantTab>
-              items={[
-                { id: "prompt", label: "Prompt" },
-                { id: "assets", label: "Assets" },
-              ]}
-              active={assistantTab}
-              onChange={setAssistantTab}
-            />
-            {assistantTab === "prompt" ? (
-              <div className="mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-8 md:mb-3">
+          assistantTab === "prompt" ? (
+            <>
+              {renderAssistantToolbar()}
+              <div className={PROMPT_EDITOR_WRAPPER_CLASS}>
                 <MarkdownEditor
+                  className={PROMPT_EDITOR_CLASS}
                   ariaLabel="Workflow prompt"
                   value={promptMd}
                   onChange={readOnly ? undefined : handlePromptChange}
                   readOnly={readOnly}
                 />
               </div>
-            ) : (
-              <WorkflowAssets
-                ref={assetsRef}
-                workflowId={id}
-                readOnly={readOnly}
-                onUploadingChange={setAssetsUploading}
-              />
-            )}
-          </>
+            </>
+          ) : (
+            <WorkflowAssets
+              ref={assetsRef}
+              workflowId={id}
+              readOnly={readOnly}
+              onUploadingChange={setAssetsUploading}
+              // Its toolbar carries the "Actions" menu for selected assets.
+              renderToolbar={renderAssistantToolbar}
+            />
+          )
         ) : (
           /* ── Tabular: Column table ── */
           <>
@@ -903,7 +924,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
               />
             )}
             {readOnly && (
-              <div className="flex h-10 shrink-0 items-center bg-gray-50 px-4 md:px-10">
+              <div className="flex h-10 shrink-0 items-center bg-gray-50 px-4 md:px-3">
                 <span className="text-xs font-medium text-gray-500">
                   Read-only
                 </span>
@@ -1125,7 +1146,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
           />
         )}
       </DocumentWorkspaceScope>
-    </div>
+    </PageSheet>
   );
 }
 
@@ -1139,8 +1160,10 @@ function AssistantWorkflowEditorSkeleton() {
         ]}
         active="prompt"
       />
-      <div className="mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-8 md:mb-3">
-        <div className={`h-full px-5 py-4 ${EDITOR_SURFACE_CLASS}`}>
+      <div className={PROMPT_EDITOR_WRAPPER_CLASS}>
+        <div
+          className={`h-full px-5 py-4 ${EDITOR_SURFACE_CLASS} ${PROMPT_EDITOR_CLASS}`}
+        >
           <div className="space-y-3">
             <div className="h-3 w-24 animate-pulse rounded bg-gray-100" />
             <div className="h-3 w-5/6 animate-pulse rounded bg-gray-100" />

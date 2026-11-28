@@ -59,6 +59,7 @@ import { HeaderButtonUI, Dropdown, DropdownContent, DropdownItem, DropdownTrigge
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { reportFault, notifyError } from "@/app/lib/userFacingError";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalFieldLabel } from "@/app/components/modals/ModalFieldLabel";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
@@ -1031,7 +1032,7 @@ function PlaybooksWorkspace() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <PageSheet>
       <PageHeader
         shrink
         breadcrumbs={
@@ -1646,7 +1647,7 @@ function PlaybooksWorkspace() {
           </div>
         )}
       </Modal>
-    </div>
+    </PageSheet>
   );
 }
 
