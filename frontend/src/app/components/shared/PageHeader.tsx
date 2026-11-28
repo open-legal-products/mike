@@ -122,7 +122,7 @@ export function PageHeader({
                 "flex items-center justify-between",
                 // Below md the title lines up with the top bar's sidebar
                 // toggle, which sits 16px in.
-                "mx-4 md:mx-6",
+                "mx-4 md:mx-5",
                 PAGE_HEADER_ROW_CLASS,
                 shrink && "shrink-0",
             )}

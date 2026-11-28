@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Check } from "lucide-react";
 import {
     DropdownLabel,
@@ -21,11 +22,16 @@ export interface WorkspaceMenuUIProps {
     onSelect: (workspaceId: string) => void;
     /** Ends the section with a separator, for menus with items below it. */
     trailingSeparator?: boolean;
+    /**
+     * A 16px mark before each option's name, such as the organization's
+     * logo. The caller draws it: logos are read through the app's own API.
+     */
+    renderIcon?: (option: WorkspaceOrg) => ReactNode;
 }
 
 /**
- * The "Workspace" section of an account menu, for the web app's sidebar and
- * the Word add-in: Personal and each organization as radio items, so the
+ * The "Workspace" section of a menu, such as the one under the web app's
+ * sidebar logo: Personal and each organization as radio items, so the
  * active one is announced as checked rather than shown by the tick alone.
  * Renders nothing for somebody with no organizations — with nowhere else to
  * be, there is nothing to choose between. Place it inside a `DropdownContent`.
@@ -35,6 +41,7 @@ export function WorkspaceMenuUI({
     organizations,
     onSelect,
     trailingSeparator = false,
+    renderIcon,
 }: WorkspaceMenuUIProps) {
     const options = workspaceId ? workspaceMenuOptions(organizations) : null;
     if (!workspaceId || !options) return null;
@@ -58,6 +65,14 @@ export function WorkspaceMenuUI({
                         value={option.id}
                         className="min-h-8 gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-gray-700"
                     >
+                        {renderIcon ? (
+                            <span
+                                aria-hidden="true"
+                                className="flex h-4 w-4 shrink-0 items-center justify-center"
+                            >
+                                {renderIcon(option)}
+                            </span>
+                        ) : null}
                         <span className="min-w-0 flex-1 whitespace-normal break-words">
                             {option.name}
                         </span>

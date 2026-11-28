@@ -52,6 +52,20 @@ describe("WorkspaceMenuUI", () => {
         expect(onSelect).toHaveBeenCalledWith("personal");
     });
 
+    it("draws the caller's mark before each name, hidden from the item's name", () => {
+        renderMenu({
+            renderIcon: (option) => (
+                <span data-testid={`icon-${option.id}`}>{option.name[0]}</span>
+            ),
+        });
+
+        const acme = screen.getByRole("menuitemradio", { name: "Acme LLP" });
+        const icon = screen.getByTestId("icon-org-acme");
+        expect(acme).toContainElement(icon);
+        expect(icon.parentElement).toHaveAttribute("aria-hidden", "true");
+        expect(screen.getByTestId("icon-personal")).toBeInTheDocument();
+    });
+
     it("can end with a separator for items below it", () => {
         renderMenu({ trailingSeparator: true });
         expect(screen.getByRole("separator")).toBeInTheDocument();

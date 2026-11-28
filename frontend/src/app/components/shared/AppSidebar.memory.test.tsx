@@ -89,7 +89,7 @@ describe("AppSidebar account dropdown", () => {
     const assistant = screen.getByRole("button", { name: "Assistant" });
     const ide = screen.getByRole("button", { name: "IDE" });
 
-    expect(assistant.parentElement?.nextElementSibling).toContainElement(ide);
+    expect(assistant.nextElementSibling).toBe(ide);
   });
 
   it("shows a recovery toast when sign out fails", async () => {
@@ -217,7 +217,7 @@ describe("AppSidebar account dropdown", () => {
 
       expect(
         screen.getByRole("button", { name: toggleName }).parentElement,
-      ).toHaveClass("h-11", "shrink-0");
+      ).toHaveClass("h-10", "shrink-0");
     },
   );
 
@@ -227,7 +227,7 @@ describe("AppSidebar account dropdown", () => {
       render(<AppSidebar isOpen={isOpen} onToggle={vi.fn()} />);
 
       expect(screen.getByRole("button", { name: "Account menu" })).toHaveClass(
-        "h-9",
+        "h-7",
         "shrink-0",
       );
     },
@@ -258,7 +258,7 @@ describe("AppSidebar account dropdown", () => {
     expect(listProjectChats).not.toHaveBeenCalledWith("other-project");
   });
 
-  it("gives the recent projects list more height while a project is expanded", async () => {
+  it("gives the recent projects list more room while a project is expanded", async () => {
     const user = userEvent.setup();
     vi.mocked(listProjectsPage).mockResolvedValue([
       { id: "open-project", name: "Open matter" },
@@ -270,11 +270,13 @@ describe("AppSidebar account dropdown", () => {
       name: "Hide recent chats and reviews in Open matter",
     });
     const list = toggle.closest(".overflow-y-auto");
-    expect(list).toHaveClass("h-64");
+    expect(list).toHaveClass("max-h-64");
+    expect(list).not.toHaveClass("h-64");
 
     await user.click(toggle);
 
-    expect(list).toHaveClass("h-44");
+    expect(list).toHaveClass("max-h-44");
+    expect(list).not.toHaveClass("h-44");
   });
 
   it("fades contents in when a sidebar that loaded closed is opened", () => {

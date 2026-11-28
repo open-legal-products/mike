@@ -228,7 +228,7 @@ export function SidebarProjectItem({
     };
 
     const retryRow = (message: string) => (
-        <li className="flex min-h-7 flex-wrap items-center gap-x-2 pl-2 pr-2 text-xs text-gray-500">
+        <li className="flex min-h-7 flex-wrap items-center gap-x-2 pl-1.5 pr-1.5 text-xs text-gray-500">
             <span role="alert">{message}</span>
             <button
                 type="button"
@@ -244,7 +244,7 @@ export function SidebarProjectItem({
     );
 
     const listId = `sidebar-project-items-${project.id}`;
-    // Sub-rows are not indented: they share the project row's pl-2, 16px
+    // Sub-rows are not indented: they share the project row's pl-1.5, 16px
     // icon box and gap-2. A dot sits in the box under the folder
     // icon, so each item's own icon starts where the project name does.
     const subRowDot = (
@@ -260,7 +260,7 @@ export function SidebarProjectItem({
         <div>
             <div
                 className={cn(
-                    "group flex h-8 w-full items-center rounded-md pr-1 text-xs transition-colors",
+                    "group flex h-7 w-full items-center rounded-md pr-1 text-xs transition-colors",
                     isActive
                         ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
                         : `text-gray-700 ${LIQUID_GLASS_HOVER_CLASS}`,
@@ -272,7 +272,7 @@ export function SidebarProjectItem({
                     title={project.name}
                     // The row owns the hover fill, so it draws the ring.
                     data-focus-fill
-                    className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md py-1 pl-2 text-left outline-none"
+                    className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md py-1 pl-1.5 text-left outline-none"
                 >
                     <span className="flex h-4 w-4 shrink-0 items-center justify-center">
                         <ProjectSvgIcon
@@ -313,7 +313,7 @@ export function SidebarProjectItem({
                             <li
                                 key={width}
                                 aria-hidden="true"
-                                className="flex h-7 items-center gap-2 pl-2 pr-2"
+                                className="flex h-7 items-center gap-2 pl-1.5 pr-1.5"
                             >
                                 {subRowDot}
                                 <span className="flex min-w-0 flex-1 items-center gap-2">
@@ -337,7 +337,7 @@ export function SidebarProjectItem({
                                 : "Could not load items.",
                         )
                     ) : items && items.length === 0 ? (
-                        <li className="flex min-h-7 items-center pl-2 pr-2 text-xs text-gray-500">
+                        <li className="flex min-h-7 items-center pl-1.5 pr-1.5 text-xs text-gray-500">
                             No chats or reviews yet
                         </li>
                     ) : (
@@ -360,7 +360,7 @@ export function SidebarProjectItem({
                                                 itemActive ? "page" : undefined
                                             }
                                             className={cn(
-                                                "flex h-7 w-full items-center gap-2 rounded-md pl-2 pr-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                                                "flex h-7 w-full items-center gap-2 rounded-md pl-1.5 pr-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
                                                 itemActive
                                                     ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
                                                     : `text-gray-600 ${LIQUID_GLASS_HOVER_CLASS}`,
@@ -394,7 +394,7 @@ export function SidebarProjectItem({
                                         onClick={() => void seeMore()}
                                         disabled={loadingMore}
                                         aria-controls={listId}
-                                        className="flex h-7 w-full items-center rounded-md pl-2 pr-2 text-left text-xs text-gray-500 transition-colors hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 disabled:cursor-default"
+                                        className="flex h-7 w-full items-center rounded-md pl-1.5 pr-1.5 text-left text-xs text-gray-500 transition-colors hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 disabled:cursor-default"
                                     >
                                         {loadingMore ? "Loading..." : "See more"}
                                     </button>

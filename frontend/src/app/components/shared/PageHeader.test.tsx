@@ -22,9 +22,9 @@ vi.stubGlobal(
 // A page's title is one size wherever it appears: as a plain title, as
 // breadcrumbs, and as the placeholder shown while a name loads.
 describe("PageHeader title size", () => {
-    it("is one step below the display headings", () => {
+    it("sits below the display headings", () => {
         expect(PAGE_HEADER_TITLE_CLASS.split(" ")).toEqual(
-            expect.arrayContaining(["font-serif", "text-xl", "font-medium"]),
+            expect.arrayContaining(["font-serif", "text-lg", "font-medium"]),
         );
         expect(PAGE_HEADER_TITLE_CLASS).not.toContain("text-2xl");
     });
@@ -41,7 +41,7 @@ describe("PageHeader title size", () => {
         const trail = screen
             .getAllByText("Members")[0]
             .closest(".font-serif") as HTMLElement;
-        expect(trail).toHaveClass("text-xl", "font-medium", "font-serif");
+        expect(trail).toHaveClass("text-lg", "font-medium", "font-serif");
         expect(trail).not.toHaveClass("text-2xl");
     });
 
@@ -59,10 +59,9 @@ describe("PageHeader title size", () => {
     });
 
     it("sits its title on the same line as the sidebar's logo text", () => {
-        // The sidebar's logo row is 44px tall and starts 12px down plus the
-        // sidebar's 1px border. The header's 44px of content has to start
-        // 13px down too, or the title rides a pixel above the logo.
-        // (Measured in a browser; the classes are what hold it there.)
+        // The sidebar's logo row is 40px tall and starts 12px down plus the
+        // sidebar's 1px border, so its middle is 33px down. The header's 44px
+        // of content has to start 11px down to share that middle.
         const { container } = render(
             <PageHeader>
                 <h1>Projects</h1>
@@ -71,14 +70,14 @@ describe("PageHeader title size", () => {
         const header = container.firstElementChild;
         expect(header).toHaveClass(
             "min-h-[76px]",
-            "md:pt-[13px]",
-            "md:pb-[19px]",
+            "md:pt-[11px]",
+            "md:pb-[21px]",
         );
         expect(PAGE_HEADER_ROW_CLASS.split(" ")).toEqual(
             expect.arrayContaining([
                 "min-h-[76px]",
-                "md:pt-[13px]",
-                "md:pb-[19px]",
+                "md:pt-[11px]",
+                "md:pb-[21px]",
             ]),
         );
     });
@@ -92,7 +91,7 @@ describe("PageHeader title size", () => {
             </PageHeader>,
         );
         expect(screen.getByRole("heading", { name: "Projects" })).toHaveClass(
-            "text-xl",
+            "text-lg",
             "font-serif",
         );
     });
@@ -150,6 +149,6 @@ describe("PageHeader on a small screen", () => {
                 <h1>Projects</h1>
             </PageHeader>,
         );
-        expect(container.firstElementChild).toHaveClass("mx-4", "md:mx-6");
+        expect(container.firstElementChild).toHaveClass("mx-4", "md:mx-5");
     });
 });

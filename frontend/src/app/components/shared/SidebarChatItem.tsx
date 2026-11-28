@@ -114,7 +114,7 @@ export function SidebarChatItem({
     return (
         <div
             className={cn(
-                "group relative flex h-8 w-full items-center rounded-md transition-colors",
+                "group relative flex h-7 w-full items-center rounded-md transition-colors",
                 isActive
                     ? `${LIQUID_GLASS_SELECTED_CLASS} pr-1`
                     : menuOpen
@@ -122,9 +122,9 @@ export function SidebarChatItem({
                       : `pr-3 ${LIQUID_GLASS_HOVER_CLASS} hover:pr-1`,
             )}
         >
-                {/* 16px icon slot + ml-2/pl-2 match the top nav rows'
-                    px-2 / w-4 icon / gap-2, so icons and titles line up. */}
-                <span className="ml-2 flex h-4 w-4 shrink-0 items-center justify-center">
+                {/* 16px icon slot + ml-1.5/pl-2 match the top nav rows'
+                    px-1.5 / w-4 icon / gap-2, so icons and titles line up. */}
+                <span className="ml-1.5 flex h-4 w-4 shrink-0 items-center justify-center">
                     {responseStatus === "loading" ? (
                         <Loader2
                             role="status"

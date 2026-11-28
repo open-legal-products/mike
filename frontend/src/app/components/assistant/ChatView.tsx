@@ -934,9 +934,12 @@ export function AssistantChatColumn({
 
     const renderHeaderActionSlots = () => (
         <>
+            {/* Where a PageHeader puts its buttons: its md:mx-5 margin, and
+                its 36px group centred in the 44px of content that starts
+                11px down (pageHeaderStyles.ts). */}
             <div
                 data-slot="chat-header-actions"
-                className="pointer-events-none absolute right-4 top-4.5 z-30 hidden md:block md:right-8"
+                className="pointer-events-none absolute right-5 top-[15px] z-30 hidden md:block"
             >
                 {renderChatHeaderActions()}
             </div>
