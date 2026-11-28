@@ -50,6 +50,22 @@ beforeEach(() => {
 });
 
 describe("SidebarChatItem role gates", () => {
+    it("marks its row for browser tests, holding the title and, last, the actions trigger", () => {
+        const { container } = render(
+            <SidebarChatItem chat={chat({ is_owner: true })} isActive onSelect={vi.fn()} />,
+        );
+        // e2e/chat-management.spec.ts finds the row by this, hovers it, and
+        // opens its menu from its last button.
+        const row = container.querySelector('[data-slot="sidebar-chat-row"]')!;
+        expect(row).toContainElement(
+            screen.getByRole("button", { name: "Quarterly filing" }),
+        );
+        const buttons = row.querySelectorAll("button");
+        expect(buttons[buttons.length - 1]).toHaveAccessibleName(
+            "Actions for Quarterly filing",
+        );
+    });
+
     it("opens chat access from an owner's Share action", async () => {
         render(
             <SidebarChatItem

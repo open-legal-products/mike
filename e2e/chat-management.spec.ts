@@ -22,7 +22,7 @@ test("chat lifecycle: answer survives reload, rename and delete persist", async 
     const openSidebar = page.getByTitle("Open sidebar").first();
     if (await openSidebar.isVisible()) await openSidebar.click();
     // The just-created chat is first. Once renamed, use its unique title.
-    const row = page.locator("div.group.relative.h-8.rounded-md").first();
+    const row = page.locator('[data-slot="sidebar-chat-row"]').first();
     await row.hover();
     await row.locator("button").last().click();
     await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
@@ -36,7 +36,7 @@ test("chat lifecycle: answer survives reload, rename and delete persist", async 
     const titleButton = page.getByRole("button", { name: title, exact: true });
     await expect(titleButton).toBeVisible();
 
-    const renamedRow = page.locator("div.group.relative.h-8.rounded-md").filter({ has: titleButton });
+    const renamedRow = page.locator('[data-slot="sidebar-chat-row"]').filter({ has: titleButton });
     await renamedRow.hover();
     await renamedRow.locator("button").last().click();
     const deleted = page.waitForResponse(r =>
