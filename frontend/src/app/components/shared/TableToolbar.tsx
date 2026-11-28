@@ -5,11 +5,11 @@ import { Settings2 } from "lucide-react";
 import { cn } from "@/app/lib/utils";
 import {
     TabPillButtonUI,
+    TabPillSurfaceContext,
     Dropdown,
     DropdownContent,
     DropdownTrigger,
     LIQUID_GLASS_HOVER_CLASS,
-    LIQUID_GLASS_SUBTLE_CLASS,
 } from "@mike/ui";
 
 const DESKTOP_QUERY = "(min-width: 768px)";
@@ -66,53 +66,59 @@ export function TableToolbar<T extends string>({
     );
 
     return (
-        <div
-            className={cn(
-                "mx-3 mb-2 flex h-10 items-center md:mx-5",
-                className,
-            )}
-        >
-            {(leading || hasItems) && (
-                <div className="-my-2 flex min-w-0 flex-1 items-center gap-1.5 py-2">
-                    {leading}
-                    {items.map((item) => (
-                        <TabPillButtonUI
-                            key={item.id}
-                            active={active === item.id}
-                            onClick={() => onChange?.(item.id)}
+        // Its pills, and those its actions render, have no glass: text, with
+        // a grey fill on hover and on the active one.
+        <TabPillSurfaceContext.Provider value="plain">
+            <div
+                className={cn(
+                    // The first pill's text (12px inside it) lines up with
+                    // the page title, 16px in and 24px from md up.
+                    "mx-1 mb-2 flex h-10 items-center md:mx-3",
+                    className,
+                )}
+            >
+                {(leading || hasItems) && (
+                    <div className="-my-2 flex min-w-0 flex-1 items-center gap-1.5 py-2">
+                        {leading}
+                        {items.map((item) => (
+                            <TabPillButtonUI
+                                key={item.id}
+                                active={active === item.id}
+                                onClick={() => onChange?.(item.id)}
+                            >
+                                {item.label}
+                            </TabPillButtonUI>
+                        ))}
+                    </div>
+                )}
+                {actions && isDesktop && (
+                    <div className="ml-auto flex items-center gap-2 [&_[data-slot=tab-pill-button]:not([data-icon-position=right]):has(svg)]:pl-2 [&_[data-slot=tab-pill-button]:not([data-icon-position=right]):has(img)]:pl-2">
+                        {actions}
+                    </div>
+                )}
+                {actions && !isDesktop && (
+                    <Dropdown>
+                        <DropdownTrigger asChild>
+                            <button
+                                type="button"
+                                title="Toolbar actions"
+                                aria-label="Toolbar actions"
+                                className={`ml-auto inline-flex h-7 w-7 items-center justify-center rounded-full text-gray-700 ${LIQUID_GLASS_HOVER_CLASS} transition-colors hover:text-gray-900 active:scale-[0.98]`}
+                            >
+                                <Settings2 className="h-3.5 w-3.5" />
+                            </button>
+                        </DropdownTrigger>
+                        <DropdownContent
+                            align="end"
+                            className="min-w-40 p-1"
                         >
-                            {item.label}
-                        </TabPillButtonUI>
-                    ))}
-                </div>
-            )}
-            {actions && isDesktop && (
-                <div className="ml-auto flex items-center gap-2 [&_[data-slot=tab-pill-button]:not([data-icon-position=right]):has(svg)]:pl-2 [&_[data-slot=tab-pill-button]:not([data-icon-position=right]):has(img)]:pl-2">
-                    {actions}
-                </div>
-            )}
-            {actions && !isDesktop && (
-                <Dropdown>
-                    <DropdownTrigger asChild>
-                        <button
-                            type="button"
-                            title="Toolbar actions"
-                            aria-label="Toolbar actions"
-                            className={`ml-auto inline-flex h-7 w-7 items-center justify-center rounded-full text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} transition-colors hover:text-gray-900 active:scale-[0.98]`}
-                        >
-                            <Settings2 className="h-3.5 w-3.5" />
-                        </button>
-                    </DropdownTrigger>
-                    <DropdownContent
-                        align="end"
-                        className="min-w-40 p-1"
-                    >
-                        <div className="flex flex-col gap-1 [&_.hidden]:inline [&>div]:flex [&>div]:flex-col [&>div]:items-stretch [&>div]:gap-1 [&_button]:h-auto [&_button]:w-full [&_button]:justify-start [&_button]:rounded-lg [&_button]:border-0 [&_button]:bg-transparent [&_button]:px-3 [&_button[data-icon-position=right]]:pr-2 [&_button]:py-2 [&_button]:text-left [&_button]:text-xs [&_button]:font-medium [&_button]:text-gray-700 [&_button]:shadow-none [&_button]:backdrop-blur-none [&_button]:transition-colors [&_button:not([data-icon-position=right]):has(svg)]:pl-2 [&_button:not([data-icon-position=right]):has(img)]:pl-2 [&_button]:active:scale-100 [&_button:hover]:bg-app-surface-hover [&_button:disabled]:opacity-40">
-                            {actions}
-                        </div>
-                    </DropdownContent>
-                </Dropdown>
-            )}
-        </div>
+                            <div className="flex flex-col gap-1 [&_.hidden]:inline [&>div]:flex [&>div]:flex-col [&>div]:items-stretch [&>div]:gap-1 [&_button]:h-auto [&_button]:w-full [&_button]:justify-start [&_button]:rounded-lg [&_button]:border-0 [&_button]:bg-transparent [&_button]:px-3 [&_button[data-icon-position=right]]:pr-2 [&_button]:py-2 [&_button]:text-left [&_button]:text-xs [&_button]:font-medium [&_button]:text-gray-700 [&_button]:shadow-none [&_button]:backdrop-blur-none [&_button]:transition-colors [&_button:not([data-icon-position=right]):has(svg)]:pl-2 [&_button:not([data-icon-position=right]):has(img)]:pl-2 [&_button]:active:scale-100 [&_button:hover]:bg-app-surface-hover [&_button:disabled]:opacity-40">
+                                {actions}
+                            </div>
+                        </DropdownContent>
+                    </Dropdown>
+                )}
+            </div>
+        </TabPillSurfaceContext.Provider>
     );
 }

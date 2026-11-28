@@ -149,6 +149,16 @@ describe("PageHeader on a small screen", () => {
                 <h1>Projects</h1>
             </PageHeader>,
         );
-        expect(container.firstElementChild).toHaveClass("mx-4", "md:mx-5");
+        expect(container.firstElementChild).toHaveClass("mx-4");
+    });
+
+    it("sets its title in line with the toolbar and table from md up", () => {
+        const { container } = render(
+            <PageHeader>
+                <h1>Projects</h1>
+            </PageHeader>,
+        );
+        // 24px in on the left; the buttons stay 20px from the right.
+        expect(container.firstElementChild).toHaveClass("md:ml-6", "md:mr-5");
     });
 });
