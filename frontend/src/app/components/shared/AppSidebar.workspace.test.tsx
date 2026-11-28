@@ -220,7 +220,7 @@ describe("AppSidebar workspace switcher", () => {
     expect(screen.queryByText("Mike")).not.toBeInTheDocument();
   });
 
-  it("sets an organization's name at the size Mike is, in the same fixed header row", () => {
+  it("sets an organization's name at the size Mike is, in the same header row", () => {
     state.organizations = [ACME];
     state.workspaceId = ACME.id;
     const { unmount } = render(<AppSidebar isOpen onToggle={vi.fn()} />);
@@ -228,7 +228,7 @@ describe("AppSidebar workspace switcher", () => {
     expect(heading()).toHaveClass("text-lg");
     expect(
       screen.getByRole("button", { name: "Close sidebar" }).parentElement,
-    ).toHaveClass("h-10");
+    ).toHaveClass("h-7", "shrink-0");
     unmount();
 
     // Switching workspace must not change how the header looks.
@@ -273,6 +273,24 @@ describe("AppSidebar workspace switcher", () => {
     expect(
       screen.getByRole("menuitemradio", { name: "Personal" }),
     ).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("opens the workspace menu across the sidebar, as the account menu does", async () => {
+    state.organizations = [ACME, BETA];
+    state.workspaceId = ACME.id;
+    const user = userEvent.setup();
+    render(<AppSidebar isOpen onToggle={vi.fn()} />);
+
+    const switcher = screen.getByRole("button", { name: "Switch workspace" });
+    // The button reaches the sidebar's inner edge; its padding keeps the logo in.
+    expect(switcher).toHaveClass("w-full", "px-1.5");
+    expect(switcher.parentElement).not.toHaveClass("px-1.5");
+    await openWorkspaceMenu(user);
+    // Its width plus the toggle (28px) and the gap (4px) beside it.
+    expect(screen.getByRole("menu")).toHaveClass(
+      "w-[calc(var(--radix-dropdown-menu-trigger-width)+32px)]",
+    );
+    expect(screen.getByRole("menu")).not.toHaveClass("w-56");
   });
 
   it("keeps the workspaces out of the account menu", async () => {

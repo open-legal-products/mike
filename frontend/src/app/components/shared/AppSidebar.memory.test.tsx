@@ -211,13 +211,19 @@ describe("AppSidebar account dropdown", () => {
     { isOpen: true, toggleName: "Close sidebar" },
     { isOpen: false, toggleName: "Open sidebar" },
   ])(
-    "keeps the header row at a fixed height when isOpen is $isOpen",
+    "keeps the header row at its controls' height, inside the sidebar's padding, when isOpen is $isOpen",
     ({ isOpen, toggleName }) => {
-      render(<AppSidebar isOpen={isOpen} onToggle={vi.fn()} />);
+      const { container } = render(
+        <AppSidebar isOpen={isOpen} onToggle={vi.fn()} />,
+      );
 
-      expect(
-        screen.getByRole("button", { name: toggleName }).parentElement,
-      ).toHaveClass("h-10", "shrink-0");
+      const header = screen.getByRole("button", { name: toggleName })
+        .parentElement!;
+      // Fixed, so the name dropping to two lines while the sidebar opens
+      // does not push everything below it down for a moment.
+      expect(header).toHaveClass("h-7", "shrink-0");
+      // One inset all round: the header needs no height of its own.
+      expect(container.querySelector(".p-1\\.5")).toContainElement(header);
     },
   );
 
