@@ -794,12 +794,15 @@ describe("MyActivitySettingsPage", () => {
 
   it("polls the export job until it finishes before downloading", async () => {
     const user = userEvent.setup();
-    mockedGetUserExportStatus
-      .mockResolvedValueOnce({ status: "pending" })
-      .mockResolvedValueOnce({
-        status: "done",
-        filename: "my-activity.csv",
-      });
+    // An earlier test's export can still be polling (unmounting does not stop
+    // it), so this one has its own id and counts only its own polls.
+    mockedStartUserExport.mockResolvedValue({ export_id: "export-polled" });
+    let polls = 0;
+    mockedGetUserExportStatus.mockImplementation(async (id) =>
+      id === "export-polled" && ++polls === 1
+        ? { status: "pending" }
+        : { status: "done", filename: "my-activity.csv" },
+    );
 
     render(<MyActivitySettingsPage />);
     await screen.findByText(EVENT.title!);
@@ -810,14 +813,14 @@ describe("MyActivitySettingsPage", () => {
     expect(mockedStartUserExport).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Export CSV" }));
 
-    await waitFor(() =>
-      expect(mockedGetUserExportStatus).toHaveBeenCalledTimes(2),
-    );
     // The download starts after the second status call resolves, a tick
     // later than the call itself; asserting it synchronously raced on CI.
     await waitFor(() =>
-      expect(mockedDownloadUserExport).toHaveBeenCalledWith("export-1"),
+      expect(mockedDownloadUserExport).toHaveBeenCalledWith("export-polled"),
     );
+    expect(
+      mockedGetUserExportStatus.mock.calls.filter(([id]) => id === "export-polled"),
+    ).toHaveLength(2);
   });
 
   it("keeps the export modal open with a retryable error when the job fails", async () => {
