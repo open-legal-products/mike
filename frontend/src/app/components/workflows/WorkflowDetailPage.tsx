@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type ReactNode,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -623,6 +624,22 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
     });
   }
 
+  // The assistant workflow's tabs. The assets tab adds the "Actions" menu
+  // for its selected rows.
+  function renderAssistantToolbar(actions?: ReactNode) {
+    return (
+      <TableToolbar<AssistantTab>
+        items={[
+          { id: "prompt", label: "Prompt" },
+          { id: "assets", label: "Assets" },
+        ]}
+        active={assistantTab}
+        onChange={setAssistantTab}
+        actions={actions}
+      />
+    );
+  }
+
   return (
     <PageSheet
       onDragOver={handleAssetDragOver}
@@ -860,16 +877,9 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       <div className="flex-1 min-h-0 flex flex-col">
         {workflow.metadata.type === "assistant" ? (
           /* ── Assistant: WYSIWYG editor ── */
-          <>
-            <TableToolbar<AssistantTab>
-              items={[
-                { id: "prompt", label: "Prompt" },
-                { id: "assets", label: "Assets" },
-              ]}
-              active={assistantTab}
-              onChange={setAssistantTab}
-            />
-            {assistantTab === "prompt" ? (
+          assistantTab === "prompt" ? (
+            <>
+              {renderAssistantToolbar()}
               <div className={PROMPT_EDITOR_WRAPPER_CLASS}>
                 <MarkdownEditor
                   className={PROMPT_EDITOR_CLASS}
@@ -879,15 +889,17 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                   readOnly={readOnly}
                 />
               </div>
-            ) : (
-              <WorkflowAssets
-                ref={assetsRef}
-                workflowId={id}
-                readOnly={readOnly}
-                onUploadingChange={setAssetsUploading}
-              />
-            )}
-          </>
+            </>
+          ) : (
+            <WorkflowAssets
+              ref={assetsRef}
+              workflowId={id}
+              readOnly={readOnly}
+              onUploadingChange={setAssetsUploading}
+              // Its toolbar carries the "Actions" menu for selected assets.
+              renderToolbar={renderAssistantToolbar}
+            />
+          )
         ) : (
           /* ── Tabular: Column table ── */
           <>
