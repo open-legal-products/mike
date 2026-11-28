@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { streamAiSdk } from "./aiSdk";
+import { FOLLOW_UP_FINISH_REASON, PROVIDER_WEB_SEARCH_TOOL, streamAiSdk } from "./aiSdk";
 import type { NormalizedToolCall, OpenAIToolSchema } from "./types";
 import {
   callStep,
@@ -186,5 +186,96 @@ describe("follow-up step", () => {
         config(model),
       ),
     ).rejects.toThrow();
+  });
+
+  it("reports its tokens as the follow-up's, not as a step of the tool loop", async () => {
+    // A subagent's budget stops a step that finished on tool calls; the
+    // follow-up's cite_sources call must not read as one.
+    const model = await makeModel([
+      textStep("Answer [1]."),
+      callStep("late", "cite_sources", citeInput),
+    ]);
+    const onUsage = vi.fn();
+
+    await streamAiSdk(
+      { ...base, followUp: () => FOLLOW_UP, runTools: okRunTools, callbacks: { onUsage } },
+      config(model),
+    );
+
+    expect(onUsage.mock.calls.map(([, finishReason]) => finishReason)).toEqual([
+      "stop",
+      FOLLOW_UP_FINISH_REASON,
+    ]);
+  });
+
+  it("does not run after a last step that had to be tool-free", async () => {
+    const model = await makeModel([
+      callStep("c1", "read_document", { doc_id: "doc-0" }),
+      textStep("Answer [1]."),
+    ]);
+    const followUp = vi.fn(() => FOLLOW_UP);
+
+    await streamAiSdk(
+      { ...base, maxIterations: 2, finishWithoutToolsOnLastStep: true, followUp, runTools: okRunTools },
+      config(model),
+    );
+
+    expect(followUp).not.toHaveBeenCalled();
+    await tick();
+    expect(model.doStreamCalls.length).toBe(2);
+  });
+
+  it("still runs when such a run finished before its last step", async () => {
+    const model = await makeModel([textStep("Answer [1]."), callStep("late", "cite_sources", citeInput)]);
+    const followUp = vi.fn(() => FOLLOW_UP);
+
+    await streamAiSdk(
+      { ...base, maxIterations: 2, finishWithoutToolsOnLastStep: true, followUp, runTools: okRunTools },
+      config(model),
+    );
+
+    expect(followUp).toHaveBeenCalledOnce();
+    expect(model.doStreamCalls.length).toBe(2);
+  });
+
+  describe("with the provider's own web search", () => {
+    async function anthropicSearch() {
+      const { createAnthropic } = await import("@ai-sdk/anthropic");
+      const anthropic = createAnthropic({ apiKey: "test" });
+      return ({ maxUses }: { maxUses: number }) => anthropic.tools.webSearch_20250305({ maxUses });
+    }
+    const followUpToolNames = async (answer: ReturnType<typeof step>) => {
+      const model = await makeModel([answer, callStep("late", "cite_sources", citeInput)]);
+      await streamAiSdk(
+        { ...base, providerWebSearch: { maxSearches: 3 }, followUp: () => FOLLOW_UP, runTools: okRunTools },
+        { ...config(model), webSearchTool: await anthropicSearch() },
+      );
+      return (model.doStreamCalls[1].tools ?? []).map((tool) => tool.name);
+    };
+
+    it("leaves it out of the step when the answer did not search", async () => {
+      expect(await followUpToolNames(textStep("Answer [1]."))).toEqual(["read_document", "cite_sources"]);
+    });
+
+    it("keeps it defined when the answer's history holds a search", async () => {
+      const answer = step(
+        {
+          type: "tool-call",
+          toolCallId: "s1",
+          toolName: PROVIDER_WEB_SEARCH_TOOL,
+          input: JSON.stringify({ query: "notice periods" }),
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "s1",
+          toolName: PROVIDER_WEB_SEARCH_TOOL,
+          result: [] as never,
+        },
+        ...text("Answer [1]."),
+        finish("stop"),
+      );
+      expect(await followUpToolNames(answer)).toEqual(["read_document", "cite_sources", PROVIDER_WEB_SEARCH_TOOL]);
+    });
   });
 });

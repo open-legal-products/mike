@@ -5,6 +5,7 @@ import {
   createCitationRecorder,
   documentCitations,
   unrecordedMarkersNotice,
+  onlyAddingRefs,
   tabularCitations,
   unrecordedMarkerRefs,
 } from "../citeSources";
@@ -366,5 +367,21 @@ describe("unrecordedMarkersNotice", () => {
     expect(unrecordedMarkersNotice([2, 3])).toContain(
       "contains [2], [3], which look like citation markers, but no citation was recorded for them. If any of them are citations, record those",
     );
+  });
+});
+
+describe("onlyAddingRefs", () => {
+  it("keeps the entries for the given refs and drops withdrawals", () => {
+    expect(
+      onlyAddingRefs(
+        { drop_refs: [1], citations: [{ ref: 1 }, { ref: 2 }, { ref: "2" }, null, { ref: 3 }] },
+        new Set([2, 3]),
+      ),
+    ).toEqual({ citations: [{ ref: 2 }, { ref: 3 }] });
+  });
+
+  it("leaves nothing to record from an input without entries", () => {
+    expect(onlyAddingRefs({ drop_refs: [1] }, new Set([2]))).toEqual({ citations: [] });
+    expect(onlyAddingRefs(null, new Set([2]))).toEqual({ citations: [] });
   });
 });

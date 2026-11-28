@@ -573,3 +573,23 @@ export function unrecordedMarkersNotice(refs: number[]): string {
   const one = refs.length === 1;
   return `Note: your answer contains ${markers}, which ${one ? "looks like a citation marker" : "look like citation markers"}, but no citation was recorded for ${one ? "it" : "them"}. If ${one ? "it is a citation" : "any of them are citations"}, record ${one ? "it" : "those"} with ${CITE_SOURCES_TOOL_NAME} under the same ref, quoting the passage that supports the claim. If ${one ? "it is" : "they are"} part of the text for another reason, such as a quote, a paragraph reference or a footnote, no action is needed. Your answer has already been sent, so do not write anything further.`;
 }
+
+/**
+ * A cite_sources input limited to adding `refs`. After the answer has been
+ * sent, a late call may only record what it left out: dropping or replacing
+ * a citation would change one the user has already seen.
+ */
+export function onlyAddingRefs(
+  input: unknown,
+  refs: ReadonlySet<number>,
+): { citations: unknown[] } {
+  const entries = (input as { citations?: unknown } | null)?.citations;
+  return {
+    citations: Array.isArray(entries)
+      ? entries.filter((entry) => {
+          const ref = (entry as { ref?: unknown } | null)?.ref;
+          return typeof ref === "number" && refs.has(ref);
+        })
+      : [],
+  };
+}

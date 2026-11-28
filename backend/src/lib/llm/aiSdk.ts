@@ -570,6 +570,13 @@ export function withPrefixCacheHints(
   };
 }
 
+/**
+ * The finish reason onUsage reports for the follow-up step: its tool call
+ * records what the finished answer left out and is not a step of the
+ * answer's tool loop, so a step budget must not treat it as one.
+ */
+export const FOLLOW_UP_FINISH_REASON = "follow-up";
+
 export async function streamAiSdk(
   params: StreamChatParams,
   config: AiSdkAdapterConfig,
@@ -741,6 +748,7 @@ export async function streamAiSdk(
     };
     const forwardUsage = (
       part: Extract<AiSdk.TextStreamPart<ToolSet>, { type: "finish-step" }>,
+      finishReason: string = part.finishReason,
     ) => {
       if (
         part.usage.inputTokens === undefined &&
@@ -757,7 +765,7 @@ export async function streamAiSdk(
           ...(part.usage.inputTokenDetails?.cacheWriteTokens !== undefined &&
             { cacheWriteTokens: part.usage.inputTokenDetails.cacheWriteTokens }),
         },
-        part.finishReason,
+        finishReason,
       );
     };
 
@@ -910,11 +918,29 @@ export async function streamAiSdk(
     }
 
     // Only an answer the model finished on its own is checked: one cut off
-    // or halted is already explained by its notice.
+    // or halted is already explained by its notice. A run whose last step
+    // had to be tool-free has no step left for one.
     const followUp =
-      !notice && lastFinishReason === "stop" ? params.followUp?.(fullText) : null;
+      !notice &&
+      lastFinishReason === "stop" &&
+      !(params.finishWithoutToolsOnLastStep && iteration >= maxIterations)
+        ? params.followUp?.(fullText)
+        : null;
     if (followUp && functionTools?.[followUp.tool]) {
       try {
+        const answerMessages = await result.responseMessages;
+        // The provider's own search runs wherever it is defined, so it is
+        // defined only when the answer's history already holds its calls.
+        const searched = answerMessages.some(
+          (message) =>
+            message.role === "assistant" &&
+            Array.isArray(message.content) &&
+            message.content.some(
+              (part) =>
+                part.type === "tool-call" &&
+                part.toolName === PROVIDER_WEB_SEARCH_TOOL,
+            ),
+        );
         const followUpTools = toAiSdkTools(
           params.tools ?? [],
           params.runTools,
@@ -930,12 +956,13 @@ export async function streamAiSdk(
           ...callOptions,
           messages: [
             ...cacheHints.messages,
-            ...(await result.responseMessages),
+            ...answerMessages,
             { role: "user", content: followUp.instruction },
           ],
-          tools: webSearch
-            ? { ...followUpTools, [PROVIDER_WEB_SEARCH_TOOL]: webSearch.tool }
-            : followUpTools,
+          tools:
+            webSearch && searched
+              ? { ...followUpTools, [PROVIDER_WEB_SEARCH_TOOL]: webSearch.tool }
+              : followUpTools,
           // The step's tool runs; the model is not asked again.
           stopWhen: sdk.stepCountIs(1),
         });
@@ -973,7 +1000,7 @@ export async function streamAiSdk(
               }
               break;
             case "finish-step":
-              forwardUsage(part);
+              forwardUsage(part, FOLLOW_UP_FINISH_REASON);
               break;
             case "tool-error":
               if (

@@ -336,6 +336,7 @@ describe("runLLMStream unrecorded citation markers", () => {
   });
 
   it("logs the markers a follow-up could not record", async () => {
+    vi.mocked(runToolCalls).mockResolvedValue(emptyToolCallBatchResult());
     const logged = vi.spyOn(console, "log").mockImplementation(() => {});
     streamChatWithTools.mockImplementationOnce(async (params: StreamChatParams) => {
       const text = "Either party may terminate [1], with notice [2].";
@@ -352,6 +353,37 @@ describe("runLLMStream unrecorded citation markers", () => {
       { unrecorded: 2, still_unrecorded: 1, sources: "documents" },
     );
     logged.mockRestore();
+  });
+
+  it("lets a call made after the answer add only the missing refs", async () => {
+    vi.mocked(runToolCalls).mockResolvedValue(emptyToolCallBatchResult());
+    const shown = { ref: 1, doc_id: "doc-0", quotes: [{ quote: "Either party may terminate" }] };
+    streamChatWithTools.mockImplementationOnce(async (params: StreamChatParams) => {
+      await params.runTools!([{ id: "cite", name: "cite_sources", input: { citations: [shown] } }]);
+      const text = "Either party may terminate [1] on 30 days' written notice [2].";
+      params.callbacks?.onContentDelta?.(text);
+      params.followUp!(text);
+      // The late call also tries to withdraw [1] and to replace its source.
+      await params.runTools!([{
+        id: "late",
+        name: "cite_sources",
+        input: {
+          drop_refs: [1],
+          citations: [
+            { ref: 1, doc_id: "doc-0", quotes: [{ quote: "written notice" }] },
+            { ref: 2, doc_id: "doc-0", quotes: [{ quote: "30 days' written notice" }] },
+          ],
+        },
+      }]);
+      return { fullText: text };
+    });
+
+    const result = await run();
+
+    expect(result.citations).toMatchObject([
+      { ref: 1, quote: "Either party may terminate", verified: true },
+      { ref: 2, quote: "30 days' written notice", verified: true },
+    ]);
   });
 
   it("asks for nothing when every marker has a recorded citation", async () => {

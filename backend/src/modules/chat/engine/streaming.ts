@@ -101,9 +101,10 @@ import {
   CITE_TABLE_CELLS_TOOL,
   createCitationRecorder,
   documentCitations,
-  unrecordedMarkersNotice,
+  onlyAddingRefs,
   tabularCitations,
   unrecordedMarkerRefs,
+  unrecordedMarkersNotice,
 } from "./citeSources";
 import { buildMemoryTurn } from "../../../lib/memory/prompt";
 
@@ -639,9 +640,10 @@ export async function runLLMStream(params: {
       answer,
       citationRecorder.citations().map((citation) => citation.ref),
     );
-  // Markers the finished answer used without a recorded citation. The
-  // model is asked once to record them (the `followUp` below).
-  let unrecordedAtFinish = 0;
+  // Refs the finished answer's markers used without a recorded citation.
+  // The model is told once (the `followUp` below), and a call it makes then
+  // may only add these: the answer and its citations have been sent.
+  let repairRefs = null as ReadonlySet<number> | null;
 
   const emitCitations = (status: "partial" | "final") => {
     const snapshot = ++citationSnapshotSeq;
@@ -955,7 +957,7 @@ export async function runLLMStream(params: {
       followUp: turnTools.some((tool) => toolName(tool) === CITE_SOURCES_TOOL_NAME)
         ? (answer) => {
             const refs = unrecordedRefs(answer);
-            unrecordedAtFinish = refs.length;
+            if (refs.length) repairRefs = new Set(refs);
             return refs.length
               ? {
                   tool: CITE_SOURCES_TOOL_NAME,
@@ -1216,7 +1218,9 @@ export async function runLLMStream(params: {
           // Normally opened when the model began writing the call; a call
           // that reached here unannounced opens its step now.
           announceToolCall(call);
-          const { content, event } = await citationRecorder.record(call.input);
+          const { content, event } = await citationRecorder.record(
+            repairRefs ? onlyAddingRefs(call.input, repairRefs) : call.input,
+          );
           clientResultByCallId.set(call.id, content);
           events.push(event);
           // Publish the backing rows before enabling the finished step's source actions.
@@ -1332,9 +1336,9 @@ export async function runLLMStream(params: {
 
   flushText();
 
-  if (unrecordedAtFinish) {
+  if (repairRefs) {
     logEvent("info", "chat/citations", "answer used markers without recorded citations", {
-      unrecorded: unrecordedAtFinish,
+      unrecorded: repairRefs.size,
       still_unrecorded: unrecordedRefs(fullText).length,
       sources: citesTableCells ? "tabular_cells" : "documents",
     });
