@@ -14,7 +14,7 @@ import { MikeIcon } from "@mike/ui";
  */
 export function SidebarLogo({
     organization,
-    size = 18,
+    size = 16,
 }: {
     /** The active organization, or null in the personal workspace. */
     organization: Pick<Org, "id" | "name" | "logo_updated_at"> | null;

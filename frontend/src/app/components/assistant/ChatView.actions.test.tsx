@@ -486,7 +486,7 @@ describe("ChatView header actions", () => {
 
         expect(
             document.querySelector('[data-slot="chat-header-actions"]'),
-        ).toHaveClass("top-4.5");
+        ).toHaveClass("top-[15px]", "right-5");
         expect(
             document.querySelector('[data-slot="chat-messages-content"]'),
         ).toHaveStyle({ paddingTop: "76px" });

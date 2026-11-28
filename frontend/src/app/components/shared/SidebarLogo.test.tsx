@@ -47,8 +47,8 @@ describe("SidebarLogo", () => {
         await waitFor(() => expect(image(container)).not.toBeNull());
         const logo = image(container)!;
         expect(logo).toHaveAttribute("src", LOGO);
-        expect(logo.style.width).toBe("18px");
-        expect(logo.style.height).toBe("18px");
+        expect(logo.style.width).toBe("16px");
+        expect(logo.style.height).toBe("16px");
         // Decorative: the organization's name is the text beside it.
         expect(logo).toHaveAttribute("alt", "");
         expect(screen.queryByTestId("mike-icon")).not.toBeInTheDocument();

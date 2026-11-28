@@ -55,8 +55,8 @@ describe("SidebarHeading", () => {
             render(<SidebarHeading name={name} />);
             expect(heading()).toHaveTextContent(name);
             expect(heading()).toHaveAttribute("data-size", "full");
-            expect(heading()).toHaveClass("text-xl");
-            expect(heading()).not.toHaveClass("text-base");
+            expect(heading()).toHaveClass("text-lg");
+            expect(heading()).not.toHaveClass("text-sm");
             expect(heading()).not.toHaveAttribute("title");
         },
     );
@@ -72,8 +72,8 @@ describe("SidebarHeading", () => {
     it("drops to the smaller two-line setting only when the name does not fit", () => {
         render(<SidebarHeading name={LONG} />);
         expect(heading()).toHaveAttribute("data-size", "compact");
-        expect(heading()).toHaveClass("text-base", "line-clamp-2", "break-words");
-        expect(heading()).not.toHaveClass("text-xl");
+        expect(heading()).toHaveClass("text-sm", "line-clamp-2", "break-words");
+        expect(heading()).not.toHaveClass("text-lg");
         // Two lines may still not hold it, so the full name stays reachable.
         expect(heading()).toHaveAttribute("title", LONG);
     });
@@ -103,5 +103,37 @@ describe("SidebarHeading", () => {
         expect(copies).toHaveLength(1);
         expect(copies[0]).toHaveClass("invisible", "absolute");
         expect(heading().textContent).toBe("Acme LLP");
+    });
+
+    describe("with something trailing the name", () => {
+        const CHEVRON_WIDTH = 14;
+        const chevron = <svg data-testid="chevron" />;
+
+        beforeEach(() => {
+            vi.spyOn(
+                HTMLElement.prototype,
+                "offsetWidth",
+                "get",
+            ).mockImplementation(function (this: HTMLElement) {
+                if (this.dataset.slot === "sidebar-heading-trailing") {
+                    return CHEVRON_WIDTH;
+                }
+                return FULL_SIZE_WIDTHS[this.textContent ?? ""] ?? 0;
+            });
+        });
+
+        it("sits it right after the name", () => {
+            render(<SidebarHeading name="Acme LLP" trailing={chevron} />);
+            expect(heading()).toHaveAttribute("data-size", "full");
+            expect(heading().nextElementSibling).toContainElement(
+                document.querySelector('[data-testid="chevron"]') as HTMLElement,
+            );
+        });
+
+        it("counts its width in the room the name needs", () => {
+            // Exactly fits alone; with the chevron and its gap it does not.
+            render(<SidebarHeading name="Exactly Fits" trailing={chevron} />);
+            expect(heading()).toHaveAttribute("data-size", "compact");
+        });
     });
 });

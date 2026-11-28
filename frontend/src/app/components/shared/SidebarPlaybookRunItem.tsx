@@ -43,7 +43,7 @@ export function SidebarPlaybookRunItem({
             aria-current={isActive ? "page" : undefined}
             {...slideHandlers}
             className={cn(
-                "flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                "flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
                 isActive
                     ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
                     : `${LIQUID_GLASS_HOVER_CLASS} text-gray-700`,

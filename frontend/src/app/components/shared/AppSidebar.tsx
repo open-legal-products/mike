@@ -8,6 +8,7 @@ import {
     useMemo,
     useCallback,
     useRef,
+    type ReactNode,
     type UIEvent,
 } from "react";
 import {
@@ -23,7 +24,7 @@ import {
     PERSONAL_WORKSPACE,
     useWorkspace,
 } from "@/app/contexts/WorkspaceContext";
-import { workspaceName } from "@mike/client";
+import { workspaceMenuOptions, workspaceName } from "@mike/client";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { SidebarChatItem } from "@/app/components/shared/SidebarChatItem";
@@ -36,6 +37,7 @@ import {
 } from "@mike/ui";
 import { SidebarHeading } from "@/app/components/shared/SidebarHeading";
 import { SidebarLogo } from "@/app/components/shared/SidebarLogo";
+import { WorkspaceMenuIcon } from "@/app/components/shared/WorkspaceMenuIcon";
 import { SidebarProjectItem } from "@/app/components/shared/SidebarProjectItem";
 import {
     ChatSkeuoIcon,
@@ -69,7 +71,10 @@ import {
     LIQUID_GLASS_HOVER_CLASS,
 } from "@/app/components/ui/liquid-surface";
 
-/** Where a workspace opens: the page the logo leads to. */
+/**
+ * Where a workspace opens after a switch, and where the logo leads when there
+ * is no workspace to switch to.
+ */
 const WORKSPACE_HOME = "/assistant";
 
 const NAV_ITEMS = [
@@ -87,9 +92,11 @@ const NAV_ITEMS = [
 ];
 
 const RECENT_PROJECT_PAGE_SIZE = 10;
-const RECENT_PROJECT_LIST_HEIGHT_CLASS = "h-44";
+// A cap, not a fixed height: a few projects take only the room they need,
+// and many scroll, which is what pages in the rest.
+const RECENT_PROJECT_LIST_HEIGHT_CLASS = "max-h-44";
 // Room for an expanded project's recent chats and reviews.
-const RECENT_PROJECT_LIST_EXPANDED_HEIGHT_CLASS = "h-64";
+const RECENT_PROJECT_LIST_EXPANDED_HEIGHT_CLASS = "max-h-64";
 const recentProjectsCache = new Map<
     string,
     { projects: Project[]; hasMore: boolean }
@@ -254,6 +261,10 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             organizations === null
           ? null
           : "Mike";
+    // The logo is where the workspace is switched; with no organization to
+    // switch to, it is only the way home.
+    const canSwitchWorkspace =
+        !!workspaceId && workspaceMenuOptions(organizations) !== null;
     const [recentProjects, setRecentProjects] = useState<Project[] | null>(
         null,
     );
@@ -450,6 +461,32 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
 
     if (!user) return null;
 
+    // The logo and the workspace's name, at the top of the open sidebar,
+    // with anything that follows the name (the switcher's chevron).
+    const renderSidebarMark = (trailing?: ReactNode) => (
+        <>
+            <span className="flex shrink-0">
+                <SidebarLogo organization={activeOrganization} />
+            </span>
+            {sidebarHeading === null ? (
+                <span
+                    data-slot="sidebar-heading-loading"
+                    role="status"
+                    aria-label="Loading workspace"
+                    className={cn("h-5 w-28 rounded bg-gray-200", shouldAnimate ? "sidebar-heading-enter" : "animate-pulse")}
+                />
+            ) : (
+                <SidebarHeading
+                    name={sidebarHeading}
+                    className={
+                        shouldAnimate ? "sidebar-heading-enter" : undefined
+                    }
+                    trailing={trailing}
+                />
+            )}
+        </>
+    );
+
     return (
         <>
             {/* Mobile: tapping outside the expanded sidebar closes it. The
@@ -466,51 +503,72 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 className={cn(
                     isOpen
                         ? "w-62 h-[calc(100dvh-1rem)] md:h-[calc(100dvh-1.5rem)]"
-                        : "max-md:hidden w-[46px] md:h-[calc(100dvh-1.5rem)] h-auto pointer-events-none md:pointer-events-auto",
+                        : "max-md:hidden w-[42px] md:h-[calc(100dvh-1.5rem)] h-auto pointer-events-none md:pointer-events-auto",
                     // Collapsed, the ends are full semicircles. The radii are
                     // lengths, not rounded-full, so the change animates with
                     // the width.
-                    isOpen ? "rounded-2xl" : "rounded-[23px]",
+                    isOpen ? "rounded-2xl" : "rounded-[21px]",
                     "my-2 ml-2 mr-0 md:my-3 md:ml-3 md:mr-0 overflow-visible",
                     LIQUID_GLASS_FLOAT_CLASS,
-                    "absolute z-[99] flex shrink-0 flex-col transition-all duration-300 motion-reduce:transition-none md:relative",
+                    // The one horizontal inset for everything in the sidebar.
+                    "absolute z-[99] flex shrink-0 flex-col px-1.5 transition-all duration-300 motion-reduce:transition-none md:relative",
                 )}
             >
                 {/* Toggle + Logo */}
                 <div
-                    className={`h-11 shrink-0 items-center justify-between gap-1 px-1.5 ${
+                    className={`h-10 shrink-0 items-center justify-between gap-1 ${
                         !isOpen ? "hidden md:flex" : "flex"
                     }`}
                 >
                     {isOpen && (
                         <div className="min-w-0 flex-1 px-1.5">
-                            <Link
-                                href="/assistant"
-                                className="flex min-w-0 items-center gap-1.5 hover:opacity-80 transition-opacity"
-                            >
-                                <span className="flex shrink-0 px-px">
-                                    <SidebarLogo
-                                        organization={activeOrganization}
-                                    />
-                                </span>
-                                {sidebarHeading === null ? (
-                                    <span
-                                        data-slot="sidebar-heading-loading"
-                                        role="status"
-                                        aria-label="Loading workspace"
-                                        className={cn("h-5 w-28 rounded bg-gray-200", shouldAnimate ? "sidebar-heading-enter" : "animate-pulse")}
-                                    />
-                                ) : (
-                                    <SidebarHeading
-                                        name={sidebarHeading}
-                                        className={
-                                            shouldAnimate
-                                                ? "sidebar-heading-enter"
-                                                : undefined
-                                        }
-                                    />
-                                )}
-                            </Link>
+                            {canSwitchWorkspace ? (
+                                <Dropdown>
+                                    <DropdownTrigger asChild>
+                                        <button
+                                            type="button"
+                                            aria-label="Switch workspace"
+                                            title={sidebarHeading ?? undefined}
+                                            className="flex w-full min-w-0 items-center gap-1.5 text-left transition-opacity hover:opacity-80"
+                                        >
+                                            {renderSidebarMark(
+                                                <ChevronDown
+                                                    aria-hidden="true"
+                                                    className="h-3.5 w-3.5 text-gray-400"
+                                                />,
+                                            )}
+                                        </button>
+                                    </DropdownTrigger>
+                                    <DropdownContent
+                                        align="start"
+                                        className="w-56 whitespace-nowrap"
+                                    >
+                                        <WorkspaceMenuUI
+                                            workspaceId={workspaceId}
+                                            organizations={organizations}
+                                            onSelect={switchWorkspace}
+                                            renderIcon={(option) => (
+                                                <WorkspaceMenuIcon
+                                                    organization={
+                                                        organizations?.find(
+                                                            (org) =>
+                                                                org.id ===
+                                                                option.id,
+                                                        ) ?? null
+                                                    }
+                                                />
+                                            )}
+                                        />
+                                    </DropdownContent>
+                                </Dropdown>
+                            ) : (
+                                <Link
+                                    href={WORKSPACE_HOME}
+                                    className="flex min-w-0 items-center gap-1.5 hover:opacity-80 transition-opacity"
+                                >
+                                    {renderSidebarMark()}
+                                </Link>
+                            )}
                         </div>
                     )}
                     <button
@@ -523,22 +581,22 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                         onPointerLeave={() => setToggleHoverSuppressed(false)}
                         aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
                         className={cn(
-                            "group flex h-8 w-8 shrink-0 items-center justify-center transition-[border-radius] duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
-                            isOpen ? "rounded-md" : "rounded-[16px]",
+                            "group flex h-7 w-7 shrink-0 items-center justify-center transition-[border-radius] duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                            isOpen ? "rounded-md" : "rounded-[14px]",
                             !toggleHoverSuppressed && LIQUID_GLASS_HOVER_CLASS,
                         )}
                         title={isOpen ? "Close sidebar" : "Open sidebar"}
                     >
                         {isOpen ? (
-                            <PanelLeft aria-hidden="true" className="h-4 w-4 shrink-0" />
+                            <PanelLeft aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
                         ) : (
-                            <span aria-hidden="true" className="relative flex h-[18px] w-[18px] items-center justify-center">
+                            <span aria-hidden="true" className="relative flex h-4 w-4 items-center justify-center">
                                 <span className="absolute inset-0 flex items-center justify-center group-hover:invisible group-focus-visible:invisible">
                                     <SidebarLogo
                                         organization={activeOrganization}
                                     />
                                 </span>
-                                <PanelLeft className="invisible h-4 w-4 shrink-0 group-hover:visible group-focus-visible:visible" />
+                                <PanelLeft className="invisible h-3.5 w-3.5 shrink-0 group-hover:visible group-focus-visible:visible" />
                             </span>
                         )}
                     </button>
@@ -549,7 +607,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     never grows past the screen or slides under the footer. */}
                 <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
                     {/* Nav items */}
-                    <div className="pt-1.5">
+                    <div className="flex flex-col gap-1.5 pt-1">
                         {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
                             const isActive =
                                 href === "/assistant"
@@ -559,38 +617,37 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                       : pathname === href ||
                                         pathname.startsWith(href + "/");
                             return (
-                                <div key={href} className="px-1.5 py-0.5">
-                                    <button
-                                        onClick={() => router.push(href)}
-                                        title={!isOpen ? label : ""}
-                                        className={cn(
-                                            "w-full h-8 flex items-center gap-2 px-2 py-2 rounded-md transition-colors text-left",
+                                <button
+                                    key={href}
+                                    onClick={() => router.push(href)}
+                                    title={!isOpen ? label : ""}
+                                    className={cn(
+                                        "w-full h-7 flex items-center gap-2 px-1.5 rounded-md transition-colors text-left",
+                                        isActive
+                                            ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
+                                            : `text-gray-700 ${LIQUID_GLASS_HOVER_CLASS}`,
+                                        !isOpen ? "hidden md:flex" : "flex",
+                                    )}
+                                >
+                                    <Icon
+                                        className={`h-4 w-4 flex-shrink-0 ${
                                             isActive
-                                                ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
-                                                : `text-gray-700 ${LIQUID_GLASS_HOVER_CLASS}`,
-                                            !isOpen ? "hidden md:flex" : "flex",
-                                        )}
-                                    >
-                                        <Icon
-                                            className={`h-4 w-4 flex-shrink-0 ${
-                                                isActive
-                                                    ? "text-gray-900"
-                                                    : "text-black"
+                                                ? "text-gray-900"
+                                                : "text-black"
+                                        }`}
+                                    />
+                                    {isOpen && (
+                                        <span
+                                            className={`text-sm font-medium ${
+                                                shouldAnimate
+                                                    ? "sidebar-fade-in-2"
+                                                    : ""
                                             }`}
-                                        />
-                                        {isOpen && (
-                                            <span
-                                                className={`text-sm font-medium ${
-                                                    shouldAnimate
-                                                        ? "sidebar-fade-in-2"
-                                                        : ""
-                                                }`}
-                                            >
-                                                {label}
-                                            </span>
-                                        )}
-                                    </button>
-                                </div>
+                                        >
+                                            {label}
+                                        </span>
+                                    )}
+                                </button>
                             );
                         })}
                     </div>
@@ -601,7 +658,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                             <div>
                                 <button
                                     onClick={() => setProjectsCollapsed((v) => !v)}
-                                    className={`mb-2 flex w-full items-center justify-between rounded-md px-3.5 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${
+                                    className={`mb-2 flex w-full items-center justify-between rounded-md px-1.5 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${
                                         shouldAnimate ? "sidebar-fade-in" : ""
                                     }`}
                                 >
@@ -618,16 +675,16 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             anyRecentProjectExpanded
                                                 ? RECENT_PROJECT_LIST_EXPANDED_HEIGHT_CLASS
                                                 : RECENT_PROJECT_LIST_HEIGHT_CLASS,
-                                            "overflow-y-auto transition-[height] duration-200 motion-reduce:transition-none",
+                                            "overflow-y-auto transition-[max-height] duration-200 motion-reduce:transition-none",
                                         )}
                                         onScroll={handleRecentProjectsScroll}
                                     >
                                         {!displayedRecentProjects ? (
-                                            <div className="space-y-1 px-1.5">
+                                            <div className="space-y-1">
                                                 {[50, 65, 45].map((w, i) => (
                                                     <div
                                                         key={i}
-                                                        className="flex h-8 items-center gap-2 rounded-md px-2"
+                                                        className="flex h-7 items-center gap-2 rounded-md px-1.5"
                                                     >
                                                         <div className="flex h-4 w-4 shrink-0 items-center justify-center">
                                                             <div className="h-3.5 w-3.5 rounded bg-gray-200 animate-pulse" />
@@ -643,7 +700,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             </div>
                                         ) : displayedRecentProjects.length === 0 ? (
                                             <div
-                                                className={`px-3.5 py-2 text-xs text-gray-500 ${
+                                                className={`px-1.5 py-2 text-xs text-gray-500 ${
                                                     shouldAnimate
                                                         ? "sidebar-fade-in-2"
                                                         : ""
@@ -653,7 +710,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             </div>
                                         ) : (
                                             <div
-                                                className={`space-y-1 px-1.5 pb-1 ${
+                                                className={`space-y-1 pb-1 ${
                                                     shouldAnimate
                                                         ? "sidebar-fade-in-2"
                                                         : ""
@@ -685,7 +742,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                     ),
                                                 )}
                                                 {loadingMoreRecentProjects && (
-                                                    <div className="flex h-8 items-center justify-center">
+                                                    <div className="flex h-7 items-center justify-center">
                                                         <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
                                                     </div>
                                                 )}
@@ -707,7 +764,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     aria-expanded={!historyCollapsed}
                                     aria-controls="sidebar-history"
                                     onClick={() => setHistoryCollapsed((v) => !v)}
-                                    className={`mb-2 flex w-full items-center justify-between rounded-md px-3.5 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${
+                                    className={`mb-2 flex w-full items-center justify-between rounded-md px-1.5 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${
                                         shouldAnimate ? "sidebar-fade-in" : ""
                                     }`}
                                 >
@@ -729,11 +786,11 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     onScroll={handleHistoryScroll}
                                 >
                                     {history.loading ? (
-                                        <div className="space-y-1.5 px-1.5">
+                                        <div className="space-y-1.5">
                                             {[40, 60, 50, 70, 45].map((w, i) => (
                                                 <div
                                                     key={i}
-                                                    className="flex h-8 items-center gap-2 rounded-md px-2"
+                                                    className="flex h-7 items-center gap-2 rounded-md px-1.5"
                                                 >
                                                     <div className="flex h-4 w-4 shrink-0 items-center justify-center">
                                                         <div className="h-3.5 w-3.5 rounded bg-gray-200 animate-pulse" />
@@ -747,7 +804,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         </div>
                                     ) : history.items.length === 0 ? (
                                         <div
-                                            className={`text-xs text-gray-500 py-2 px-3.5 ${
+                                            className={`text-xs text-gray-500 py-2 px-1.5 ${
                                                 shouldAnimate
                                                     ? "sidebar-fade-in-2"
                                                     : ""
@@ -758,7 +815,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     ) : (
                                         <>
                                             <div
-                                                className={`space-y-1.5 px-1.5 ${
+                                                className={`space-y-1.5 ${
                                                     shouldAnimate
                                                         ? "sidebar-fade-in-2"
                                                         : ""
@@ -784,7 +841,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                                 onClick={() => reviewStatuses.clearStatus(review.id)}
                                                                 aria-current={active ? "page" : undefined}
                                                                 className={cn(
-                                                                    "flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                                                                    "flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
                                                                     active
                                                                         ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
                                                                         : `${LIQUID_GLASS_HOVER_CLASS} text-gray-700`,
@@ -867,7 +924,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                 })}
                                             </div>
                                             {history.loadingMore && (
-                                                <div className="flex h-8 items-center justify-center">
+                                                <div className="flex h-7 items-center justify-center">
                                                     <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
                                                 </div>
                                             )}
@@ -877,7 +934,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         <button
                                             type="button"
                                             onClick={() => void history.retry()}
-                                            className="mx-3.5 my-2 rounded text-left text-xs text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                                            className="mx-1.5 my-2 rounded text-left text-xs text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
                                         >
                                             Some history could not be loaded. Try again
                                         </button>
@@ -889,7 +946,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 </div>
 
                 {/* User Profile */}
-                <div className="shrink-0 p-1">
+                <div className="shrink-0 py-1">
                     {user && (
                         <Dropdown
                             open={isDropdownOpen}
@@ -900,8 +957,8 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 type="button"
                                 aria-label="Account menu"
                                 className={cn(
-                                    "flex h-9 w-full shrink-0 items-center px-[7px] outline-none [transition:border-radius_300ms_cubic-bezier(0.4,0,0.2,1),background-color_150ms,color_150ms] focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
-                                    isOpen ? "rounded-xl" : "rounded-[18px]",
+                                    "flex h-7 w-full shrink-0 items-center px-[3px] outline-none [transition:border-radius_300ms_cubic-bezier(0.4,0,0.2,1),background-color_150ms,color_150ms] focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                                    isOpen ? "rounded-xl" : "rounded-[14px]",
                                     !isOpen ? "hidden md:flex" : "",
                                     // Selected only while its menu is open,
                                     // not for as long as Settings is.
@@ -938,12 +995,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                       : "w-56",
                               )}
                           >
-                              <WorkspaceMenuUI
-                                  workspaceId={workspaceId}
-                                  organizations={organizations}
-                                  onSelect={switchWorkspace}
-                                  trailingSeparator
-                              />
                               <DropdownItem
                                   onSelect={() => router.push("/settings")}
                                   className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
