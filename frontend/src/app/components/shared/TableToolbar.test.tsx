@@ -46,4 +46,43 @@ describe("TableToolbar", () => {
             screen.getByRole("button", { name: "All" }).parentElement,
         ).not.toHaveClass("overflow-x-auto");
     });
+
+    it("gives its pills, and those its actions render, no glass", () => {
+        render(
+            <TableToolbar
+                items={[
+                    { id: "all", label: "All" },
+                    { id: "mine", label: "Mine" },
+                ]}
+                active="all"
+                actions={<TabPillButtonUI>Actions</TabPillButtonUI>}
+            />,
+        );
+        for (const name of ["All", "Mine", "Actions"]) {
+            const pill = screen.getByRole("button", { name });
+            expect(pill).toHaveAttribute("data-surface", "plain");
+            expect(pill).not.toHaveClass("liquid-glass-subtle");
+            expect(pill).not.toHaveClass("liquid-glass-flat");
+        }
+        expect(screen.getByRole("button", { name: "All" })).toHaveClass(
+            "liquid-glass-selected",
+        );
+        expect(screen.getByRole("button", { name: "Mine" })).toHaveClass(
+            "liquid-glass-hover",
+        );
+        // The active tab is told by its state, not by colour alone.
+        expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
+            "aria-pressed",
+            "true",
+        );
+    });
+
+    it("sets its first pill's text in line with the page title", () => {
+        const { container } = render(
+            <TableToolbar items={[{ id: "all", label: "All" }]} active="all" />,
+        );
+        // 4px + the pill's 12px padding = the title's 16px; 12px + 12px = 24px.
+        expect(container.firstElementChild).toHaveClass("mx-1", "md:mx-3");
+        expect(screen.getByRole("button", { name: "All" })).toHaveClass("px-3");
+    });
 });

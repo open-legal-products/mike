@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { TabPillButtonUI } from "./TabPillButtonUI";
+import { TabPillButtonUI, TabPillSurfaceContext } from "./TabPillButtonUI";
 
 describe("TabPillButtonUI", () => {
     it("defaults to type=button", () => {
@@ -63,5 +63,40 @@ describe("TabPillButtonUI", () => {
             "liquid-glass-subtle",
             "focus-visible:ring-2",
         );
+    });
+
+    it("takes its surface from the context unless it names its own", () => {
+        render(
+            <TabPillSurfaceContext.Provider value="plain">
+                <TabPillButtonUI>All</TabPillButtonUI>
+                <TabPillButtonUI surface="subtle">Subtle</TabPillButtonUI>
+            </TabPillSurfaceContext.Provider>,
+        );
+        const all = screen.getByRole("button", { name: "All" });
+        expect(all).toHaveAttribute("data-surface", "plain");
+        expect(all).not.toHaveClass("liquid-glass-subtle");
+        expect(screen.getByRole("button", { name: "Subtle" })).toHaveClass(
+            "liquid-glass-subtle",
+        );
+    });
+
+    it("is text only on a plain surface, grey on hover and when active", () => {
+        render(
+            <>
+                <TabPillButtonUI surface="plain" active>
+                    Mine
+                </TabPillButtonUI>
+                <TabPillButtonUI surface="plain">All</TabPillButtonUI>
+            </>,
+        );
+        const active = screen.getByRole("button", { name: "Mine" });
+        const inactive = screen.getByRole("button", { name: "All" });
+        for (const pill of [active, inactive]) {
+            expect(pill).not.toHaveClass("liquid-glass-subtle");
+            expect(pill).not.toHaveClass("liquid-glass-flat");
+        }
+        expect(active).toHaveClass("liquid-glass-selected", "text-gray-900");
+        expect(active).not.toHaveClass("bg-white");
+        expect(inactive).toHaveClass("liquid-glass-hover", "text-gray-500");
     });
 });
