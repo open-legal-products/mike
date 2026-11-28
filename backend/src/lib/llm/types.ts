@@ -81,6 +81,10 @@ export type StreamCallbacks = {
     onToolCallStart?: (call: NormalizedToolCall) => void;
     onWebSearch?: (event: ProviderWebSearchEvent) => void;
     /** Skipped when the provider reports no usage. */
+    /**
+     * Each step's tokens. `finishReason` is the step's own, or "follow-up"
+     * for the step a `followUp` runs after the finished answer.
+     */
     onUsage?: (usage: TokenUsage, finishReason: string) => void;
 };
 

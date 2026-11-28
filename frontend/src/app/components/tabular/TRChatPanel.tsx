@@ -4,6 +4,7 @@ import { nextRevealLength } from "./tabularReveal";
 
 import { useMarkdownCheckpoint } from "../assistant/message/markdownCheckpoint";
 import { createCitationPreprocessor } from "../assistant/message/citationPreprocessor";
+import { preprocessCitations } from "../assistant/message/citationUtils";
 import {
     memo,
     useMemo,
@@ -168,30 +169,6 @@ interface Props {
 }
 
 // ---------------------------------------------------------------------------
-// Citation preprocessing (matches AssistantMessage.tsx pattern)
-// ---------------------------------------------------------------------------
-
-function preprocessTRCitations(
-    text: string,
-    annotations: TRCitationAnnotation[],
-    citationsList: TRCitationAnnotation[],
-): string {
-    return text.replace(/\[(\d+(?:,\s*\d+)*)\]/g, (full, refsStr) => {
-        const refs = (refsStr as string)
-            .split(",")
-            .map((s: string) => parseInt(s.trim(), 10));
-        const tokens = refs.flatMap((ref: number) => {
-            const ann = annotations.find((a) => a.ref === ref);
-            if (!ann) return [];
-            const idx = citationsList.length;
-            citationsList.push(ann);
-            return [`\`§${idx}§\`\u200B`];
-        });
-        return tokens.length > 0 ? tokens.join("") : full;
-    });
-}
-
-// ---------------------------------------------------------------------------
 // TRAssistantMessage
 // ---------------------------------------------------------------------------
 
@@ -218,7 +195,7 @@ function TRAssistantMessage({
     const lastContentIndex = events.findLastIndex(event => event.type === "content");
     const lastContent = events[lastContentIndex];
     const {richText, plainTail} = useMarkdownCheckpoint(lastContent?.type === "content" ? lastContent.text : "", !!msg.isStreaming && lastContentIndex === events.length - 1);
-    const processCitations = useMemo(() => createCitationPreprocessor(preprocessTRCitations), []);
+    const processCitations = useMemo(() => createCitationPreprocessor(preprocessCitations<TRCitationAnnotation>), []);
     const processedTexts = events.map((event, index) => event.type === "content"
         ? processCitations(index, index === lastContentIndex ? richText : event.text, annotations, citationsList) : "");
 
