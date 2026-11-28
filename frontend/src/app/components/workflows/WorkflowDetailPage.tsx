@@ -126,6 +126,14 @@ const WORKFLOW_CONTRIBUTIONS_ENABLED =
   process.env.NEXT_PUBLIC_WORKFLOW_CONTRIBUTIONS_ENABLED === "true";
 const ASSISTANT_TABS: readonly AssistantTab[] = ["prompt", "assets"];
 
+// The prompt editor's place on the page's sheet. From md up it has no card
+// (globals.css clears it): it sits flat on the sheet, edge to edge, with a
+// line across its top, like the playbook panes. Below md there is no sheet
+// and it keeps its card.
+const PROMPT_EDITOR_WRAPPER_CLASS =
+  "mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-0 md:mb-0 md:border-t md:border-border";
+const PROMPT_EDITOR_CLASS = "workflow-prompt-pane";
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -862,8 +870,9 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
               onChange={setAssistantTab}
             />
             {assistantTab === "prompt" ? (
-              <div className="mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-3 md:mb-3">
+              <div className={PROMPT_EDITOR_WRAPPER_CLASS}>
                 <MarkdownEditor
+                  className={PROMPT_EDITOR_CLASS}
                   ariaLabel="Workflow prompt"
                   value={promptMd}
                   onChange={readOnly ? undefined : handlePromptChange}
@@ -1139,8 +1148,10 @@ function AssistantWorkflowEditorSkeleton() {
         ]}
         active="prompt"
       />
-      <div className="mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-3 md:mb-3">
-        <div className={`h-full px-5 py-4 ${EDITOR_SURFACE_CLASS}`}>
+      <div className={PROMPT_EDITOR_WRAPPER_CLASS}>
+        <div
+          className={`h-full px-5 py-4 ${EDITOR_SURFACE_CLASS} ${PROMPT_EDITOR_CLASS}`}
+        >
           <div className="space-y-3">
             <div className="h-3 w-24 animate-pulse rounded bg-gray-100" />
             <div className="h-3 w-5/6 animate-pulse rounded bg-gray-100" />

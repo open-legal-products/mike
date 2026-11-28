@@ -35,7 +35,8 @@
 /* On a page sheet the table sits on the sheet's fill, not the page's, so its
    sticky layers back onto that instead. A table with drawn grid lines runs to
    the sheet's edges there too, so it needs no lines of its own at its sides
-   or foot. Playbook panes lose their cards and sit flat on the sheet. */
+   or foot. Playbook panes and a workflow's prompt editor lose their cards and
+   sit flat on the sheet, the editor's toolbar on the sheet's fill too. */
 @media (width >= 48rem) {
     [data-slot="page-sheet"] .table-surface {
         --table-cell-background: var(--liquid-glass-background-float);
@@ -48,11 +49,18 @@
         border-radius: 0;
     }
 
-    [data-slot="page-sheet"] .playbook-pane {
+    [data-slot="page-sheet"] .playbook-pane,
+    [data-slot="page-sheet"] .workflow-prompt-pane {
         border-color: transparent;
         border-radius: 0;
         background-color: transparent;
         box-shadow: none;
+    }
+
+    [data-slot="page-sheet"]
+        .workflow-prompt-pane
+        > [data-slot="markdown-editor-bar"] {
+        background-color: transparent;
     }
 }
 
