@@ -76,9 +76,11 @@ export function TableToolbar<T extends string>({
                 className={cn(
                     // The first pill's left end lines up with the page
                     // title: 16px in and 24px from md up, or 12px on a
-                    // page sheet.
-                    "mb-2 flex h-10 items-center",
-                    onSheet ? "mx-3" : "mx-4 md:mx-6",
+                    // page sheet. On a sheet the header row is tight to its
+                    // buttons, so the toolbar takes more room above (14px to
+                    // its pills) than below (just its own row's 6px).
+                    "flex h-10 items-center",
+                    onSheet ? "mx-3 mt-2" : "mx-4 mb-2 md:mx-6",
                     className,
                 )}
             >

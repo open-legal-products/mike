@@ -96,5 +96,8 @@ describe("TableToolbar", () => {
             .firstElementChild;
         expect(toolbar).toHaveClass("mx-3");
         expect(toolbar).not.toHaveClass("mx-4", "md:mx-6");
+        // More room above it than below on a sheet.
+        expect(toolbar).toHaveClass("mt-2");
+        expect(toolbar).not.toHaveClass("mb-1", "mb-2");
     });
 });
