@@ -122,8 +122,8 @@ export function PageHeader({
                 "flex items-center justify-between",
                 // Below md the title lines up with the top bar's sidebar
                 // toggle, which sits 16px in. From md up it sits 24px in, in
-                // line with the toolbar's first pill text and the table's
-                // first column; the buttons stay 20px from the right.
+                // line with the toolbar's first pill and the table's first
+                // column; the buttons stay 20px from the right.
                 "mx-4 md:ml-6 md:mr-5",
                 PAGE_HEADER_ROW_CLASS,
                 shrink && "shrink-0",

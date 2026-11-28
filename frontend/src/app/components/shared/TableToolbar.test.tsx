@@ -77,12 +77,11 @@ describe("TableToolbar", () => {
         );
     });
 
-    it("sets its first pill's text in line with the page title", () => {
+    it("sets its first pill's left end in line with the page title", () => {
         const { container } = render(
             <TableToolbar items={[{ id: "all", label: "All" }]} active="all" />,
         );
-        // 4px + the pill's 12px padding = the title's 16px; 12px + 12px = 24px.
-        expect(container.firstElementChild).toHaveClass("mx-1", "md:mx-3");
-        expect(screen.getByRole("button", { name: "All" })).toHaveClass("px-3");
+        // The title's own margins: 16px, and 24px from md up.
+        expect(container.firstElementChild).toHaveClass("mx-4", "md:mx-6");
     });
 });
