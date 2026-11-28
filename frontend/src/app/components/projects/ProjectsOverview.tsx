@@ -41,6 +41,7 @@ import {
     RowActions,
 } from "@/app/components/shared/RowActions";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { PAGE_HEADER_TITLE_CLASS } from "@/app/components/shared/pageHeaderStyles";
 import { TableLoadMoreRow } from "@/app/components/shared/TableLoadMoreRow";
 import {
@@ -610,7 +611,7 @@ export function ProjectsOverview() {
         ) : undefined;
 
     return (
-        <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+        <PageSheet>
             {/* Page header */}
             <PageHeader
                 loading={loading}
@@ -1018,6 +1019,6 @@ export function ProjectsOverview() {
                 onCancel={() => setConfirmDeleteAllOpen(false)}
                 onConfirm={() => void handleDeleteSelected()}
             />
-        </div>
+        </PageSheet>
     );
 }

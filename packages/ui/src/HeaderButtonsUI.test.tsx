@@ -48,4 +48,21 @@ describe("HeaderButtonsUI", () => {
         expect(button).not.toHaveClass("w-7");
         expect(button.querySelector(".sr-only")).toBeNull();
     });
+
+    it("drops its own pill on a plain surface, at the same size", () => {
+        render(
+            <HeaderButtonsUI data-testid="actions" surface="plain">
+                <HeaderButtonUI iconOnly aria-label="New chat">
+                    +
+                </HeaderButtonUI>
+            </HeaderButtonsUI>,
+        );
+
+        const group = screen.getByTestId("actions");
+        expect(group).not.toHaveClass("liquid-glass-subtle");
+        expect(group).toHaveClass("px-1", "py-1");
+        expect(screen.getByRole("button", { name: "New chat" })).toHaveClass(
+            "liquid-glass-hover",
+        );
+    });
 });

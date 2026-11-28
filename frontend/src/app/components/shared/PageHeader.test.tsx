@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 import { PageHeader } from "./PageHeader";
+import { PageSheet } from "./PageSheet";
 import {
     PAGE_HEADER_ROW_CLASS,
     PAGE_HEADER_TITLE_CLASS,
@@ -160,5 +161,47 @@ describe("PageHeader on a small screen", () => {
         );
         // 24px in on the left; the buttons stay 20px from the right.
         expect(container.firstElementChild).toHaveClass("md:ml-6", "md:mr-5");
+    });
+});
+
+// A page on a sheet: the header's groups are already on glass.
+describe("PageHeader on a page sheet", () => {
+    it("drops the groups' own pill beside the title, and keeps it in the top bar", () => {
+        const topBar = document.createElement("div");
+        document.body.appendChild(topBar);
+        const { container } = render(
+            <PageChromeContext.Provider
+                value={{ mobileActionsContainer: topBar, mobileBackContainer: null }}
+            >
+                <PageSheet>
+                    <PageHeader actions={[{ type: "new", title: "New project" }]}>
+                        <h1>Projects</h1>
+                    </PageHeader>
+                </PageSheet>
+            </PageChromeContext.Provider>,
+        );
+
+        const inHeader = within(container)
+            .getByRole("button", { name: "New project" })
+            .closest('[data-surface]');
+        expect(inHeader).toHaveAttribute("data-surface", "plain");
+        expect(inHeader).not.toHaveClass("liquid-glass-subtle");
+        // The top bar is off the sheet.
+        const inTopBar = within(topBar)
+            .getByRole("button", { name: "New project" })
+            .closest('[data-surface]');
+        expect(inTopBar).toHaveClass("liquid-glass-subtle");
+        topBar.remove();
+    });
+
+    it("keeps the groups' pill off a sheet", () => {
+        render(
+            <PageHeader actions={[{ type: "new", title: "New project" }]}>
+                <h1>Projects</h1>
+            </PageHeader>,
+        );
+        expect(
+            screen.getByRole("button", { name: "New project" }).closest('[data-surface]'),
+        ).toHaveClass("liquid-glass-subtle");
     });
 });

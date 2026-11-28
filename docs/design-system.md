@@ -331,7 +331,7 @@ Use the lowest tier that communicates the required depth:
 | --- | --- | --- |
 | Flat | `liquid-glass-flat` | Solid-fill assistant response/message surfaces, tables, glass cards, and signup/login/onboarding cards. |
 | Subtle | `liquid-glass-subtle` | Modal inputs, dropdown triggers, tab pills, PageHeader actions, and search/select controls. |
-| Float | `liquid-glass-float` | Solid-fill open dropdowns/submenus, `AppSidebar`, and persistent app/assistant/document/tabular side panels. Uses the original AppSidebar shadow depth. |
+| Float | `liquid-glass-float` | Solid-fill open dropdowns/submenus, `AppSidebar`, page sheets (`PageSheet`), and persistent app/assistant/document/tabular side panels. Uses the original AppSidebar shadow depth. |
 | Modal | `liquid-glass-modal` | The modal frame only; modal contents use the appropriate general tier. |
 | Translucent | `liquid-glass-translucent` | Chat composer, ask-input surfaces, slash menus, and other translucent content overlays. |
 | Translucent action modifier | `liquid-glass-translucent-action` | Compact over-message actions such as scroll-to-bottom; use with `liquid-glass-translucent`. |

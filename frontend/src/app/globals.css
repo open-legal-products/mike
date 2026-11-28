@@ -22,6 +22,12 @@
     background-color: var(--table-cell-background);
 }
 
+/* On a page sheet the table sits on the sheet's fill, not the page's, so its
+   sticky layers back onto that instead. */
+[data-slot="page-sheet"] .table-surface {
+    --table-cell-background: var(--liquid-glass-background-float);
+}
+
 .table-surface .table-sticky-cell.liquid-glass-selected {
     background-color: var(--liquid-glass-selected-background);
 }

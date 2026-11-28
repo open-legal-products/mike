@@ -3,6 +3,7 @@
 import React, { useSyncExternalStore } from "react";
 import { Settings2 } from "lucide-react";
 import { cn } from "@/app/lib/utils";
+import { useOnPageSheet } from "./PageSheet";
 import {
     TabPillButtonUI,
     TabPillSurfaceContext,
@@ -64,6 +65,8 @@ export function TableToolbar<T extends string>({
         getDesktopSnapshot,
         getDesktopServerSnapshot,
     );
+    // On a page sheet it lines up with the sheet header's title instead.
+    const onSheet = useOnPageSheet();
 
     return (
         // Its pills, and those its actions render, have no glass: text, with
@@ -72,8 +75,10 @@ export function TableToolbar<T extends string>({
             <div
                 className={cn(
                     // The first pill's left end lines up with the page
-                    // title, 16px in and 24px from md up.
-                    "mx-4 mb-2 flex h-10 items-center md:mx-6",
+                    // title: 16px in and 24px from md up, or 12px on a
+                    // page sheet.
+                    "mb-2 flex h-10 items-center",
+                    onSheet ? "mx-3" : "mx-4 md:mx-6",
                     className,
                 )}
             >

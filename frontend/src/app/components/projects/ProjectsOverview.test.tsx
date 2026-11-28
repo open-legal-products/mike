@@ -116,6 +116,24 @@ describe("ProjectsOverview tabs", () => {
         );
     });
 
+    it("sets the whole page on one glass sheet, its header and toolbar pills without glass of their own", () => {
+        const { container } = render(<ProjectsOverview />);
+        const sheet = container.querySelector('[data-slot="page-sheet"]');
+        expect(sheet).toHaveClass("liquid-glass-float", "rounded-2xl");
+        expect(sheet).toContainElement(
+            screen.getByRole("heading", { name: "Projects" }),
+        );
+        const toolbarPill = screen.getAllByRole("button").find(
+            (button) => button.dataset.slot === "tab-pill-button",
+        );
+        expect(toolbarPill).toHaveAttribute("data-surface", "plain");
+        expect(
+            screen
+                .getByRole("button", { name: "New project" })
+                .closest("[data-surface]"),
+        ).toHaveAttribute("data-surface", "plain");
+    });
+
     it.each([1, 2])("matches toolbar and right-click actions for %i selected projects", async (count) => {
         const user = userEvent.setup();
         projectRows.current = [1, 2].map((index) => ({

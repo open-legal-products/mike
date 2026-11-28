@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/app/lib/utils";
+import { useOnPageSheet } from "./PageSheet";
 import {
     Dropdown,
     DropdownAtPoint,
@@ -281,19 +282,32 @@ export function TableScrollArea({
     preserveGridBorder?: boolean;
     scrollRef?: RefObject<HTMLDivElement | null>;
 }) {
+    // On a page sheet the table runs to the sheet's edges: its first cell's
+    // own padding lines its checkboxes up with the header's title.
+    const onSheet = useOnPageSheet();
     return (
         <div
             className={cn(
-                "mb-2 min-h-0 min-w-0 flex-1 md:mb-3",
-                preserveGridBorder
-                    ? // A table with drawn grid lines lines its outer border
-                      // up with the page header: the title on the left (16px,
-                      // 24px from md up) and the header's buttons on the right
-                      // (16px, 20px from md up).
-                      "mx-4 rounded-2xl md:ml-6 md:mr-5"
-                    : // Otherwise the first column's checkbox or text (1px
-                      // border plus 12px padding in) lines up with the title.
-                      "mx-[3px] md:mx-[11px]",
+                "min-h-0 min-w-0 flex-1",
+                onSheet
+                    ? // On a page sheet the table runs to the sheet's edges;
+                      // one with drawn grid lines keeps a 12px inset, in line
+                      // with the sheet header's title.
+                      preserveGridBorder && "mx-3 mb-3 rounded-2xl"
+                    : cn(
+                          "mb-2 md:mb-3",
+                          preserveGridBorder
+                              ? // A table with drawn grid lines lines its
+                                // outer border up with the page header: the
+                                // title on the left (16px, 24px from md up)
+                                // and the header's buttons on the right (16px,
+                                // 20px from md up).
+                                "mx-4 rounded-2xl md:ml-6 md:mr-5"
+                              : // Otherwise the first column's checkbox or
+                                // text (1px border plus 12px padding in)
+                                // lines up with the title.
+                                "mx-[3px] md:mx-[11px]",
+                      ),
                 className,
             )}
         >

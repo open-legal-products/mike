@@ -25,8 +25,10 @@ import {
 } from "@/app/components/ui/liquid-surface";
 import {
     PAGE_HEADER_ROW_CLASS,
+    PAGE_HEADER_SHEET_ROW_CLASS,
     PAGE_HEADER_TITLE_CLASS,
 } from "./pageHeaderStyles";
+import { useOnPageSheet } from "./PageSheet";
 
 export interface PageHeaderBreadcrumb {
     label?: ReactNode;
@@ -100,6 +102,9 @@ export function PageHeader({
     loading = false,
 }: PageHeaderProps) {
     const { mobileActionsContainer } = usePageChrome();
+    // On a page sheet the groups drop their own pill. The small-screen copy
+    // goes to the top bar, off the sheet, so it keeps it.
+    const onSheet = useOnPageSheet();
     const headerContent = breadcrumbs?.length ? (
         <PageHeaderBreadcrumbs items={breadcrumbs} />
     ) : (
@@ -120,12 +125,17 @@ export function PageHeader({
         <div
             className={cn(
                 "flex items-center justify-between",
-                // Below md the title lines up with the top bar's sidebar
-                // toggle, which sits 16px in. From md up it sits 24px in, in
-                // line with the toolbar's first pill and the table's first
-                // column; the buttons stay 20px from the right.
-                "mx-4 md:ml-6 md:mr-5",
-                PAGE_HEADER_ROW_CLASS,
+                onSheet
+                    ? PAGE_HEADER_SHEET_ROW_CLASS
+                    : cn(
+                          // Below md the title lines up with the top bar's
+                          // sidebar toggle, which sits 16px in. From md up it
+                          // sits 24px in, in line with the toolbar's first
+                          // pill and the table's first column; the buttons
+                          // stay 20px from the right.
+                          "mx-4 md:ml-6 md:mr-5",
+                          PAGE_HEADER_ROW_CLASS,
+                      ),
                 shrink && "shrink-0",
             )}
         >
@@ -135,6 +145,7 @@ export function PageHeader({
                     <PageHeaderActionGroups
                         groupedActionItems={groupedActionItems}
                         actionsDisabled={actionsDisabled}
+                        surface={onSheet ? "plain" : "subtle"}
                     />
                 </div>
             )}
@@ -156,16 +167,18 @@ export function PageHeader({
 function PageHeaderActionGroups({
     groupedActionItems,
     actionsDisabled,
+    surface = "subtle",
 }: {
     groupedActionItems: {
         actions: PageHeaderAction[];
     }[];
     actionsDisabled: boolean;
+    surface?: "subtle" | "plain";
 }) {
     return (
         <>
             {groupedActionItems.map((group, groupIndex) => (
-                <HeaderButtonsUI key={groupIndex}>
+                <HeaderButtonsUI key={groupIndex} surface={surface}>
                     {group.actions.map((action, index) => (
                         <PageHeaderActionRenderer
                             key={index}
