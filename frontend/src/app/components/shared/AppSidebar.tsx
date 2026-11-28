@@ -510,26 +510,36 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     isOpen ? "rounded-2xl" : "rounded-[21px]",
                     "my-2 ml-2 mr-0 md:my-3 md:ml-3 md:mr-0 overflow-visible",
                     LIQUID_GLASS_FLOAT_CLASS,
-                    // The one horizontal inset for everything in the sidebar.
-                    "absolute z-[99] flex shrink-0 flex-col px-1.5 transition-all duration-300 motion-reduce:transition-none md:relative",
+                    // The one inset for everything in the sidebar. The header
+                    // and the account button are their 28px controls' height,
+                    // so the header's middle sits 20px down: level with the
+                    // page title beside it.
+                    "absolute z-[99] flex shrink-0 flex-col p-1.5 transition-all duration-300 motion-reduce:transition-none md:relative",
                 )}
             >
                 {/* Toggle + Logo */}
+                {/* Fixed at the controls' height: while the sidebar opens, the
+                    name briefly drops to its two-line setting (35px), and a row
+                    that grew with it jolted everything below. It overflows evenly
+                    into the padding instead. */}
                 <div
-                    className={`h-10 shrink-0 items-center justify-between gap-1 ${
+                    className={`h-7 shrink-0 items-center justify-between gap-1 ${
                         !isOpen ? "hidden md:flex" : "flex"
                     }`}
                 >
                     {isOpen && (
-                        <div className="min-w-0 flex-1 px-1.5">
+                        <div className="min-w-0 flex-1">
                             {canSwitchWorkspace ? (
                                 <Dropdown>
                                     <DropdownTrigger asChild>
+                                        {/* Reaches the sidebar's inner edge, its
+                                            own padding keeping the logo 6px in,
+                                            so the menu opens from that edge. */}
                                         <button
                                             type="button"
                                             aria-label="Switch workspace"
                                             title={sidebarHeading ?? undefined}
-                                            className="flex w-full min-w-0 items-center gap-1.5 text-left transition-opacity hover:opacity-80"
+                                            className="flex w-full min-w-0 items-center gap-1.5 px-1.5 text-left transition-opacity hover:opacity-80"
                                         >
                                             {renderSidebarMark(
                                                 <ChevronDown
@@ -539,9 +549,12 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             )}
                                         </button>
                                     </DropdownTrigger>
+                                    {/* As wide as the account menu: the sidebar's
+                                        inner width, which is this button plus
+                                        the 28px toggle and 4px gap beside it. */}
                                     <DropdownContent
                                         align="start"
-                                        className="w-56 whitespace-nowrap"
+                                        className="w-[calc(var(--radix-dropdown-menu-trigger-width)+32px)] whitespace-nowrap"
                                     >
                                         <WorkspaceMenuUI
                                             workspaceId={workspaceId}
@@ -564,7 +577,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                             ) : (
                                 <Link
                                     href={WORKSPACE_HOME}
-                                    className="flex min-w-0 items-center gap-1.5 hover:opacity-80 transition-opacity"
+                                    className="flex min-w-0 items-center gap-1.5 px-1.5 hover:opacity-80 transition-opacity"
                                 >
                                     {renderSidebarMark()}
                                 </Link>
@@ -946,7 +959,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 </div>
 
                 {/* User Profile */}
-                <div className="shrink-0 py-1">
+                <div className="shrink-0">
                     {user && (
                         <Dropdown
                             open={isDropdownOpen}
