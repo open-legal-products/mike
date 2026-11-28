@@ -71,9 +71,9 @@ export function TableToolbar<T extends string>({
         <TabPillSurfaceContext.Provider value="plain">
             <div
                 className={cn(
-                    // The first pill's text (12px inside it) lines up with
-                    // the page title, 16px in and 24px from md up.
-                    "mx-1 mb-2 flex h-10 items-center md:mx-3",
+                    // The first pill's left end lines up with the page
+                    // title, 16px in and 24px from md up.
+                    "mx-4 mb-2 flex h-10 items-center md:mx-6",
                     className,
                 )}
             >

@@ -46,6 +46,14 @@ function renderPanels(variant: "sidebar" | "trailing" = "sidebar") {
 }
 
 describe("playbook panels", () => {
+  it("lines its cards' edges up with the page title", () => {
+    renderPanels();
+    const grid = screen.getByText("Rules").parentElement!.parentElement!;
+    // 14px + the 2px kept for the cards' shadows = the title's 16px;
+    // 22px + 2px = 24px from md up.
+    expect(grid).toHaveClass("mx-3.5", "md:mx-[22px]", "p-0.5");
+  });
+
   it("resizes a right-hand pane in the drag direction and supports keyboard limits", () => {
     const { divider } = renderPanels("trailing");
     expect(divider).toHaveAttribute("aria-valuenow", "448");
