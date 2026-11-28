@@ -10,6 +10,7 @@ import { SidebarContext } from "@/app/contexts/SidebarContext";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 import { AppSidebar } from "@/app/components/shared/AppSidebar";
 import { useResponsiveSidebar } from "@/app/hooks/useResponsiveSidebar";
+import { useContentAreaInsets } from "@/app/hooks/useContentAreaInsets";
 import { preloadSidebarIcons } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { HeaderButtonUI, HeaderButtonsUI } from "@mike/ui";
@@ -38,6 +39,10 @@ export default function MikeLayout({
         useState<HTMLDivElement | null>(null);
     const [mobileBackContainer, setMobileBackContainer] =
         useState<HTMLDivElement | null>(null);
+
+    // Where the page beside the sidebar sits, for notices and confirmations
+    // to centre on.
+    const contentAreaRef = useContentAreaInsets();
 
     const {
         isOpen: isSidebarOpen,
@@ -89,7 +94,11 @@ export default function MikeLayout({
                                     isOpen={isSidebarOpen}
                                     onToggle={handleSidebarToggle}
                                 />
-                                <div className="flex-1 flex flex-col h-dvh md:overflow-hidden relative w-full">
+                                <div
+                                    ref={contentAreaRef}
+                                    data-slot="content-area"
+                                    className="flex-1 flex flex-col h-dvh md:overflow-hidden relative w-full"
+                                >
                                     {/* Mobile header */}
                                     <div
                                         data-slot="mobile-header"

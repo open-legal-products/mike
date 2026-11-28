@@ -4,6 +4,11 @@
  * dark-theme elevation recipes.
  */
 export const LIQUID_GLASS_FLAT_CLASS = "liquid-glass-flat";
+/**
+ * Spans a fixed overlay across the app's content area rather than the
+ * window; with `mx-auto` and a width it centres there. See ThemeTokensUI.css.
+ */
+export const CONTENT_AREA_INSET_X_CLASS = "content-area-inset-x";
 export const LIQUID_GLASS_SUBTLE_CLASS = "liquid-glass-subtle";
 export const LIQUID_GLASS_FLOAT_CLASS = "liquid-glass-float";
 export const LIQUID_GLASS_MODAL_CLASS = "liquid-glass-modal";

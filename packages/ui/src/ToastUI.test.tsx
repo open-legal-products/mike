@@ -11,6 +11,13 @@ import {
 } from "./ToastUI";
 
 describe("ToastUI", () => {
+    it("centres its column on the page beside the sidebar, not the window", () => {
+        render(<ToastViewportUI />);
+        const viewport = screen.getByRole("region", { name: "Notifications" });
+        expect(viewport).toHaveClass("content-area-inset-x", "mx-auto");
+        expect(viewport).not.toHaveClass("left-1/2", "-translate-x-1/2");
+    });
+
     beforeEach(() => {
         vi.useFakeTimers();
         clearToasts();

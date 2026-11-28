@@ -2,7 +2,12 @@
 
 import { createPortal } from "react-dom";
 import { useEffect, type ReactNode } from "react";
-import { PillButtonUI, NoticeCardUI, useNoticeStackSlot } from "@mike/ui";
+import {
+    CONTENT_AREA_INSET_X_CLASS,
+    PillButtonUI,
+    NoticeCardUI,
+    useNoticeStackSlot,
+} from "@mike/ui";
 
 /**
  * A single warning that the calling component opens and closes itself.
@@ -106,7 +111,10 @@ export function WarningPopup({
     if (stackSlot) return createPortal(card, stackSlot);
 
     return createPortal(
-        <div className="pointer-events-none fixed left-1/2 top-5 z-[220] w-[min(92vw,520px)] -translate-x-1/2 px-4">
+        // Centred on the page beside the sidebar, not the window.
+        <div
+            className={`pointer-events-none fixed top-5 z-[220] mx-auto w-[min(92vw,520px)] px-4 ${CONTENT_AREA_INSET_X_CLASS}`}
+        >
             {card}
         </div>,
         document.body,

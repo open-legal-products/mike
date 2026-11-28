@@ -6,6 +6,13 @@ import { clearToasts, showToast, ToastViewportUI } from "@mike/ui";
 describe("WarningPopup", () => {
     afterEach(() => clearToasts());
 
+    it("centres on the page beside the sidebar when it has no toast column", () => {
+        render(<WarningPopup open title="Save failed" onClose={vi.fn()} />);
+        const layer = screen.getByRole("alert").closest(".fixed");
+        expect(layer).toHaveClass("content-area-inset-x", "mx-auto");
+        expect(layer).not.toHaveClass("left-1/2", "-translate-x-1/2");
+    });
+
     it("announces warnings and closes on Escape", () => {
         const onClose = vi.fn();
         render(
