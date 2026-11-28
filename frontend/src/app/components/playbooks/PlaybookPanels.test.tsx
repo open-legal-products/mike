@@ -60,10 +60,12 @@ describe("playbook panels", () => {
     // Past the sheet's edges by 8px, so the panes' 20px inset puts their text
     // 12px in; to the sheet's foot; and its usual card spacing below md.
     expect(grid).toHaveClass("md:-mx-2", "md:mb-0", "md:p-0", "mx-3.5");
+    // A line across the top of both panes.
+    expect(grid).toHaveClass("md:border-t", "md:border-border");
     const line = screen
       .getByRole("separator", { name: "Resize rules panel" })
       .querySelector(".rounded-full");
-    expect(line).toHaveClass("md:bg-border", "inset-y-0");
+    expect(line).toHaveClass("md:bg-border", "inset-y-0", "md:w-px");
   });
 
   it("lines its cards' edges up with the page title", () => {

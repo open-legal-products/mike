@@ -693,7 +693,8 @@ export function PlaybookEditor({
             {RULE_FORM_TABS.map((tab) => (
               <TabPillButtonUI
                 key={tab.id}
-                surface="flat"
+                // Styled like the page toolbar's tabs.
+                surface="plain"
                 active={ruleTab === tab.id}
                 onClick={() => {
                   setRuleTab(tab.id);
