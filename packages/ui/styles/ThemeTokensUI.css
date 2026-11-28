@@ -295,3 +295,12 @@
 ::highlight(response-excerpt) {
     background-color: var(--excerpt-selection-background);
 }
+
+/* An overlay fixed to the window but centred on the app's content area (the
+   page beside the sidebar). The web app's layout publishes the area's edges;
+   anywhere else they are 0 and this is the window. Pair it with `mx-auto` and
+   a width, so the overlay centres between the two edges. */
+.content-area-inset-x {
+    left: var(--app-content-left, 0px);
+    right: var(--app-content-right, 0px);
+}

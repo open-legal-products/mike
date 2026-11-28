@@ -25,6 +25,7 @@ import {
 } from "react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { CONTENT_AREA_INSET_X_CLASS } from "./LiquidGlassUI";
 import {
     NoticeCardUI,
     noticeActionClassName,
@@ -266,7 +267,8 @@ export function ToastViewportUI({
             aria-label="Notifications"
             className={twMerge(
                 clsx(
-                    "pointer-events-none fixed left-1/2 top-5 z-[260] flex w-[min(92vw,520px)] -translate-x-1/2 flex-col gap-2 px-4",
+                    // Centred on the page beside the sidebar, not the window.
+                    `pointer-events-none fixed top-5 z-[260] mx-auto flex w-[min(92vw,520px)] flex-col gap-2 px-4 ${CONTENT_AREA_INSET_X_CLASS}`,
                 ),
                 className,
             )}

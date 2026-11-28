@@ -4,6 +4,15 @@ import { ConfirmPopup } from "./ConfirmPopup";
 import { ModalUI } from "@mike/ui";
 
 describe("ConfirmPopup", () => {
+  it("centres on the page beside the sidebar, not the window", () => {
+    render(
+      <ConfirmPopup open title="Delete?" onConfirm={vi.fn()} onCancel={vi.fn()} />,
+    );
+    const layer = screen.getByRole("dialog", { name: "Delete?" }).parentElement;
+    expect(layer).toHaveClass("content-area-inset-x", "justify-center");
+    expect(layer).not.toHaveClass("inset-x-0");
+  });
+
   it("uses the configured danger variant for non-Delete labels", () => {
     render(
       <ConfirmPopup

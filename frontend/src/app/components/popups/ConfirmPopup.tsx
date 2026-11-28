@@ -3,7 +3,12 @@
 import { createPortal } from "react-dom";
 import { useEffect, useId, type ReactNode } from "react";
 import { Trash2 } from "lucide-react";
-import { PillButtonUI, CloseButton, LIQUID_GLASS_FLOAT_CLASS } from "@mike/ui";
+import {
+  PillButtonUI,
+  CloseButton,
+  CONTENT_AREA_INSET_X_CLASS,
+  LIQUID_GLASS_FLOAT_CLASS,
+} from "@mike/ui";
 import { cn } from "@/app/lib/utils";
 
 type ConfirmStatus = "idle" | "loading" | "complete";
@@ -83,7 +88,10 @@ export function ConfirmPopup({
     );
 
   return createPortal(
-    <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[230] flex justify-center px-4">
+    // Centred on the page beside the sidebar, not the window.
+    <div
+      className={`pointer-events-none fixed bottom-5 z-[230] flex justify-center px-4 ${CONTENT_AREA_INSET_X_CLASS}`}
+    >
       <div
         role="dialog"
         aria-labelledby={title ? titleId : undefined}
