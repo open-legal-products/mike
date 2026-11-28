@@ -384,7 +384,7 @@ export const WorkflowAssets = forwardRef<
       {error && (
         <p
           role="alert"
-          className="mx-4 mb-2 -mt-1 text-xs text-red-600 md:mx-8"
+          className="mx-4 mb-2 -mt-1 text-xs text-red-600 md:mx-3"
         >
           {error}
         </p>

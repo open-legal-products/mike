@@ -39,6 +39,8 @@ export default function MikeLayout({
         useState<HTMLDivElement | null>(null);
     const [mobileBackContainer, setMobileBackContainer] =
         useState<HTMLDivElement | null>(null);
+    const [mobileTitleContainer, setMobileTitleContainer] =
+        useState<HTMLDivElement | null>(null);
 
     // Where the page beside the sidebar sits, for notices and confirmations
     // to centre on.
@@ -64,9 +66,20 @@ export default function MikeLayout({
         [],
     );
 
+    const handleMobileTitleContainerRef = useCallback(
+        (node: HTMLDivElement | null) => {
+            setMobileTitleContainer(node);
+        },
+        [],
+    );
+
     const pageChromeValue = useMemo(
-        () => ({ mobileActionsContainer, mobileBackContainer }),
-        [mobileActionsContainer, mobileBackContainer],
+        () => ({
+            mobileActionsContainer,
+            mobileBackContainer,
+            mobileTitleContainer,
+        }),
+        [mobileActionsContainer, mobileBackContainer, mobileTitleContainer],
     );
 
     const sidebarValue = useMemo(() => ({ setSidebarOpen }), [setSidebarOpen]);
@@ -133,9 +146,19 @@ export default function MikeLayout({
                                             data-slot="mobile-back"
                                             className="pointer-events-auto flex shrink-0 empty:hidden"
                                         />
+                                        {/* A sheet page's title, after the
+                                            buttons on the left. */}
+                                        <div
+                                            ref={handleMobileTitleContainerRef}
+                                            data-slot="mobile-title"
+                                            className="pointer-events-auto flex min-w-0 flex-1 items-center empty:hidden"
+                                        />
+                                        {/* Beside a title, only as wide as
+                                            its buttons; the title takes the
+                                            rest. */}
                                         <div
                                             ref={handleMobileActionsContainerRef}
-                                            className="pointer-events-auto ml-auto flex min-w-0 flex-1 items-center justify-end"
+                                            className="pointer-events-auto ml-auto flex min-w-0 flex-1 items-center justify-end [[data-slot=mobile-title]:not(:empty)~&]:flex-initial"
                                         />
                                     </div>
                                     <main className="flex h-full w-full flex-1 flex-col overflow-y-auto md:overflow-hidden">

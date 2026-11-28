@@ -119,7 +119,7 @@ describe("ProjectsOverview tabs", () => {
     it("sets the whole page on one glass sheet, its header and toolbar pills without glass of their own", () => {
         const { container } = render(<ProjectsOverview />);
         const sheet = container.querySelector('[data-slot="page-sheet"]');
-        expect(sheet).toHaveClass("liquid-glass-float", "rounded-2xl");
+        expect(sheet).toHaveClass("liquid-glass-float", "md:rounded-2xl");
         expect(sheet).toContainElement(
             screen.getByRole("heading", { name: "Projects" }),
         );

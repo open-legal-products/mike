@@ -17,6 +17,23 @@ const openSearch = () =>
     fireEvent.click(screen.getByRole("button", { name: "Search settings" }));
 
 describe("SettingsSearch", () => {
+    it("as a field, is an open box from the start that stays open when left empty", async () => {
+        const user = userEvent.setup();
+        render(<SettingsSearch entries={SETTINGS_SEARCH_ENTRIES} variant="field" />);
+
+        const box = screen.getByRole("searchbox", { name: "Search settings" });
+        expect(box).not.toHaveFocus();
+        expect(
+            screen.queryByRole("button", { name: "Search settings" }),
+        ).not.toBeInTheDocument();
+        await user.click(box);
+        await user.keyboard("{Escape}");
+        await user.tab();
+        expect(
+            screen.getByRole("searchbox", { name: "Search settings" }),
+        ).toBeInTheDocument();
+    });
+
     beforeEach(() => {
         vi.clearAllMocks();
         navigation.pathname = "/settings";

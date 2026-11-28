@@ -94,10 +94,10 @@ describe("TableToolbar", () => {
         );
         const toolbar = container.querySelector('[data-slot="page-sheet"]')!
             .firstElementChild;
-        expect(toolbar).toHaveClass("mx-3");
-        expect(toolbar).not.toHaveClass("mx-4", "md:mx-6");
-        // More room above it than below on a sheet.
-        expect(toolbar).toHaveClass("mt-2");
-        expect(toolbar).not.toHaveClass("mb-1", "mb-2");
+        // From md up, where the sheet is: in line with its title, with more
+        // room above than below. Below md, its usual 16px and spacing.
+        expect(toolbar).toHaveClass("md:mx-3", "md:mt-2", "md:mb-0");
+        expect(toolbar).toHaveClass("mx-4", "mb-2");
+        expect(toolbar).not.toHaveClass("md:mx-6");
     });
 });

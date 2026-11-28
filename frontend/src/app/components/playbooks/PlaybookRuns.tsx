@@ -17,10 +17,7 @@ import { DocxView } from "@/app/components/shared/views/DocxView";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { SkeletonLine } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import {
-  EDITOR_SURFACE_CLASS,
-  LIQUID_GLASS_FLAT_CLASS,
-} from "@/app/components/ui/liquid-surface";
+import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import {
   listPlaybookRuns,
   type PlaybookFinding,
@@ -44,6 +41,7 @@ import {
   PLAYBOOK_SIDE_HEADER_CLASS,
   PLAYBOOK_SIDE_LIST_CLASS,
   PLAYBOOK_SIDE_TITLE_CLASS,
+  PLAYBOOK_PANE_SURFACE_CLASS,
 } from "./playbookPaneStyles";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -293,7 +291,7 @@ export function PlaybookRuns({
       <section
         ref={documentPane}
         aria-label="Reviewed document"
-        className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden @[41rem]/run-layout:min-h-0 ${EDITOR_SURFACE_CLASS}`}
+        className={`flex min-h-[24rem] min-w-0 flex-col overflow-hidden @[41rem]/run-layout:min-h-0 ${PLAYBOOK_PANE_SURFACE_CLASS}`}
       >
         <div
           className={`flex items-center gap-2 ${PLAYBOOK_PANE_HEADER_CLASS}`}
@@ -344,7 +342,7 @@ export function PlaybookRuns({
   const resultsPanel = (
     <section
       aria-label="Run results"
-      className={`@container flex min-h-[24rem] min-w-0 flex-1 flex-col overflow-hidden @[48rem]:min-h-0 @[41rem]/run-layout:min-h-0 ${EDITOR_SURFACE_CLASS}`}
+      className={`@container flex min-h-[24rem] min-w-0 flex-1 flex-col overflow-hidden @[48rem]:min-h-0 @[41rem]/run-layout:min-h-0 ${PLAYBOOK_PANE_SURFACE_CLASS}`}
     >
       {selected ? (
         <>
@@ -437,7 +435,7 @@ export function PlaybookRuns({
       sidebar={
         <section
           aria-label="Your runs"
-          className={`flex min-h-0 min-w-0 flex-col ${EDITOR_SURFACE_CLASS}`}
+          className={`flex min-h-0 min-w-0 flex-col ${PLAYBOOK_PANE_SURFACE_CLASS}`}
         >
           <div
             className={`flex items-center justify-between gap-2 ${PLAYBOOK_SIDE_HEADER_CLASS}`}

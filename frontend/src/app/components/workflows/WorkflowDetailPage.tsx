@@ -59,6 +59,7 @@ import { AccessModal } from "@/app/components/modals/AccessModal";
 import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { OpenSourceWorkflowModal } from "@/app/components/workflows/OpenSourceWorkflowModal";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI, TabPillButtonUI } from "@mike/ui";
 import {
@@ -523,7 +524,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   // ---------------------------------------------------------------------------
   if (loading) {
     return (
-      <div className="flex h-full flex-col">
+      <PageSheet>
         <PageHeader
           shrink
           breadcrumbs={[
@@ -542,7 +543,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
             <AssistantWorkflowEditorSkeleton />
           )}
         </div>
-      </div>
+      </PageSheet>
     );
   }
 
@@ -615,8 +616,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   }
 
   return (
-    <div
-      className="flex flex-col h-full"
+    <PageSheet
       onDragOver={handleAssetDragOver}
       onDragLeave={handleAssetDragLeave}
       onDrop={handleAssetDrop}
@@ -862,7 +862,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
               onChange={setAssistantTab}
             />
             {assistantTab === "prompt" ? (
-              <div className="mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-8 md:mb-3">
+              <div className="mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-3 md:mb-3">
                 <MarkdownEditor
                   ariaLabel="Workflow prompt"
                   value={promptMd}
@@ -903,7 +903,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
               />
             )}
             {readOnly && (
-              <div className="flex h-10 shrink-0 items-center bg-gray-50 px-4 md:px-10">
+              <div className="flex h-10 shrink-0 items-center bg-gray-50 px-4 md:px-3">
                 <span className="text-xs font-medium text-gray-500">
                   Read-only
                 </span>
@@ -1125,7 +1125,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
           />
         )}
       </DocumentWorkspaceScope>
-    </div>
+    </PageSheet>
   );
 }
 
@@ -1139,7 +1139,7 @@ function AssistantWorkflowEditorSkeleton() {
         ]}
         active="prompt"
       />
-      <div className="mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-8 md:mb-3">
+      <div className="mx-4 mb-2 min-h-0 min-w-0 flex-1 md:mx-3 md:mb-3">
         <div className={`h-full px-5 py-4 ${EDITOR_SURFACE_CLASS}`}>
           <div className="space-y-3">
             <div className="h-3 w-24 animate-pulse rounded bg-gray-100" />

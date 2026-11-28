@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useWorkspace } from "@/app/contexts/WorkspaceContext";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { TableLoadMoreRow } from "@/app/components/shared/TableLoadMoreRow";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
@@ -472,7 +473,7 @@ export function OrganizationMembers({
     ) : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+    <PageSheet>
       <PageHeader
         loading={loading}
         breadcrumbs={[
@@ -633,7 +634,7 @@ export function OrganizationMembers({
         message={actionError}
         onClose={() => setActionError(null)}
       />
-    </div>
+    </PageSheet>
   );
 }
 

@@ -10,7 +10,6 @@ import { useModelApiKeys } from "@/app/hooks/useModelApiKeys";
 import { useModelRouterSelections } from "@/app/hooks/useModelRouterSelections";
 import type { NoModelsReason } from "@mike/client";
 import type { PlaybookReviewScope } from "@/app/lib/mikeApi";
-import { EDITOR_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import { PillButtonUI } from "@mike/ui";
 import {
   PLAYBOOK_HELP_CLASS,
@@ -26,6 +25,7 @@ import {
   PLAYBOOK_PANE_HEADER_CLASS,
   PLAYBOOK_PANE_INSET_CLASS,
   PLAYBOOK_PANE_TITLE_CLASS,
+  PLAYBOOK_PANE_SURFACE_CLASS,
 } from "./playbookPaneStyles";
 
 export type ReviewMode = "strict" | "permissive";
@@ -96,7 +96,7 @@ export function PlaybookNewRun({
   return (
     <section
       aria-labelledby={headingId}
-      className={`@container flex min-h-[24rem] min-w-0 flex-1 flex-col overflow-hidden @[48rem]:min-h-0 ${EDITOR_SURFACE_CLASS}`}
+      className={`@container flex min-h-[24rem] min-w-0 flex-1 flex-col overflow-hidden @[48rem]:min-h-0 ${PLAYBOOK_PANE_SURFACE_CLASS}`}
     >
       <div className={PLAYBOOK_PANE_HEADER_CLASS}>
         <h2 id={headingId} className={PLAYBOOK_PANE_TITLE_CLASS}>

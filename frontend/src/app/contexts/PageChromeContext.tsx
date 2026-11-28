@@ -7,6 +7,11 @@ interface PageChromeContextValue {
     mobileActionsContainer: HTMLElement | null;
     /** The top bar's slot beside the sidebar toggle, for a page's way back. */
     mobileBackContainer: HTMLElement | null;
+    /**
+     * The top bar's slot after its left buttons, where a page on a sheet puts
+     * its title on a small screen instead of a row of its own.
+     */
+    mobileTitleContainer?: HTMLElement | null;
 }
 
 export const PageChromeContext = createContext<PageChromeContextValue>({

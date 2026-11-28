@@ -290,10 +290,13 @@ export function TableScrollArea({
             className={cn(
                 "min-h-0 min-w-0 flex-1",
                 onSheet
-                    ? // On a page sheet the table runs to the sheet's edges;
-                      // one with drawn grid lines keeps a 12px inset, in line
-                      // with the sheet header's title.
-                      preserveGridBorder && "mx-3 mb-3 rounded-2xl"
+                    ? // On a page sheet (md up) the table runs to the sheet's
+                      // edges, one with drawn grid lines too: globals.css
+                      // drops its side and foot lines there. Below md there
+                      // is no sheet, and it lines up with the top bar's 16px.
+                      preserveGridBorder
+                        ? "mx-4 mb-2 rounded-2xl md:mx-0 md:mb-0 md:rounded-none"
+                        : "mx-[3px] mb-2 md:mx-0 md:mb-0"
                     : cn(
                           "mb-2 md:mb-3",
                           preserveGridBorder

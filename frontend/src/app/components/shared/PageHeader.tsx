@@ -29,6 +29,7 @@ import {
     PAGE_HEADER_TITLE_CLASS,
 } from "./pageHeaderStyles";
 import { useOnPageSheet } from "./PageSheet";
+import { useIsDesktop } from "@/app/hooks/useIsDesktop";
 
 export interface PageHeaderBreadcrumb {
     label?: ReactNode;
@@ -101,7 +102,8 @@ export function PageHeader({
     breadcrumbs,
     loading = false,
 }: PageHeaderProps) {
-    const { mobileActionsContainer } = usePageChrome();
+    const { mobileActionsContainer, mobileTitleContainer } = usePageChrome();
+    const isDesktop = useIsDesktop();
     // On a page sheet the groups drop their own pill. The small-screen copy
     // goes to the top bar, off the sheet, so it keeps it.
     const onSheet = useOnPageSheet();
@@ -120,6 +122,45 @@ export function PageHeader({
         (actionItems.length > 0 ? [{ actions: actionItems }] : [])
     );
     const hasActions = groupedActionItems.length > 0;
+    // On a page sheet the groups have no pills to tell them apart, so the
+    // buttons beside the title are one row. The top bar, off the sheet,
+    // keeps its groups.
+    const headerActionGroups =
+        onSheet && hasActions
+            ? [{ actions: groupedActionItems.flatMap((group) => group.actions) }]
+            : groupedActionItems;
+
+    // On a small screen a sheet page's title joins the top bar, after its
+    // buttons on the left, instead of taking a row of its own. Rendered in one
+    // place or the other, never both, so it is announced once.
+    const titleInTopBar = onSheet && !isDesktop && !!mobileTitleContainer;
+
+    const mobileActions =
+        hasActions && mobileActionsContainer
+            ? createPortal(
+                  <div className="flex min-w-0 items-center justify-end gap-3 overflow-visible py-2 -my-2">
+                      <PageHeaderActionGroups
+                          groupedActionItems={groupedActionItems}
+                          actionsDisabled={actionsDisabled}
+                      />
+                  </div>,
+                  mobileActionsContainer,
+              )
+            : null;
+
+    if (titleInTopBar) {
+        return (
+            <>
+                {createPortal(
+                    <div className="flex min-w-0 flex-1 items-center">
+                        {headerContent}
+                    </div>,
+                    mobileTitleContainer,
+                )}
+                {mobileActions}
+            </>
+        );
+    }
 
     return (
         <div
@@ -143,23 +184,13 @@ export function PageHeader({
             {hasActions && (
                 <div className="ml-4 hidden shrink-0 items-center gap-3 md:flex">
                     <PageHeaderActionGroups
-                        groupedActionItems={groupedActionItems}
+                        groupedActionItems={headerActionGroups}
                         actionsDisabled={actionsDisabled}
                         surface={onSheet ? "plain" : "subtle"}
                     />
                 </div>
             )}
-            {hasActions &&
-                mobileActionsContainer &&
-                createPortal(
-                    <div className="flex min-w-0 items-center justify-end gap-3 overflow-visible py-2 -my-2">
-                        <PageHeaderActionGroups
-                            groupedActionItems={groupedActionItems}
-                            actionsDisabled={actionsDisabled}
-                        />
-                    </div>,
-                    mobileActionsContainer,
-                )}
+            {mobileActions}
         </div>
     );
 }

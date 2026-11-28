@@ -1,5 +1,6 @@
 "use client";
 
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import {
     createContext,
     type ReactNode,
@@ -591,7 +592,7 @@ export function ProjectWorkspaceProvider({
     return (
         <ProjectWorkspaceContext.Provider value={value}>
             <DocumentWorkspaceScope orgId={projectOrgId}>
-                <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+                <PageSheet className="relative">
                     <ProjectPageHeader
                         project={project}
                         search={search}
@@ -726,7 +727,7 @@ export function ProjectWorkspaceProvider({
                             }}
                         />
                     )}
-                </div>
+                </PageSheet>
             </DocumentWorkspaceScope>
         </ProjectWorkspaceContext.Provider>
     );

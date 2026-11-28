@@ -296,12 +296,13 @@ export function OrganizationSettingsFrame({
       title={areaName}
       rootHref={organizationSettingsHref(orgId)}
       groups={groups}
-      search={
+      search={(variant) => (
         <SettingsSearch
           entries={searchEntries}
           label={`Search ${areaName}`}
+          variant={variant}
         />
-      }
+      )}
     >
       {children}
     </SettingsShell>

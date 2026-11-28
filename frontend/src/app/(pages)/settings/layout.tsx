@@ -243,7 +243,9 @@ export default function SettingsLayout({
             title="Settings"
             rootHref="/settings"
             groups={groups}
-            search={<SettingsSearch entries={searchEntries} />}
+            search={(variant) => (
+                <SettingsSearch entries={searchEntries} variant={variant} />
+            )}
         >
             {children}
         </SettingsShell>

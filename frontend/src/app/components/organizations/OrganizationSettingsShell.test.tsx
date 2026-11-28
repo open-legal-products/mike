@@ -328,8 +328,11 @@ describe("the search", () => {
     const user = userEvent.setup();
     renderShell();
     await screen.findByText("section for Elite Law LLP");
-    await user.click(screen.getByRole("button", { name: "Search Organization" }));
-    await user.type(screen.getByRole("searchbox"), "api key");
+    // On the overview the search is a field under the heading.
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search Organization" }),
+      "api key",
+    );
     expect(screen.getByText(/No settings match/)).toBeInTheDocument();
   });
 
@@ -337,10 +340,10 @@ describe("the search", () => {
     const user = userEvent.setup();
     renderShell();
     await screen.findByText("section for Elite Law LLP");
-    await user.click(
-      screen.getByRole("button", { name: "Search Organization Settings" }),
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search Organization Settings" }),
+      "api key",
     );
-    await user.type(screen.getByRole("searchbox"), "api key");
     await user.keyboard("{Enter}");
     expect(mocks.push).toHaveBeenCalledWith(
       "/organizations/org-1/settings/providers",

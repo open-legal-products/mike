@@ -80,7 +80,11 @@ export function TableToolbar<T extends string>({
                     // buttons, so the toolbar takes more room above (14px to
                     // its pills) than below (just its own row's 6px).
                     "flex h-10 items-center",
-                    onSheet ? "mx-3 mt-2" : "mx-4 mb-2 md:mx-6",
+                    // Below md a sheet is no sheet: the toolbar keeps its
+                    // usual 16px and spacing there.
+                    onSheet
+                        ? "mx-4 mb-2 md:mx-3 md:mb-0 md:mt-2"
+                        : "mx-4 mb-2 md:mx-6",
                     className,
                 )}
             >

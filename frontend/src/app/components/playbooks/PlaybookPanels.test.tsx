@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PageSheet } from "@/app/components/shared/PageSheet";
 import { PlaybookPanels } from "./PlaybookPanels";
 
 let measure: (width: number) => void;
@@ -46,6 +47,25 @@ function renderPanels(variant: "sidebar" | "trailing" = "sidebar") {
 }
 
 describe("playbook panels", () => {
+  it("sets its panes flat on a page sheet, with a line between them", () => {
+    render(
+      <PageSheet>
+        <PlaybookPanels resizeLabel="Resize rules panel" sidebar={<section>Rules</section>}>
+          <section>Form</section>
+        </PlaybookPanels>
+      </PageSheet>,
+    );
+    act(() => measure(900));
+    const grid = screen.getByText("Rules").parentElement!.parentElement!;
+    // Past the sheet's edges by 8px, so the panes' 20px inset puts their text
+    // 12px in; to the sheet's foot; and its usual card spacing below md.
+    expect(grid).toHaveClass("md:-mx-2", "md:mb-0", "md:p-0", "mx-3.5");
+    const line = screen
+      .getByRole("separator", { name: "Resize rules panel" })
+      .querySelector(".rounded-full");
+    expect(line).toHaveClass("md:bg-border", "inset-y-0");
+  });
+
   it("lines its cards' edges up with the page title", () => {
     renderPanels();
     const grid = screen.getByText("Rules").parentElement!.parentElement!;

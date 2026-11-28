@@ -53,8 +53,16 @@ vi.mock("../assistant/ModelToggle", () => ({ ModelToggle: () => null }));
 vi.mock("./TRTable", () => ({ TRTable: () => <div /> }));
 vi.mock("./TRSidePanel", () => ({ TRSidePanel: () => null }));
 vi.mock("./TRChatPanel", () => ({
-    TRChatPanel: ({ canSend }: { canSend?: boolean | null }) => (
-        <div data-testid="tr-can-send">{String(canSend)}</div>
+    TRChatPanel: ({
+        canSend,
+        placement,
+    }: {
+        canSend?: boolean | null;
+        placement?: string;
+    }) => (
+        <div data-testid="tr-can-send" data-placement={placement}>
+            {String(canSend)}
+        </div>
     ),
 }));
 vi.mock("./AddColumnModal", () => ({ AddColumnModal: () => null }));
@@ -139,5 +147,52 @@ describe("TabularReviewView review-chat composer", () => {
         await waitFor(() =>
             expect(screen.getByTestId("tr-can-send")).toHaveTextContent("true"),
         );
+    });
+
+    it("gives the chat a sheet of its own beside the review's from md up", async () => {
+        vi.mocked(getTabularReview).mockResolvedValue({
+            review: review({ access_role: "editor" }),
+            cells: [],
+            rows: [],
+            documents: [],
+        });
+        // No matchMedia in this environment: the wide layout.
+        const { container } = render(<TRView reviewId="r1" />);
+
+        const chat = await screen.findByTestId("tr-can-send");
+        expect(chat).toHaveAttribute("data-placement", "sheet");
+        const sheet = container.querySelector('[data-slot="page-sheet"]')!;
+        expect(sheet).not.toContainElement(chat);
+        expect(sheet.nextElementSibling).toBe(chat);
+        // The same 8px gap between the two sheets as from the sidebar.
+        expect(sheet).toHaveClass("md:mr-2");
+    });
+
+    it("keeps the chat in the table's place on a small screen", async () => {
+        vi.stubGlobal(
+            "matchMedia",
+            vi.fn(() => ({
+                matches: false,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+            })),
+        );
+        try {
+            vi.mocked(getTabularReview).mockResolvedValue({
+                review: review({ access_role: "editor" }),
+                cells: [],
+                rows: [],
+                documents: [],
+            });
+            const { container } = render(<TRView reviewId="r1" />);
+
+            const chat = await screen.findByTestId("tr-can-send");
+            expect(chat).toHaveAttribute("data-placement", "inline");
+            expect(
+                container.querySelector('[data-slot="page-sheet"]'),
+            ).toContainElement(chat);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });
